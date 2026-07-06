@@ -1,6 +1,27 @@
 import { readBundleDocument } from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
+import { OKF_VERSION } from "./types.js";
+
+/** Major version this consumer implements; newer majors are best-effort (§11). */
+const SUPPORTED_MAJOR = Number.parseInt(OKF_VERSION, 10);
+
+/**
+ * Soft §11 check: a bundle declaring a newer major okf_version is still
+ * consumed best-effort, so a warning — never an error.
+ */
+function checkDeclaredVersion(bundle: LoadedBundle): BundleProblem[] {
+  if (bundle.okfVersion === undefined) return [];
+  const major = Number.parseInt(bundle.okfVersion, 10);
+  if (!Number.isFinite(major) || major <= SUPPORTED_MAJOR) return [];
+  return [
+    {
+      severity: "warning",
+      path: "index.md",
+      message: `bundle declares okf_version "${bundle.okfVersion}", a newer major version than the supported ${OKF_VERSION}; consuming best-effort (spec §11)`,
+    },
+  ];
+}
 
 export interface ValidationReport {
   bundle: string;
@@ -106,7 +127,10 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
 export async function validateBundle(
   bundle: LoadedBundle,
 ): Promise<ValidationReport> {
-  const problems: BundleProblem[] = [...bundle.problems];
+  const problems: BundleProblem[] = [
+    ...bundle.problems,
+    ...checkDeclaredVersion(bundle),
+  ];
 
   for (const file of bundle.reserved) {
     const check =

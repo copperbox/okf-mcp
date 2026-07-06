@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { loadBundle } from "../src/bundle.js";
+import { buildBundle, loadBundle } from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
 import type { ValidationReport } from "../src/validate.js";
 
@@ -66,5 +66,45 @@ describe("validateBundle reserved-file structure (spec §9.3)", () => {
       (p) => p.path !== undefined && /(^|\/)(index|log)\.md$/.test(p.path),
     );
     assert.deepEqual(reserved, []);
+  });
+});
+
+describe("validateBundle okf_version (spec §11)", () => {
+  function bundleDeclaring(indexSource: string) {
+    return buildBundle(
+      "mem",
+      "/mem",
+      [
+        { path: "index.md", source: indexSource },
+        { path: "note.md", source: "---\ntype: Note\n---\n\nBody.\n" },
+      ],
+      { keepSources: true },
+    );
+  }
+
+  it("warns, never errors, when the declared major version is newer than supported", async () => {
+    const result = await validateBundle(
+      bundleDeclaring('---\nokf_version: "1.0"\n---\n\n# Bundle Index\n'),
+    );
+    const version = result.warnings.filter((p) => p.message.includes("okf_version"));
+    assert.equal(version.length, 1);
+    assert.equal(version[0]!.path, "index.md");
+    assert.match(version[0]!.message, /"1\.0"/);
+    assert.match(version[0]!.message, /best-effort/);
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.conformant, true);
+  });
+
+  it("does not warn about the supported version or an absent declaration", async () => {
+    for (const source of [
+      '---\nokf_version: "0.1"\n---\n\n# Bundle Index\n',
+      "# Bundle Index\n",
+    ]) {
+      const result = await validateBundle(bundleDeclaring(source));
+      assert.deepEqual(
+        result.warnings.filter((p) => p.message.includes("okf_version")),
+        [],
+      );
+    }
   });
 });

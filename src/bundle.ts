@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { splitFrontmatter } from "./frontmatter.js";
 import { conceptIdFromPath, parseConceptDocument } from "./parser.js";
 import type {
   BundleConfig,
@@ -39,6 +40,12 @@ function isReserved(relPath: string): ReservedFile | null {
   return { path: relPath, kind: base === "index.md" ? "index" : "log" };
 }
 
+/** The okf_version a bundle-root index.md declares in frontmatter (spec §11). */
+export function declaredOkfVersion(source: string): string | undefined {
+  const version = splitFrontmatter(source).data?.okf_version;
+  return typeof version === "string" ? version : undefined;
+}
+
 /** One markdown document as raw text, addressed by its bundle-relative path. */
 export interface BundleDocument {
   /** Bundle-relative POSIX path ending in `.md`. */
@@ -68,12 +75,17 @@ export function buildBundle(
   const concepts = new Map<string, Concept>();
   const reserved: ReservedFile[] = [];
   const problems: BundleProblem[] = [];
+  let okfVersion: string | undefined;
 
   for (const document of [...documents].sort((a, b) => (a.path < b.path ? -1 : 1))) {
     const relPath = document.path;
     const reservedFile = isReserved(relPath);
     if (reservedFile) {
       reserved.push(reservedFile);
+      // Only the bundle-root index.md may declare okf_version (spec §11).
+      if (reservedFile.kind === "index" && !relPath.includes("/")) {
+        okfVersion = declaredOkfVersion(document.source);
+      }
       continue;
     }
     const parsed = parseConceptDocument(document.source, relPath);
@@ -99,6 +111,7 @@ export function buildBundle(
     reserved,
     problems,
     readOnly: options.readOnly ?? false,
+    okfVersion,
     ...(options.keepSources && {
       sources: new Map(documents.map((d) => [d.path, d.source])),
     }),

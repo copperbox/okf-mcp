@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { declaredOkfVersion } from "./bundle.js";
 import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
 import { conceptIdFromPath, extractLinks } from "./parser.js";
 import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
@@ -407,15 +408,13 @@ export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
   return written.sort();
 }
 
-/** True when the bundle-root index declares a different major OKF version. */
+/** The okf_version a bundle root's index.md declares on disk, if any (spec §11). */
 export async function readDeclaredVersion(
   bundleRoot: string,
 ): Promise<string | undefined> {
   const indexPath = path.join(bundleRoot, "index.md");
   if (!(await fileExists(indexPath))) return undefined;
-  const split = splitFrontmatter(await fs.readFile(indexPath, "utf8"));
-  const version = split.data?.okf_version;
-  return typeof version === "string" ? version : undefined;
+  return declaredOkfVersion(await fs.readFile(indexPath, "utf8"));
 }
 
 async function fileExists(p: string): Promise<boolean> {
