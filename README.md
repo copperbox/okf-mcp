@@ -4,7 +4,7 @@ An MCP server that gives AI agents a standardized [Open Knowledge Format (OKF)](
 
 The knowledge base itself is just a directory of Markdown ("a bundle"). Humans can browse and edit it with any editor — including opening it directly as an **Obsidian vault** — while agents work through the MCP server. Obsidian is never required: the format is pure OKF v0.1 Markdown, and any `.obsidian/` directory is ignored by the indexer.
 
-- No database, no embeddings, no network calls.
+- No database, no embeddings; the only network calls are for optional read-only remote bundles you explicitly configure.
 - Permissive by design (spec §9): malformed documents are reported, valid concepts keep serving.
 - The write path keeps `index.md` navigation pages and the `log.md` history up to date, so the human view stays browsable as agents write.
 
@@ -49,6 +49,25 @@ node dist/cli.js --bundle /path/to/your/bundle
 
 `--bundle` accepts `path` or `id=path` and is repeatable. Omit `--writable` for a read-only server.
 
+## Remote bundles (knowledge exchange)
+
+OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
+
+```bash
+npm run dev -- \
+  --remote-bundle okf=https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf \
+  inspect
+```
+
+`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported). The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded.
+
+Remote bundles are strictly read-only and sandboxed:
+
+- Only `.md` files are fetched (via the GitHub contents API; `GITHUB_TOKEN` is used for rate limits when set), bounded to 500 files / 10 MiB per bundle.
+- Remote content is parsed as markdown, never executed, and never written to disk.
+- All authoring tools reject read-only bundles, and `regenerate_indexes` / the `index` command skip them.
+- `reload_bundles` refetches them, reporting the same added/removed/changed delta as local bundles.
+
 ## The bundle (your "OKF brain")
 
 A bundle is a directory tree of Markdown concept documents per OKF v0.1:
@@ -76,7 +95,10 @@ Read tools:
 
 | Tool | Purpose |
 |---|---|
-| `list_bundles` | Configured bundles with concept counts |
+| `list_bundles` | Configured bundles with concept counts and read-only flags |
+| `reload_bundles` | Re-read bundles (disk or remote tree) to pick up external edits; reports added/removed/changed concepts |
+| `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL, in memory only |
+| `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated |
@@ -98,7 +120,7 @@ Writes are constrained to safe relative `.md` paths inside the bundle; reserved 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--bundle ...] [--writable] [command]
+okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -117,6 +139,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `graph.ts` / `search.ts` (traversal and structured search), `validate.ts` (conformance), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal and structured search), `validate.ts` (conformance), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
-There is no file watcher: restart or reload after editing bundle files outside the server. Concepts written through `write_concept` refresh the index immediately.
+There is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

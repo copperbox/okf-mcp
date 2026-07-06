@@ -1,0 +1,176 @@
+import { buildBundle } from "./bundle.js";
+import type { BundleDocument } from "./bundle.js";
+import type { LoadedBundle, RemoteBundleConfig } from "./types.js";
+
+/** Hard cap on markdown files fetched from one remote tree. */
+export const MAX_REMOTE_FILES = 500;
+/** Hard cap on the summed size (per GitHub's listing) of fetched files. */
+export const MAX_REMOTE_BYTES = 10 * 1024 * 1024;
+
+export interface GitHubTreeRef {
+  owner: string;
+  repo: string;
+  ref: string;
+  /** Repo-relative directory the bundle root maps to ("" for the repo root). */
+  path: string;
+}
+
+const TREE_URL =
+  /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/tree\/([^/\s]+)(?:\/(.+?))?\/?$/;
+
+/**
+ * Parse a public GitHub tree URL. Refs containing `/` (e.g. `feature/x`
+ * branches) are not supported — the first path segment after `/tree/` is
+ * taken as the ref.
+ */
+export function parseGitHubTreeUrl(url: string): GitHubTreeRef {
+  const match = TREE_URL.exec(url.trim());
+  if (!match) {
+    throw new Error(
+      `not a public GitHub tree URL (expected https://github.com/<owner>/<repo>/tree/<ref>[/<path>]): ${url}`,
+    );
+  }
+  return { owner: match[1]!, repo: match[2]!, ref: match[3]!, path: match[4] ?? "" };
+}
+
+/** Convert a glob (`*`, `**`, `?`) into a regex over POSIX relative paths. */
+function globToRegExp(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  // NUL cannot appear in a path, so it safely shields `**` from the `*` pass.
+  const pattern = escaped
+    .replaceAll("**", "\u0000")
+    .replaceAll("*", "[^/]*")
+    .replaceAll("?", "[^/]")
+    .replaceAll("\u0000", ".*");
+  return new RegExp(`^${pattern}$`);
+}
+
+function matchesFilters(
+  relPath: string,
+  include: string[] | undefined,
+  exclude: string[] | undefined,
+): boolean {
+  if (include !== undefined && include.length > 0) {
+    if (!include.some((glob) => globToRegExp(glob).test(relPath))) return false;
+  }
+  return !(exclude ?? []).some((glob) => globToRegExp(glob).test(relPath));
+}
+
+/** Shape of one GitHub contents-API directory entry (the fields we use). */
+interface ContentsEntry {
+  name?: unknown;
+  path?: unknown;
+  type?: unknown;
+  size?: unknown;
+  download_url?: unknown;
+}
+
+interface RemoteFile {
+  relPath: string;
+  size: number;
+  downloadUrl: string;
+}
+
+function apiHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/vnd.github+json",
+    "user-agent": "okf-mcp",
+    "x-github-api-version": "2022-11-28",
+  };
+  const token = process.env.GITHUB_TOKEN;
+  if (token !== undefined && token !== "") {
+    headers.authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function fetchOk(
+  fetchImpl: typeof fetch,
+  url: string,
+): Promise<Response> {
+  const response = await fetchImpl(url, { headers: apiHeaders() });
+  if (!response.ok) {
+    throw new Error(`GitHub request failed with status ${response.status}: ${url}`);
+  }
+  return response;
+}
+
+/**
+ * List markdown files under the tree via the GitHub contents API,
+ * skipping dot files/directories like the local walker does.
+ */
+async function listMarkdownFiles(
+  fetchImpl: typeof fetch,
+  tree: GitHubTreeRef,
+  config: RemoteBundleConfig,
+): Promise<RemoteFile[]> {
+  const files: RemoteFile[] = [];
+  const prefix = tree.path === "" ? "" : `${tree.path}/`;
+  const queue = [tree.path];
+  while (queue.length > 0) {
+    const dir = queue.shift()!;
+    const encoded = dir.split("/").map(encodeURIComponent).join("/");
+    const url =
+      `https://api.github.com/repos/${encodeURIComponent(tree.owner)}/` +
+      `${encodeURIComponent(tree.repo)}/contents/${encoded}` +
+      `?ref=${encodeURIComponent(tree.ref)}`;
+    const entries = (await (await fetchOk(fetchImpl, url)).json()) as unknown;
+    if (!Array.isArray(entries)) {
+      throw new Error(`expected a directory listing from GitHub at: ${url}`);
+    }
+    for (const entry of entries as ContentsEntry[]) {
+      if (typeof entry.name !== "string" || typeof entry.path !== "string") continue;
+      if (entry.name.startsWith(".")) continue;
+      if (entry.type === "dir") {
+        queue.push(entry.path);
+        continue;
+      }
+      if (entry.type !== "file" || !entry.name.toLowerCase().endsWith(".md")) continue;
+      const relPath = entry.path.slice(prefix.length);
+      if (!matchesFilters(relPath, config.include, config.exclude)) continue;
+      if (typeof entry.download_url !== "string") continue;
+      files.push({
+        relPath,
+        size: typeof entry.size === "number" ? entry.size : 0,
+        downloadUrl: entry.download_url,
+      });
+      if (files.length > MAX_REMOTE_FILES) {
+        throw new Error(
+          `remote bundle has too many files (limit ${MAX_REMOTE_FILES}): ${config.url}`,
+        );
+      }
+    }
+  }
+  return files.sort((a, b) => (a.relPath < b.relPath ? -1 : 1));
+}
+
+/**
+ * Fetch a read-only OKF bundle from a public GitHub tree. Only `.md`
+ * files are downloaded, size and count limits are enforced up front,
+ * and remote content is only ever parsed as markdown — never executed.
+ * The result lives purely in memory (sources kept for resource serving).
+ */
+export async function loadRemoteBundle(
+  config: RemoteBundleConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<LoadedBundle> {
+  const tree = parseGitHubTreeUrl(config.url);
+  const files = await listMarkdownFiles(fetchImpl, tree, config);
+
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_REMOTE_BYTES) {
+    throw new Error(
+      `remote bundle is too large (${totalBytes} bytes, limit ${MAX_REMOTE_BYTES}): ${config.url}`,
+    );
+  }
+
+  const documents: BundleDocument[] = [];
+  for (const file of files) {
+    const response = await fetchOk(fetchImpl, file.downloadUrl);
+    documents.push({ path: file.relPath, source: await response.text() });
+  }
+  return buildBundle(config.id, config.url, documents, {
+    readOnly: true,
+    keepSources: true,
+  });
+}
