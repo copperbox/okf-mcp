@@ -101,18 +101,29 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
-| `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated |
+| `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md` |
+| `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations and a body snippet |
+| `list_types` | Distinct concept `type` values with usage counts |
+| `list_tags` | Distinct tag values with usage counts |
+| `suggest_concept_path` | Where a new concept should live, ranked by where same-type (and same-tag) concepts already are |
 | `graph_summary` | Compact overview: counts, types, tags, orphans |
 | `get_neighbors` | Bounded expansion around a concept (`in`/`out`/`both`, depth) |
 | `find_path` | Shortest directed link path between two concepts |
 | `export_graph` | Graph as `json`, `dot`, or `mermaid` |
+| `concept_history` | Git commit history for a concept file, newest first, following renames |
+| `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
 | `validate_bundle` | OKF v0.1 conformance errors + soft warnings |
+
+`concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 
 Write tools (only with `--writable`):
 
 | Tool | Purpose |
 |---|---|
 | `write_concept` | Create/update a concept, append a `log.md` entry, regenerate `index.md` files |
+| `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
+| `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
+| `append_log_entry` | Record a change-narrative entry in `log.md` without touching any concept |
 | `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter |
 
 Writes are constrained to safe relative `.md` paths inside the bundle; reserved filenames (`index.md`, `log.md`) and dot-directories are rejected as concept paths.
@@ -139,6 +150,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal and structured search), `validate.ts` (conformance), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 There is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.
