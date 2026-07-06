@@ -72,8 +72,8 @@ function checkLogStructure(path: string, source: string): BundleProblem[] {
  */
 function checkIndexStructure(path: string, source: string): BundleProblem[] {
   const problems: BundleProblem[] = [];
-  const split = splitFrontmatter(source);
-  if (split.present && path !== "index.md") {
+  const frontmatter = splitFrontmatter(source);
+  if (frontmatter.present && path !== "index.md") {
     problems.push({
       severity: "warning",
       path,
@@ -81,7 +81,9 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
         "index.md frontmatter is only permitted at the bundle root (spec §11)",
     });
   }
-  const bodyLines = split.body.split(/\r?\n/);
+  // Report line numbers relative to the full file, not the
+  // frontmatter-stripped body.
+  const bodyLines = frontmatter.body.split(/\r?\n/);
   const offset = source.split(/\r?\n/).length - bodyLines.length;
   bodyLines.forEach((line, index) => {
     if (line.trim() === "" || HEADING.test(line) || LINK_BULLET.test(line)) {
@@ -107,12 +109,10 @@ export async function validateBundle(
   const problems: BundleProblem[] = [...bundle.problems];
 
   for (const file of bundle.reserved) {
+    const check =
+      file.kind === "index" ? checkIndexStructure : checkLogStructure;
     const source = await readBundleDocument(bundle, file.path);
-    problems.push(
-      ...(file.kind === "index"
-        ? checkIndexStructure(file.path, source)
-        : checkLogStructure(file.path, source)),
-    );
+    problems.push(...check(file.path, source));
   }
 
   const errors = problems.filter((p) => p.severity === "error");
