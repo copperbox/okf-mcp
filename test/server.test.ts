@@ -51,7 +51,9 @@ describe("server tools", () => {
 
       const log = await fs.readFile(path.join(root, "log.md"), "utf8");
       const today = new Date().toISOString().slice(0, 10);
-      assert.ok(log.indexOf(`## ${today}`) < log.indexOf("**Deprecation**"));
+      const headingIndex = log.indexOf(`## ${today}`);
+      assert.notEqual(headingIndex, -1);
+      assert.ok(headingIndex < log.indexOf("**Deprecation**"));
       assert.match(log, /\* \*\*Deprecation\*\*: \[Orders\]\(\/tables\/orders\.md\) is legacy\./);
     });
 
