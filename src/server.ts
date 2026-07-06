@@ -305,6 +305,30 @@ export function createOkfServer(
     );
 
     server.registerTool(
+      "append_log_entry",
+      {
+        title: "Append log entry",
+        description:
+          "Record a change-narrative entry in the bundle-root log.md (spec §7) without touching any concept",
+        inputSchema: {
+          bundle: bundleParam,
+          message: z
+            .string()
+            .min(1)
+            .describe(
+              "One-line markdown entry; conventionally starts with a bold verb like **Update**: or **Deprecation**:",
+            ),
+        },
+      },
+      async ({ bundle, message }) => {
+        const target = store.bundle(bundle);
+        await appendLogEntry(target.root, message);
+        await store.reloadBundle(target.id);
+        return json({ bundle: target.id, path: "log.md", uri: okfUri(target.id, "log.md") });
+      },
+    );
+
+    server.registerTool(
       "regenerate_indexes",
       {
         title: "Regenerate indexes",
