@@ -589,6 +589,42 @@ describe("authoring tools", () => {
       assert.match(log, /\* \*\*Deprecation\*\*: \[Orders\]\(\/tables\/orders\.md\) is legacy\./);
     });
 
+    it("writes a scoped entry to the directory's log.md and exposes it as a resource", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await client.callTool({
+        name: "append_log_entry",
+        arguments: { message: "**Update**: Orders got a new column.", directory: "tables" },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(
+        (result.content as Array<{ text: string }>)[0]!.text,
+      );
+      assert.equal(payload.path, "tables/log.md");
+      assert.equal(payload.uri, "okf://t/tables/log.md");
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.ok(log.startsWith("# Directory Update Log\n"));
+      assert.match(log, /\* \*\*Update\*\*: Orders got a new column\./);
+      // Root log untouched.
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+      // The reloaded bundle serves the new scoped log as a reserved resource.
+      const resources = await client.listResources();
+      assert.ok(resources.resources.some((r) => r.uri === "okf://t/tables/log.md"));
+    });
+
+    it("rejects a directory that escapes the bundle", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await client.callTool({
+        name: "append_log_entry",
+        arguments: { message: "**Update**: x", directory: "../outside" },
+      });
+      assert.equal(result.isError, true);
+      assert.match(
+        (result.content as Array<{ text: string }>)[0]!.text,
+        /inside the bundle/,
+      );
+    });
+
     it("rejects an unknown bundle", async () => {
       const client = await connectLocal({ writable: true });
       const result = await client.callTool({

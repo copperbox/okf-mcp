@@ -634,7 +634,7 @@ export function createOkfServer(
       {
         title: "Append log entry",
         description:
-          "Record a change-narrative entry in the bundle-root log.md (spec §7) without touching any concept",
+          "Record a change-narrative entry in a log.md (spec §7) — the bundle root's by default, or a per-directory scope — without touching any concept",
         inputSchema: {
           bundle: bundleParam,
           message: z
@@ -643,14 +643,22 @@ export function createOkfServer(
             .describe(
               "One-line markdown entry; conventionally starts with a bold verb like **Update**: or **Deprecation**:",
             ),
+          directory: z
+            .string()
+            .optional()
+            .describe(
+              "Bundle-relative directory whose log.md receives the entry (created when absent), e.g. tables; defaults to the bundle root",
+            ),
         },
       },
-      async ({ bundle, message }) => {
+      async ({ bundle, message, directory }) => {
         const target = store.bundle(bundle);
         assertWritableBundle(target);
-        await appendLogEntry(target.root, message);
+        const { path: logPath } = await appendLogEntry(target.root, message, {
+          ...(directory !== undefined && { directory }),
+        });
         await store.reloadBundle(target.id);
-        return json({ bundle: target.id, path: "log.md", uri: okfUri(target.id, "log.md") });
+        return json({ bundle: target.id, path: logPath, uri: okfUri(target.id, logPath) });
       },
     );
 

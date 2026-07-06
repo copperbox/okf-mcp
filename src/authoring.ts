@@ -337,17 +337,49 @@ async function removeEmptyDirectories(
   return removed;
 }
 
+export interface AppendLogEntryOptions {
+  /**
+   * Bundle-relative directory whose `log.md` receives the entry (spec §7
+   * allows a log at any level of the hierarchy). Defaults to the bundle root.
+   */
+  directory?: string;
+  /** Timestamp for the entry's date heading. Defaults to now. */
+  date?: Date;
+}
+
 /**
- * Prepend an entry to the bundle root `log.md`, newest-first under an ISO
- * date heading (spec §7). Creates the log when absent.
+ * Reject log directories that are absolute, escape the bundle root, or hide
+ * in dot-directories — the same rules concept writes follow, minus the ones
+ * about the filename (that's always `log.md`). Returns the normalized
+ * bundle-relative directory, "" for the bundle root.
+ */
+function assertSafeLogDirectory(dir: string): string {
+  const normalized = path.posix.normalize(dir.replaceAll("\\", "/")).replace(/\/+$/, "");
+  if (normalized === "." || normalized === "") return "";
+  if (path.posix.isAbsolute(normalized) || normalized.startsWith("..")) {
+    throw new Error(`log directory must stay inside the bundle: ${dir}`);
+  }
+  if (normalized.split("/").some((segment) => segment.startsWith("."))) {
+    throw new Error(`log directory segments must not start with ".": ${dir}`);
+  }
+  return normalized;
+}
+
+/**
+ * Prepend an entry to a `log.md`, newest-first under an ISO date heading
+ * (spec §7) — the bundle root's by default, or a scoped one in any bundle
+ * directory. Creates the log (and directory) when absent. Returns the
+ * bundle-relative path of the log written.
  */
 export async function appendLogEntry(
   bundleRoot: string,
   message: string,
-  date: Date = new Date(),
-): Promise<void> {
-  const logPath = path.join(bundleRoot, "log.md");
-  const day = date.toISOString().slice(0, 10);
+  options: AppendLogEntryOptions = {},
+): Promise<{ path: string }> {
+  const directory = assertSafeLogDirectory(options.directory ?? "");
+  const relPath = directory === "" ? "log.md" : `${directory}/log.md`;
+  const logPath = path.join(bundleRoot, relPath);
+  const day = (options.date ?? new Date()).toISOString().slice(0, 10);
   const entry = `* ${message.trim()}`;
 
   let existing = "";
@@ -361,11 +393,14 @@ export async function appendLogEntry(
     updated = existing.replace(heading, `${heading}\n${entry}`);
   } else {
     const titleMatch = existing.match(/^# .*\r?\n/);
-    const title = titleMatch?.[0] ?? "# Update Log\n";
+    const title =
+      titleMatch?.[0] ?? (directory === "" ? "# Update Log\n" : "# Directory Update Log\n");
     const rest = existing.slice(title.length).replace(/^\s+/, "");
     updated = `${title}\n${heading}\n${entry}\n${rest === "" ? "" : `\n${rest}`}`;
   }
+  await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.writeFile(logPath, updated.trimEnd() + "\n", "utf8");
+  return { path: relPath };
 }
 
 /**

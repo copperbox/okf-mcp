@@ -110,12 +110,62 @@ describe("authoring", () => {
   });
 
   it("prepends log entries newest-first grouped by day", async () => {
-    await appendLogEntry(root, "**Creation**: first", new Date("2026-07-01T10:00:00Z"));
-    await appendLogEntry(root, "**Update**: second", new Date("2026-07-06T10:00:00Z"));
-    await appendLogEntry(root, "**Update**: third", new Date("2026-07-06T11:00:00Z"));
+    await appendLogEntry(root, "**Creation**: first", { date: new Date("2026-07-01T10:00:00Z") });
+    await appendLogEntry(root, "**Update**: second", { date: new Date("2026-07-06T10:00:00Z") });
+    const result = await appendLogEntry(root, "**Update**: third", {
+      date: new Date("2026-07-06T11:00:00Z"),
+    });
+    assert.equal(result.path, "log.md");
     const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+    assert.ok(log.startsWith("# Update Log\n"));
     assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("## 2026-07-01"));
     assert.ok(log.indexOf("third") < log.indexOf("second"));
+  });
+
+  it("writes scoped entries to the directory's log.md, creating it on first use", async () => {
+    const result = await appendLogEntry(root, "**Update**: scoped", {
+      directory: "tables",
+      date: new Date("2026-07-06T10:00:00Z"),
+    });
+    assert.equal(result.path, "tables/log.md");
+    const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+    assert.ok(log.startsWith("# Directory Update Log\n"));
+    assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("scoped"));
+    // The root log is untouched by a scoped entry.
+    await assert.rejects(fs.access(path.join(root, "log.md")));
+  });
+
+  it("groups scoped entries newest-first like the root log", async () => {
+    await appendLogEntry(root, "**Creation**: first", {
+      directory: "tables/facts",
+      date: new Date("2026-07-01T10:00:00Z"),
+    });
+    await appendLogEntry(root, "**Update**: second", {
+      directory: "tables/facts",
+      date: new Date("2026-07-06T10:00:00Z"),
+    });
+    const log = await fs.readFile(path.join(root, "tables/facts/log.md"), "utf8");
+    assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("## 2026-07-01"));
+  });
+
+  it("treats '', '.', and trailing slashes as normalized directories", async () => {
+    const rootLog = await appendLogEntry(root, "**Update**: at root", { directory: "." });
+    assert.equal(rootLog.path, "log.md");
+    const scoped = await appendLogEntry(root, "**Update**: scoped", { directory: "tables/" });
+    assert.equal(scoped.path, "tables/log.md");
+  });
+
+  it("rejects log directories that escape the bundle or hide in dot-directories", async () => {
+    await assert.rejects(
+      appendLogEntry(root, "x", { directory: "../outside" }),
+      /inside the bundle/,
+    );
+    await assert.rejects(appendLogEntry(root, "x", { directory: "/etc" }), /inside the bundle/);
+    await assert.rejects(
+      appendLogEntry(root, "x", { directory: "tables/../../up" }),
+      /inside the bundle/,
+    );
+    await assert.rejects(appendLogEntry(root, "x", { directory: ".obsidian" }), /start with/);
   });
 
   it("deletes a concept and reports concepts still linking to it", async () => {

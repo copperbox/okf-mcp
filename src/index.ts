@@ -7,7 +7,7 @@ export {
   readDeclaredVersion,
   writeConcept,
 } from "./authoring.js";
-export type { WriteConceptOptions } from "./authoring.js";
+export type { AppendLogEntryOptions, WriteConceptOptions } from "./authoring.js";
 export { buildBundle, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export { serializeDocument, splitFrontmatter } from "./frontmatter.js";
