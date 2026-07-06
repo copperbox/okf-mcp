@@ -3,6 +3,15 @@ import { splitFrontmatter } from "./frontmatter.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
 import { OKF_VERSION } from "./types.js";
 
+export interface ValidationReport {
+  bundle: string;
+  /** Conformance failures per spec §9 (documents that cannot be consumed). */
+  errors: BundleProblem[];
+  /** Soft issues consumers must tolerate: broken links etc. (spec §9). */
+  warnings: BundleProblem[];
+  conformant: boolean;
+}
+
 /** Major version this consumer implements; newer majors are best-effort (§11). */
 const SUPPORTED_MAJOR = Number.parseInt(OKF_VERSION, 10);
 
@@ -21,15 +30,6 @@ function checkDeclaredVersion(bundle: LoadedBundle): BundleProblem[] {
       message: `bundle declares okf_version "${bundle.okfVersion}", a newer major version than the supported ${OKF_VERSION}; consuming best-effort (spec §11)`,
     },
   ];
-}
-
-export interface ValidationReport {
-  bundle: string;
-  /** Conformance failures per spec §9 (documents that cannot be consumed). */
-  errors: BundleProblem[];
-  /** Soft issues consumers must tolerate: broken links etc. (spec §9). */
-  warnings: BundleProblem[];
-  conformant: boolean;
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
