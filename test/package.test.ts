@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(import.meta.dirname, "..");
 
 async function readPackageJson(): Promise<Record<string, any>> {
   return JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
@@ -44,7 +43,7 @@ describe("npm packaging", () => {
     const source = await fs.readFile(path.join(repoRoot, "src", "cli.ts"), "utf8");
     assert.ok(source.startsWith("#!/usr/bin/env node\n"), "src/cli.ts must start with a node shebang");
     const pkg = await readPackageJson();
-    assert.match(pkg.scripts.build, /chmod|chmodSync/);
+    assert.match(pkg.scripts.build, /chmod/);
   });
 
   it("documents the npx install path in the README", async () => {
