@@ -8,7 +8,13 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { appendLogEntry, generateIndexes, writeConcept } from "./authoring.js";
+import {
+  appendLogEntry,
+  deleteConcept,
+  generateIndexes,
+  renameConcept,
+  writeConcept,
+} from "./authoring.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
@@ -22,12 +28,16 @@ import {
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
-import type { ConceptFrontmatter } from "./types.js";
+import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
 
 export interface ServerOptions {
-  /** Allow write_concept / regenerate_indexes tools. Default: read-only. */
+  /**
+   * Allow the authoring tools (write_concept, delete_concept,
+   * rename_concept, append_log_entry, regenerate_indexes).
+   * Default: read-only.
+   */
   writable?: boolean;
 }
 
@@ -405,6 +415,18 @@ export function createOkfServer(
   );
 
   if (options.writable) {
+    /**
+     * After a concept write/delete: log the change, then regenerate indexes
+     * from a reloaded bundle so they reflect the change, then reload again so
+     * the store sees the freshly written index files.
+     */
+    async function logAndReindex(target: LoadedBundle, message: string): Promise<void> {
+      await appendLogEntry(target.root, message);
+      const reloaded = await store.reloadBundle(target.id);
+      await generateIndexes(reloaded);
+      await store.reloadBundle(target.id);
+    }
+
     server.registerTool(
       "write_concept",
       {
@@ -436,14 +458,98 @@ export function createOkfServer(
         const verb = result.created ? "Creation" : "Update";
         const title =
           (frontmatter as ConceptFrontmatter).title ?? result.path.replace(/\.md$/i, "");
-        await appendLogEntry(
-          target.root,
+        await logAndReindex(
+          target,
           logMessage ?? `**${verb}**: ${verb === "Creation" ? "Created" : "Updated"} [${title}](/${result.path}).`,
         );
-        const reloaded = await store.reloadBundle(target.id);
-        await generateIndexes(reloaded);
-        await store.reloadBundle(target.id);
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
+      },
+    );
+
+    server.registerTool(
+      "delete_concept",
+      {
+        title: "Delete concept",
+        description:
+          "Delete a concept document, append a log.md entry, regenerate index.md files, and report concepts that still link to it",
+        inputSchema: {
+          bundle: bundleParam,
+          id: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
+          logMessage: z
+            .string()
+            .optional()
+            .describe("Entry for log.md; a default is generated when omitted"),
+          failIfLinked: z
+            .boolean()
+            .optional()
+            .describe(
+              "Refuse to delete while other concepts still link to the target (broken links are otherwise spec-legal)",
+            ),
+        },
+      },
+      async ({ bundle, id, logMessage, failIfLinked }) => {
+        const target = store.bundle(bundle);
+        const result = await deleteConcept(target, id, {
+          ...(failIfLinked !== undefined && { failIfLinked }),
+        });
+        await logAndReindex(
+          target,
+          logMessage ??
+            `**Deletion**: Deleted [${result.title ?? result.id}](/${result.path}).`,
+        );
+        return json({ ...result, bundle: target.id });
+      },
+    );
+
+    server.registerTool(
+      "rename_concept",
+      {
+        title: "Rename concept",
+        description:
+          "Move a concept to a new path, rewriting links that pointed at it across the bundle (and the moved file's own relative links), then log the change and regenerate index.md files",
+        inputSchema: {
+          bundle: bundleParam,
+          from: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
+          to: z.string().describe("New bundle-relative path ending in .md"),
+          logMessage: z
+            .string()
+            .optional()
+            .describe("Entry for log.md; a default is generated when omitted"),
+        },
+      },
+      async ({ bundle, from, to, logMessage }) => {
+        const target = store.bundle(bundle);
+        const result = await renameConcept(target, from, to);
+        await logAndReindex(
+          target,
+          logMessage ??
+            `**Update**: Renamed [${result.title ?? result.id}](/${result.to}) (was /${result.from}).`,
+        );
+        return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.to) });
+      },
+    );
+
+    server.registerTool(
+      "append_log_entry",
+      {
+        title: "Append log entry",
+        description:
+          "Record a change-narrative entry in the bundle-root log.md (spec §7) without touching any concept",
+        inputSchema: {
+          bundle: bundleParam,
+          message: z
+            .string()
+            .min(1)
+            .describe(
+              "One-line markdown entry; conventionally starts with a bold verb like **Update**: or **Deprecation**:",
+            ),
+        },
+      },
+      async ({ bundle, message }) => {
+        const target = store.bundle(bundle);
+        await appendLogEntry(target.root, message);
+        await store.reloadBundle(target.id);
+        return json({ bundle: target.id, path: "log.md", uri: okfUri(target.id, "log.md") });
       },
     );
 

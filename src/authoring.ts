@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
-import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
+import { conceptIdFromPath, extractLinks } from "./parser.js";
+import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
 /**
@@ -57,6 +58,256 @@ export async function writeConcept(
   await fs.mkdir(path.dirname(absolute), { recursive: true });
   await fs.writeFile(absolute, serializeDocument(frontmatter, body), "utf8");
   return { path: safePath, created: !exists };
+}
+
+/**
+ * Look up an existing concept by ID or bundle-relative path, rejecting the
+ * reserved index/log files up front (their IDs never appear in the concept
+ * map, but the message should say "reserved", not "unknown").
+ */
+function requireConcept(bundle: LoadedBundle, idOrPath: string, action: string): Concept {
+  if (/(^|\/)(index|log)(\.md)?$/i.test(idOrPath)) {
+    throw new Error(`${idOrPath} is a reserved file and cannot be ${action} as a concept`);
+  }
+  const concept =
+    bundle.concepts.get(idOrPath) ??
+    bundle.concepts.get(idOrPath.replace(/\.md$/i, ""));
+  if (!concept) throw new Error(`unknown concept: ${idOrPath}`);
+  return concept;
+}
+
+/** Concepts (other than the target itself) with a link resolving to `conceptId`. */
+function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
+  return [...bundle.concepts.values()].filter(
+    (other) =>
+      other.id !== conceptId &&
+      other.links.some((link) => link.resolvedId === conceptId),
+  );
+}
+
+export interface DeleteConceptOptions {
+  /** Refuse to delete when other concepts still link to the target. */
+  failIfLinked?: boolean;
+}
+
+export interface DeleteConceptResult {
+  id: string;
+  path: string;
+  /** Frontmatter title of the deleted concept, when it had one. */
+  title?: string;
+  /** IDs of concepts whose links resolved to the deleted concept. */
+  inboundLinks: string[];
+  /** Bundle-relative directories removed because the delete emptied them. */
+  removedDirs: string[];
+}
+
+/**
+ * Delete one concept from a bundle by ID or path. Broken inbound links are
+ * spec-legal (§5.3), so linking concepts are reported rather than blocking —
+ * unless `failIfLinked` asks for the strict behavior. Directories emptied by
+ * the delete are removed along with their generated `index.md`. Does not
+ * touch the in-memory index — reload the bundle afterwards.
+ */
+export async function deleteConcept(
+  bundle: LoadedBundle,
+  idOrPath: string,
+  options: DeleteConceptOptions = {},
+): Promise<DeleteConceptResult> {
+  const concept = requireConcept(bundle, idOrPath, "deleted");
+
+  const inboundLinks = conceptsLinkingTo(bundle, concept.id)
+    .map((other) => other.id)
+    .sort();
+  if (options.failIfLinked && inboundLinks.length > 0) {
+    throw new Error(
+      `concept ${concept.id} is still linked from: ${inboundLinks.join(", ")}`,
+    );
+  }
+
+  await fs.rm(path.join(bundle.root, concept.path));
+  const removedDirs = await removeEmptyDirectories(
+    bundle.root,
+    path.posix.dirname(concept.path),
+  );
+
+  const result: DeleteConceptResult = {
+    id: concept.id,
+    path: concept.path,
+    inboundLinks,
+    removedDirs,
+  };
+  if (concept.frontmatter.title !== undefined) result.title = concept.frontmatter.title;
+  return result;
+}
+
+export interface RenameConceptResult {
+  /** New concept ID. */
+  id: string;
+  /** Old bundle-relative path. */
+  from: string;
+  /** New bundle-relative path. */
+  to: string;
+  /** Frontmatter title of the moved concept, when it had one. */
+  title?: string;
+  /** Bundle-relative paths of files whose link targets were rewritten. */
+  rewrittenFiles: string[];
+  /** Bundle-relative directories removed because the move emptied them. */
+  removedDirs: string[];
+}
+
+/**
+ * Move a concept to a new path, rewriting every link in the bundle that
+ * resolved to it — each in its original form (absolute stays absolute,
+ * relative is recomputed from the linking file's directory) — plus the moved
+ * file's own relative links, which were written against its old directory.
+ * Refuses to overwrite an existing concept. Does not touch the in-memory
+ * index — reload the bundle afterwards.
+ */
+export async function renameConcept(
+  bundle: LoadedBundle,
+  fromIdOrPath: string,
+  toRelPath: string,
+): Promise<RenameConceptResult> {
+  const concept = requireConcept(bundle, fromIdOrPath, "renamed");
+
+  const toPath = assertSafeConceptPath(toRelPath);
+  const toId = conceptIdFromPath(toPath);
+  if (toId === concept.id) {
+    throw new Error(`rename source and target are the same concept: ${toPath}`);
+  }
+  const toAbsolute = path.join(bundle.root, toPath);
+  if (bundle.concepts.has(toId) || (await fileExists(toAbsolute))) {
+    throw new Error(`concept already exists: ${toPath}`);
+  }
+
+  await fs.mkdir(path.dirname(toAbsolute), { recursive: true });
+  await fs.rename(path.join(bundle.root, concept.path), toAbsolute);
+
+  const rewrittenFiles: string[] = [];
+  const linksToMoved = (link: ConceptLink) =>
+    link.path !== undefined && conceptIdFromPath(link.path) === concept.id;
+
+  // The moved file: links to itself now point at toPath; links to anything
+  // else keep their destination but relative ones need recomputing.
+  const movedChanged = await rewriteLinksInFile(bundle.root, toPath, concept.path, (link) =>
+    linksToMoved(link) ? toPath : link.path ?? null,
+  );
+  if (movedChanged) rewrittenFiles.push(toPath);
+
+  // Inbound linkers, selected from the in-memory link graph, then rewritten
+  // from their raw source.
+  for (const other of conceptsLinkingTo(bundle, concept.id)) {
+    const changed = await rewriteLinksInFile(bundle.root, other.path, other.path, (link) =>
+      linksToMoved(link) ? toPath : null,
+    );
+    if (changed) rewrittenFiles.push(other.path);
+  }
+
+  const removedDirs = await removeEmptyDirectories(
+    bundle.root,
+    path.posix.dirname(concept.path),
+  );
+
+  const result: RenameConceptResult = {
+    id: toId,
+    from: concept.path,
+    to: toPath,
+    rewrittenFiles: rewrittenFiles.sort(),
+    removedDirs,
+  };
+  if (concept.frontmatter.title !== undefined) result.title = concept.frontmatter.title;
+  return result;
+}
+
+/**
+ * Rewrite concept-link targets in one file by splicing the original source,
+ * preserving everything outside the rewritten spans byte-for-byte.
+ *
+ * `resolveAt` is the bundle-relative path whose directory the file's relative
+ * links were written against (the old location for a just-moved file);
+ * `fileAt` is where the file lives on disk now and the directory relative
+ * targets are re-rendered from. `newDestFor` maps each concept link to the
+ * bundle-relative path it should point at, or null to leave it alone.
+ * Returns whether anything changed.
+ */
+async function rewriteLinksInFile(
+  bundleRoot: string,
+  fileAt: string,
+  resolveAt: string,
+  newDestFor: (link: ConceptLink) => string | null,
+): Promise<boolean> {
+  const absolute = path.join(bundleRoot, fileAt);
+  const source = await fs.readFile(absolute, "utf8");
+  const split = splitFrontmatter(source);
+  // Link offsets are relative to the body; when the body is a literal suffix
+  // of the source (always true for LF documents), shift them to source
+  // offsets. Otherwise scan the whole source so offsets stay valid.
+  const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+  const fromDir = path.posix.dirname(fileAt);
+
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const link of extractLinks(source.slice(bodyStart), resolveAt)) {
+    if (link.kind !== "concept") continue;
+    const dest = newDestFor(link);
+    if (dest === null) continue;
+    const replacement = renderTarget(link.target, dest, fromDir === "." ? "" : fromDir);
+    if (replacement === link.target) continue;
+    edits.push({
+      start: bodyStart + link.targetStart,
+      end: bodyStart + link.targetEnd,
+      replacement,
+    });
+  }
+  if (edits.length === 0) return false;
+
+  let updated = source;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    updated = updated.slice(0, edit.start) + edit.replacement + updated.slice(edit.end);
+  }
+  await fs.writeFile(absolute, updated, "utf8");
+  return true;
+}
+
+/**
+ * Re-render a link target to point at `destPath`, preserving the original's
+ * form: absolute stays absolute, relative is recomputed from `fromDir`
+ * (keeping a leading `./` when one was written), an extensionless target
+ * stays extensionless, and any #fragment/?query suffix is carried over.
+ */
+function renderTarget(rawTarget: string, destPath: string, fromDir: string): string {
+  const pathPart = rawTarget.split("#")[0]!.split("?")[0]!;
+  const suffix = rawTarget.slice(pathPart.length);
+  const dest = pathPart.toLowerCase().endsWith(".md")
+    ? destPath
+    : destPath.replace(/\.md$/i, "");
+  if (pathPart.startsWith("/")) return `/${dest}${suffix}`;
+  const relative = path.posix.relative(fromDir, dest);
+  const dotted =
+    pathPart.startsWith("./") && !relative.startsWith("../") ? `./${relative}` : relative;
+  return dotted + suffix;
+}
+
+/**
+ * Walk from `dir` up toward the bundle root, removing each directory that
+ * holds nothing but its generated `index.md`. Returns the removed
+ * bundle-relative directories, deepest first.
+ */
+async function removeEmptyDirectories(
+  bundleRoot: string,
+  dir: string,
+): Promise<string[]> {
+  const removed: string[] = [];
+  let current = dir === "." ? "" : dir;
+  while (current !== "") {
+    const absolute = path.join(bundleRoot, current);
+    const entries = await fs.readdir(absolute);
+    if (entries.some((name) => name.toLowerCase() !== "index.md")) break;
+    await fs.rm(absolute, { recursive: true });
+    removed.push(current);
+    current = path.posix.dirname(current);
+    if (current === ".") current = "";
+  }
+  return removed;
 }
 
 /**
