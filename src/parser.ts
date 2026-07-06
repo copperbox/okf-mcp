@@ -36,13 +36,7 @@ export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
     const text = match[1] ?? "";
     const rawTarget = match[2] ?? "";
     const [targetStart, targetEnd] = match.indices![2]!;
-    const base: ConceptLink = {
-      text,
-      target: rawTarget,
-      kind: "concept",
-      targetStart,
-      targetEnd,
-    };
+    const base = { text, target: rawTarget, targetStart, targetEnd };
     if (rawTarget.startsWith("#")) {
       links.push({ ...base, kind: "anchor" });
       continue;

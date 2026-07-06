@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
 import { conceptIdFromPath, extractLinks } from "./parser.js";
-import type { ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
+import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
 /**
@@ -60,6 +60,31 @@ export async function writeConcept(
   return { path: safePath, created: !exists };
 }
 
+/**
+ * Look up an existing concept by ID or bundle-relative path, rejecting the
+ * reserved index/log files up front (their IDs never appear in the concept
+ * map, but the message should say "reserved", not "unknown").
+ */
+function requireConcept(bundle: LoadedBundle, idOrPath: string, action: string): Concept {
+  if (/(^|\/)(index|log)(\.md)?$/i.test(idOrPath)) {
+    throw new Error(`${idOrPath} is a reserved file and cannot be ${action} as a concept`);
+  }
+  const concept =
+    bundle.concepts.get(idOrPath) ??
+    bundle.concepts.get(idOrPath.replace(/\.md$/i, ""));
+  if (!concept) throw new Error(`unknown concept: ${idOrPath}`);
+  return concept;
+}
+
+/** Concepts (other than the target itself) with a link resolving to `conceptId`. */
+function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
+  return [...bundle.concepts.values()].filter(
+    (other) =>
+      other.id !== conceptId &&
+      other.links.some((link) => link.resolvedId === conceptId),
+  );
+}
+
 export interface DeleteConceptOptions {
   /** Refuse to delete when other concepts still link to the target. */
   failIfLinked?: boolean;
@@ -88,20 +113,9 @@ export async function deleteConcept(
   idOrPath: string,
   options: DeleteConceptOptions = {},
 ): Promise<DeleteConceptResult> {
-  if (/(^|\/)(index|log)(\.md)?$/i.test(idOrPath)) {
-    throw new Error(`${idOrPath} is a reserved file and cannot be deleted as a concept`);
-  }
-  const concept =
-    bundle.concepts.get(idOrPath) ??
-    bundle.concepts.get(idOrPath.replace(/\.md$/i, ""));
-  if (!concept) throw new Error(`unknown concept: ${idOrPath}`);
+  const concept = requireConcept(bundle, idOrPath, "deleted");
 
-  const inboundLinks = [...bundle.concepts.values()]
-    .filter(
-      (other) =>
-        other.id !== concept.id &&
-        other.links.some((link) => link.resolvedId === concept.id),
-    )
+  const inboundLinks = conceptsLinkingTo(bundle, concept.id)
     .map((other) => other.id)
     .sort();
   if (options.failIfLinked && inboundLinks.length > 0) {
@@ -154,13 +168,7 @@ export async function renameConcept(
   fromIdOrPath: string,
   toRelPath: string,
 ): Promise<RenameConceptResult> {
-  if (/(^|\/)(index|log)(\.md)?$/i.test(fromIdOrPath)) {
-    throw new Error(`${fromIdOrPath} is a reserved file and cannot be renamed as a concept`);
-  }
-  const concept =
-    bundle.concepts.get(fromIdOrPath) ??
-    bundle.concepts.get(fromIdOrPath.replace(/\.md$/i, ""));
-  if (!concept) throw new Error(`unknown concept: ${fromIdOrPath}`);
+  const concept = requireConcept(bundle, fromIdOrPath, "renamed");
 
   const toPath = assertSafeConceptPath(toRelPath);
   const toId = conceptIdFromPath(toPath);
@@ -176,23 +184,21 @@ export async function renameConcept(
   await fs.rename(path.join(bundle.root, concept.path), toAbsolute);
 
   const rewrittenFiles: string[] = [];
+  const linksToMoved = (link: ConceptLink) =>
+    link.path !== undefined && conceptIdFromPath(link.path) === concept.id;
 
   // The moved file: links to itself now point at toPath; links to anything
   // else keep their destination but relative ones need recomputing.
   const movedChanged = await rewriteLinksInFile(bundle.root, toPath, concept.path, (link) =>
-    link.path !== undefined && conceptIdFromPath(link.path) === concept.id
-      ? toPath
-      : link.path ?? null,
+    linksToMoved(link) ? toPath : link.path ?? null,
   );
   if (movedChanged) rewrittenFiles.push(toPath);
 
-  // Inbound linkers, selected from the in-memory link graph like
-  // deleteConcept's inbound report, then rewritten from their raw source.
-  for (const other of bundle.concepts.values()) {
-    if (other.id === concept.id) continue;
-    if (!other.links.some((link) => link.resolvedId === concept.id)) continue;
+  // Inbound linkers, selected from the in-memory link graph, then rewritten
+  // from their raw source.
+  for (const other of conceptsLinkingTo(bundle, concept.id)) {
     const changed = await rewriteLinksInFile(bundle.root, other.path, other.path, (link) =>
-      link.path !== undefined && conceptIdFromPath(link.path) === concept.id ? toPath : null,
+      linksToMoved(link) ? toPath : null,
     );
     if (changed) rewrittenFiles.push(other.path);
   }
