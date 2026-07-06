@@ -9,13 +9,13 @@ import type { GraphFormat } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import { createOkfServer } from "./server.js";
 import { OkfStore } from "./store.js";
-import type { BundleConfig } from "./types.js";
+import type { BundleConfig, RemoteBundleConfig } from "./types.js";
 import { validateBundle } from "./validate.js";
 
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--bundle ...] [--writable] [command]
+  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [command]
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -27,9 +27,12 @@ Commands:
   index               Regenerate index.md files (requires --writable)
 
 Options:
-  --bundle [id=]path  Bundle directory; repeatable. ID defaults to the dir name.
-  --writable          Enable authoring: write_concept tool and index command
-  --help              Show this help
+  --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
+  --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
+                          (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]);
+                          repeatable, indexed in memory at startup.
+  --writable              Enable authoring: write_concept tool and index command
+  --help                  Show this help
 `;
 
 function parseBundleFlags(values: string[]): BundleConfig[] {
@@ -43,11 +46,22 @@ function parseBundleFlags(values: string[]): BundleConfig[] {
   });
 }
 
+function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
+  return values.map((value) => {
+    const eq = value.indexOf("=");
+    if (eq <= 0 || value.slice(eq + 1) === "") {
+      throw new Error(`--remote-bundle requires id=<github tree url>, got: ${value}`);
+    }
+    return { id: value.slice(0, eq), url: value.slice(eq + 1) };
+  });
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
       bundle: { type: "string", multiple: true },
+      "remote-bundle": { type: "string", multiple: true },
       writable: { type: "boolean" },
       help: { type: "boolean" },
     },
@@ -59,13 +73,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
   const configs = parseBundleFlags(values.bundle ?? []);
-  if (configs.length === 0) {
-    console.error("error: at least one --bundle is required\n");
+  const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
+  if (configs.length === 0 && remotes.length === 0) {
+    console.error("error: at least one --bundle or --remote-bundle is required\n");
     console.error(USAGE);
     return 2;
   }
 
-  const store = new OkfStore(configs);
+  const store = new OkfStore(configs, { remotes });
   await store.load();
   const [command = "mcp", ...rest] = positionals;
 
@@ -75,7 +90,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
       console.error(
-        `okf-mcp serving ${configs.map((c) => c.id).join(", ")} over stdio` +
+        `okf-mcp serving ${[...configs, ...remotes].map((c) => c.id).join(", ")} over stdio` +
           (values.writable ? " (writable)" : " (read-only)"),
       );
       return -1; // keep the process alive for the transport
@@ -133,6 +148,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 2;
       }
       for (const bundle of store.bundles()) {
+        if (bundle.readOnly) {
+          console.error(`${bundle.id}: skipped (read-only remote bundle)`);
+          continue;
+        }
         const written = await generateIndexes(bundle);
         console.log(`${bundle.id}: wrote ${written.length} index files`);
       }

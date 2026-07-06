@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -15,6 +14,7 @@ import {
   renameConcept,
   writeConcept,
 } from "./authoring.js";
+import { readBundleDocument } from "./bundle.js";
 import {
   buildGraph,
   exportGraph,
@@ -49,6 +49,14 @@ const bundleParam = z
   .string()
   .optional()
   .describe("Bundle ID; may be omitted when exactly one bundle is configured");
+
+function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
+  if (bundle.readOnly) {
+    throw new Error(
+      `bundle "${bundle.id}" is read-only (remote bundles cannot be modified)`,
+    );
+  }
+}
 
 /**
  * Build the OKF MCP server: one markdown resource per document in each
@@ -94,7 +102,7 @@ export function createOkfServer(
       if (relPath.startsWith("..") || path.posix.isAbsolute(relPath)) {
         throw new Error(`invalid document path: ${relPath}`);
       }
-      const text = await fs.readFile(path.join(bundle.root, relPath), "utf8");
+      const text = await readBundleDocument(bundle, relPath);
       return {
         contents: [{ uri: uri.href, mimeType: "text/markdown", text }],
       };
@@ -116,7 +124,94 @@ export function createOkfServer(
           concepts: bundle.concepts.size,
           reservedFiles: bundle.reserved.map((f) => f.path),
           problems: bundle.problems.length,
+          readOnly: bundle.readOnly,
         })),
+      ),
+  );
+
+  server.registerTool(
+    "reload_bundles",
+    {
+      title: "Reload bundles",
+      description:
+        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed.",
+      inputSchema: {
+        bundle: z
+          .string()
+          .optional()
+          .describe("Bundle ID to reload; omitted reloads all configured bundles"),
+      },
+    },
+    async ({ bundle }) => json(await store.reloadBundles(bundle)),
+  );
+
+  const remoteBundleSummary = (id: string, url: string) => {
+    const bundle = store.bundle(id);
+    return {
+      id,
+      url,
+      concepts: bundle.concepts.size,
+      problems: bundle.problems.length,
+      readOnly: true,
+    };
+  };
+
+  server.registerTool(
+    "load_remote_bundle",
+    {
+      title: "Load remote bundle",
+      description:
+        "Fetch a read-only OKF bundle from a public GitHub tree URL and add it to the in-memory index. Only .md files are downloaded (bounded in count and size), nothing is written to disk, and remote content is never executed. Authoring tools reject the bundle.",
+      inputSchema: {
+        id: z
+          .string()
+          .min(1)
+          .describe("Bundle ID to register; must not collide with an existing bundle"),
+        url: z
+          .string()
+          .describe(
+            "Public GitHub tree URL: https://github.com/<owner>/<repo>/tree/<ref>[/<path>]",
+          ),
+        include: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Glob patterns over bundle-relative paths; when present, only matching files load",
+          ),
+        exclude: z
+          .array(z.string())
+          .optional()
+          .describe("Glob patterns over bundle-relative paths to skip"),
+      },
+    },
+    async ({ id, url, include, exclude }) => {
+      await store.addRemoteBundle({
+        id,
+        url,
+        ...(include !== undefined && { include }),
+        ...(exclude !== undefined && { exclude }),
+      });
+      return json(remoteBundleSummary(id, url));
+    },
+  );
+
+  server.registerTool(
+    "list_remote_bundles",
+    {
+      title: "List remote bundles",
+      description:
+        "List read-only remote bundles loaded from public GitHub trees, with concept counts",
+      inputSchema: {},
+    },
+    async () =>
+      json(
+        store
+          .remoteBundleConfigs()
+          .map((config) => ({
+            ...remoteBundleSummary(config.id, config.url),
+            ...(config.include !== undefined && { include: config.include }),
+            ...(config.exclude !== undefined && { exclude: config.exclude }),
+          })),
       ),
   );
 
@@ -306,6 +401,7 @@ export function createOkfServer(
       },
       async ({ bundle, path: relPath, frontmatter, body, logMessage }) => {
         const target = store.bundle(bundle);
+        assertWritableBundle(target);
         const result = await writeConcept(
           target.root,
           relPath,
@@ -346,6 +442,7 @@ export function createOkfServer(
       },
       async ({ bundle, id, logMessage, failIfLinked }) => {
         const target = store.bundle(bundle);
+        assertWritableBundle(target);
         const result = await deleteConcept(target, id, {
           ...(failIfLinked !== undefined && { failIfLinked }),
         });
@@ -376,6 +473,7 @@ export function createOkfServer(
       },
       async ({ bundle, from, to, logMessage }) => {
         const target = store.bundle(bundle);
+        assertWritableBundle(target);
         const result = await renameConcept(target, from, to);
         await logAndReindex(
           target,
@@ -404,6 +502,7 @@ export function createOkfServer(
       },
       async ({ bundle, message }) => {
         const target = store.bundle(bundle);
+        assertWritableBundle(target);
         await appendLogEntry(target.root, message);
         await store.reloadBundle(target.id);
         return json({ bundle: target.id, path: "log.md", uri: okfUri(target.id, "log.md") });
@@ -420,6 +519,7 @@ export function createOkfServer(
       },
       async ({ bundle }) => {
         const target = store.bundle(bundle);
+        assertWritableBundle(target);
         const written = await generateIndexes(target);
         await store.reloadBundle(target.id);
         return json({ bundle: target.id, written });

@@ -39,43 +39,51 @@ function isReserved(relPath: string): ReservedFile | null {
   return { path: relPath, kind: base === "index.md" ? "index" : "log" };
 }
 
+/** One markdown document as raw text, addressed by its bundle-relative path. */
+export interface BundleDocument {
+  /** Bundle-relative POSIX path ending in `.md`. */
+  path: string;
+  source: string;
+}
+
+export interface BuildBundleOptions {
+  /** Mark the bundle read-only: rejected by all authoring paths. */
+  readOnly?: boolean;
+  /** Keep raw sources in memory so documents can be served without files. */
+  keepSources?: boolean;
+}
+
 /**
- * Load an OKF bundle from a directory tree (spec §3). Loading is
- * permissive: malformed documents are reported as problems and skipped,
- * valid concepts keep working.
+ * Index a set of in-memory documents into a bundle (the parse/resolve
+ * pipeline shared by local and remote loading). Permissive per spec §9:
+ * malformed documents are reported as problems and skipped, valid
+ * concepts keep working.
  */
-export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
-  const root = path.resolve(config.root);
+export function buildBundle(
+  id: string,
+  root: string,
+  documents: BundleDocument[],
+  options: BuildBundleOptions = {},
+): LoadedBundle {
   const concepts = new Map<string, Concept>();
   const reserved: ReservedFile[] = [];
   const problems: BundleProblem[] = [];
 
-  let files: string[];
-  try {
-    files = await walkMarkdownFiles(root);
-  } catch (err) {
-    problems.push({
-      severity: "error",
-      message: `cannot read bundle root ${root}: ${(err as Error).message}`,
-    });
-    return { id: config.id, root, concepts, reserved, problems };
-  }
-
-  for (const relPath of files) {
+  for (const document of [...documents].sort((a, b) => (a.path < b.path ? -1 : 1))) {
+    const relPath = document.path;
     const reservedFile = isReserved(relPath);
     if (reservedFile) {
       reserved.push(reservedFile);
       continue;
     }
-    const source = await fs.readFile(path.join(root, relPath), "utf8");
-    const parsed = parseConceptDocument(source, relPath);
+    const parsed = parseConceptDocument(document.source, relPath);
     for (const problem of parsed.problems) {
       problems.push({ severity: "error", path: relPath, message: problem });
     }
     if (parsed.frontmatter === null) continue; // unusable document; problems already recorded
     concepts.set(conceptIdFromPath(relPath), {
       id: conceptIdFromPath(relPath),
-      bundleId: config.id,
+      bundleId: id,
       path: relPath,
       frontmatter: parsed.frontmatter,
       body: parsed.body,
@@ -84,7 +92,72 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
   }
 
   resolveLinks(concepts, problems);
-  return { id: config.id, root, concepts, reserved, problems };
+  return {
+    id,
+    root,
+    concepts,
+    reserved,
+    problems,
+    readOnly: options.readOnly ?? false,
+    ...(options.keepSources && {
+      sources: new Map(documents.map((d) => [d.path, d.source])),
+    }),
+  };
+}
+
+/**
+ * Load an OKF bundle from a directory tree (spec §3). Loading is
+ * permissive: malformed documents are reported as problems and skipped,
+ * valid concepts keep working.
+ */
+export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
+  const root = path.resolve(config.root);
+
+  let files: string[];
+  try {
+    files = await walkMarkdownFiles(root);
+  } catch (err) {
+    return {
+      id: config.id,
+      root,
+      concepts: new Map(),
+      reserved: [],
+      problems: [
+        {
+          severity: "error",
+          message: `cannot read bundle root ${root}: ${(err as Error).message}`,
+        },
+      ],
+      readOnly: false,
+    };
+  }
+
+  const documents: BundleDocument[] = [];
+  for (const relPath of files) {
+    documents.push({
+      path: relPath,
+      source: await fs.readFile(path.join(root, relPath), "utf8"),
+    });
+  }
+  return buildBundle(config.id, root, documents);
+}
+
+/**
+ * Read a document's raw text: from the in-memory sources for bundles
+ * without local files (remote), otherwise from disk under the root.
+ */
+export async function readBundleDocument(
+  bundle: LoadedBundle,
+  relPath: string,
+): Promise<string> {
+  if (bundle.sources !== undefined) {
+    const source = bundle.sources.get(relPath);
+    if (source === undefined) {
+      throw new Error(`unknown document in bundle ${bundle.id}: ${relPath}`);
+    }
+    return source;
+  }
+  return fs.readFile(path.join(bundle.root, relPath), "utf8");
 }
 
 /**

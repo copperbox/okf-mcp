@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
+import { readBundleDocument } from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
 
@@ -25,7 +23,7 @@ export async function validateBundle(
 
   for (const file of bundle.reserved) {
     if (file.kind !== "index" || file.path === "index.md") continue;
-    const source = await fs.readFile(path.join(bundle.root, file.path), "utf8");
+    const source = await readBundleDocument(bundle, file.path);
     if (splitFrontmatter(source).present) {
       problems.push({
         severity: "warning",
