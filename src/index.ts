@@ -17,6 +17,8 @@ export {
   findPath,
   getNeighbors,
   graphSummary,
+  listTags,
+  listTypes,
 } from "./graph.js";
 export type {
   ConceptGraph,
@@ -27,6 +29,8 @@ export type {
   GraphOptions,
   GraphSummary,
   NeighborsResult,
+  TagCount,
+  TypeCount,
 } from "./graph.js";
 export { conceptIdFromPath, extractLinks, parseConceptDocument } from "./parser.js";
 export type { ParsedConceptDocument } from "./parser.js";

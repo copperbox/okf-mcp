@@ -15,6 +15,8 @@ import {
   findPath,
   getNeighbors,
   graphSummary,
+  listTags,
+  listTypes,
 } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
@@ -176,6 +178,30 @@ export function createOkfServer(
       const bundles = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
       return json(searchConcepts(bundles, filters));
     },
+  );
+
+  server.registerTool(
+    "list_types",
+    {
+      title: "List types",
+      description:
+        "Distinct concept `type` values with usage counts, sorted by count. Reuse an existing type when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
+    },
+    async ({ bundle }) =>
+      json(listTypes(bundle !== undefined ? [store.bundle(bundle)] : store.bundles())),
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "List tags",
+      description:
+        "Distinct tag values with usage counts, sorted by count. Reuse an existing tag when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
+    },
+    async ({ bundle }) =>
+      json(listTags(bundle !== undefined ? [store.bundle(bundle)] : store.bundles())),
   );
 
   server.registerTool(
