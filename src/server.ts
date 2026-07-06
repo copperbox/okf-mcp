@@ -534,7 +534,9 @@ export function createOkfServer(
           frontmatter: z
             .object({ type: z.string().min(1) })
             .passthrough()
-            .describe("YAML frontmatter; `type` is required, extra keys are preserved"),
+            .describe(
+              "YAML frontmatter; `type` is required, extra keys are preserved. `timestamp` defaults to the current UTC time when omitted (supply one to backdate)",
+            ),
           body: z.string().describe("Markdown body"),
           logMessage: z
             .string()

@@ -60,6 +60,55 @@ describe("authoring", () => {
     );
   });
 
+  it("defaults timestamp to now, between tags and extension keys", async () => {
+    const before = Date.now();
+    await writeConcept(
+      root,
+      "metrics/revenue.md",
+      { type: "Metric", owner: "data-team", tags: ["finance"] },
+      "Body",
+    );
+    const after = Date.now();
+
+    const bundle = await loadBundle({ id: "t", root });
+    const timestamp = bundle.concepts.get("metrics/revenue")?.frontmatter.timestamp;
+    assert.equal(typeof timestamp, "string");
+    assert.match(timestamp as string, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const written = Date.parse(timestamp as string);
+    assert.ok(written >= before && written <= after);
+
+    const source = await fs.readFile(path.join(root, "metrics/revenue.md"), "utf8");
+    const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
+    assert.deepEqual(keys, ["type", "tags", "timestamp", "owner"]);
+  });
+
+  it("preserves a caller-provided timestamp verbatim", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-05-04T00:00:00Z" },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    assert.equal(bundle.concepts.get("x")?.frontmatter.timestamp, "2020-05-04T00:00:00Z");
+  });
+
+  it("refreshes the timestamp when an update omits it", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-01-01T00:00:00Z" },
+      "Old body",
+    );
+    const before = Date.now();
+    await writeConcept(root, "x.md", { type: "Note" }, "New body");
+
+    const bundle = await loadBundle({ id: "t", root });
+    const timestamp = bundle.concepts.get("x")?.frontmatter.timestamp;
+    assert.equal(typeof timestamp, "string");
+    assert.ok(Date.parse(timestamp as string) >= before);
+  });
+
   it("prepends log entries newest-first grouped by day", async () => {
     await appendLogEntry(root, "**Creation**: first", new Date("2026-07-01T10:00:00Z"));
     await appendLogEntry(root, "**Update**: second", new Date("2026-07-06T10:00:00Z"));

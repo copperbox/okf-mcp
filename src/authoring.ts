@@ -34,6 +34,29 @@ export interface WriteConceptOptions {
   failIfExists?: boolean;
 }
 
+/** Spec §4.1 keys in their recommended order; `timestamp` slots in after these. */
+const SPEC_KEYS = ["type", "title", "description", "resource", "tags"] as const;
+
+/**
+ * Default `timestamp` to the current time (spec §4.1: ISO 8601 datetime of
+ * last meaningful change) — the server knows when it writes. A caller-provided
+ * value always wins, so producers may backdate deliberately. When defaulting,
+ * spec keys are emitted in spec order with `timestamp` in its slot, followed
+ * by extension keys in their original order.
+ */
+function withDefaultTimestamp(frontmatter: ConceptFrontmatter): ConceptFrontmatter {
+  if (frontmatter.timestamp !== undefined) return frontmatter;
+  const ordered: Record<string, unknown> = { type: frontmatter.type };
+  for (const key of SPEC_KEYS) {
+    if (frontmatter[key] !== undefined) ordered[key] = frontmatter[key];
+  }
+  ordered.timestamp = new Date().toISOString();
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (!(SPEC_KEYS as readonly string[]).includes(key)) ordered[key] = value;
+  }
+  return ordered as ConceptFrontmatter;
+}
+
 /**
  * Write one concept document into a bundle directory. This is the only
  * concept write path; it validates the path and required frontmatter but
@@ -56,7 +79,11 @@ export async function writeConcept(
     throw new Error(`concept already exists: ${safePath}`);
   }
   await fs.mkdir(path.dirname(absolute), { recursive: true });
-  await fs.writeFile(absolute, serializeDocument(frontmatter, body), "utf8");
+  await fs.writeFile(
+    absolute,
+    serializeDocument(withDefaultTimestamp(frontmatter), body),
+    "utf8",
+  );
   return { path: safePath, created: !exists };
 }
 
