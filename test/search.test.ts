@@ -4,7 +4,8 @@ import { before, describe, it } from "node:test";
 
 import { loadBundle } from "../src/bundle.js";
 import { searchConcepts } from "../src/search.js";
-import type { Concept, LoadedBundle } from "../src/types.js";
+import type { LoadedBundle } from "../src/types.js";
+import { makeBundle } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
@@ -91,7 +92,7 @@ describe("searchConcepts", () => {
 
   it("caps snippet length on long lines, keeping the match visible", () => {
     const body = `${"x".repeat(300)} needle ${"y".repeat(300)}`;
-    const { hits } = searchConcepts([syntheticBundle(body)], { query: "needle" });
+    const { hits } = searchConcepts([makeBundle([{ id: "notes/long", type: "Note", body }])], { query: "needle" });
     const snippet = hits[0]?.snippet;
     assert.ok(snippet !== undefined);
     assert.ok(snippet.includes("needle"));
@@ -101,7 +102,7 @@ describe("searchConcepts", () => {
 
   it("never splits multi-byte characters when truncating", () => {
     const body = `${"😀".repeat(200)}needle${"😀".repeat(200)}`;
-    const { hits } = searchConcepts([syntheticBundle(body)], { query: "needle" });
+    const { hits } = searchConcepts([makeBundle([{ id: "notes/long", type: "Note", body }])], { query: "needle" });
     const snippet = hits[0]?.snippet;
     assert.ok(snippet !== undefined);
     assert.ok(snippet.includes("needle"));
@@ -109,21 +110,3 @@ describe("searchConcepts", () => {
     assert.doesNotMatch(snippet, loneSurrogate, "snippet contains a lone surrogate");
   });
 });
-
-function syntheticBundle(body: string): LoadedBundle {
-  const concept: Concept = {
-    id: "notes/long",
-    bundleId: "synth",
-    path: "notes/long.md",
-    frontmatter: { type: "Note" },
-    body,
-    links: [],
-  };
-  return {
-    id: "synth",
-    root: "/synth",
-    concepts: new Map([[concept.id, concept]]),
-    reserved: [],
-    problems: [],
-  };
-}

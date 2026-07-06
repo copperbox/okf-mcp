@@ -74,6 +74,13 @@ export function createOkfServer(
   const selectBundles = (bundle: string | undefined) =>
     bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
 
+  /** Read any bundle document (concept or reserved file) after path validation. */
+  const readDocument = (bundleId: string | undefined, relPath: string) => {
+    const bundle = store.bundle(bundleId);
+    const safePath = assertSafeDocumentPath(relPath);
+    return fs.readFile(path.join(bundle.root, safePath), "utf8");
+  };
+
   server.registerResource(
     "okf-document",
     new ResourceTemplate("okf://{bundle}/{+path}", {
@@ -102,9 +109,7 @@ export function createOkfServer(
       mimeType: "text/markdown",
     },
     async (uri, variables) => {
-      const bundle = store.bundle(String(variables.bundle));
-      const relPath = assertSafeDocumentPath(String(variables.path));
-      const text = await fs.readFile(path.join(bundle.root, relPath), "utf8");
+      const text = await readDocument(String(variables.bundle), String(variables.path));
       return {
         contents: [{ uri: uri.href, mimeType: "text/markdown", text }],
       };
@@ -183,11 +188,7 @@ export function createOkfServer(
           .describe("Bundle-relative path, e.g. log.md or tables/orders.md"),
       },
     },
-    async ({ bundle, path: relPath }) => {
-      const target = store.bundle(bundle);
-      const safePath = assertSafeDocumentPath(relPath);
-      return markdown(await fs.readFile(path.join(target.root, safePath), "utf8"));
-    },
+    async ({ bundle, path: relPath }) => markdown(await readDocument(bundle, relPath)),
   );
 
   server.registerTool(

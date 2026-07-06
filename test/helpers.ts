@@ -1,7 +1,37 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import type { LoadedBundle } from "../src/types.js";
+
 const execFileAsync = promisify(execFile);
+
+/** Build an in-memory bundle from minimal concept specs, for tests that need no fixture on disk. */
+export function makeBundle(
+  specs: { id: string; type: string; tags?: string[]; body?: string }[],
+): LoadedBundle {
+  return {
+    id: "synthetic",
+    root: "/synthetic",
+    concepts: new Map(
+      specs.map((spec) => [
+        spec.id,
+        {
+          id: spec.id,
+          bundleId: "synthetic",
+          path: `${spec.id}.md`,
+          frontmatter: {
+            type: spec.type,
+            ...(spec.tags !== undefined && { tags: spec.tags }),
+          },
+          body: spec.body ?? "",
+          links: [],
+        },
+      ]),
+    ),
+    reserved: [],
+    problems: [],
+  };
+}
 
 /** Environment that isolates test repos from user/system git config. */
 const GIT_ENV = {

@@ -13,35 +13,9 @@ import {
   listTypes,
 } from "../src/graph.js";
 import type { LoadedBundle } from "../src/types.js";
+import { makeBundle } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
-
-function makeBundle(
-  specs: { id: string; type: string; tags?: string[] }[],
-): LoadedBundle {
-  return {
-    id: "synthetic",
-    root: "/synthetic",
-    concepts: new Map(
-      specs.map((spec) => [
-        spec.id,
-        {
-          id: spec.id,
-          bundleId: "synthetic",
-          path: `${spec.id}.md`,
-          frontmatter: {
-            type: spec.type,
-            ...(spec.tags !== undefined && { tags: spec.tags }),
-          },
-          body: "",
-          links: [],
-        },
-      ]),
-    ),
-    reserved: [],
-    problems: [],
-  };
-}
 
 describe("graph", () => {
   let bundle: LoadedBundle;
