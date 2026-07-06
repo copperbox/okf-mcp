@@ -21,6 +21,9 @@ export interface SearchFilters {
   offset?: number;
 }
 
+/** Fields the text query is matched against, in scoring order. */
+export type MatchField = "id" | "title" | "description" | "tags" | "body";
+
 export interface SearchHit {
   bundle: string;
   id: string;
@@ -29,6 +32,10 @@ export interface SearchHit {
   description?: string;
   tags?: string[];
   score: number;
+  /** Which fields the query matched. Present only when a query was given. */
+  matchedIn?: MatchField[];
+  /** Body context around the first match. Present only when the body matched. */
+  snippet?: string;
 }
 
 export interface SearchResult {
@@ -40,16 +47,59 @@ function lower(values: string[] | undefined): Set<string> {
   return new Set((values ?? []).map((v) => v.toLowerCase()));
 }
 
-function score(concept: Concept, query: string): number {
+function score(concept: Concept, query: string): { total: number; matchedIn: MatchField[] } {
   const q = query.toLowerCase();
   const { title, description, tags } = concept.frontmatter;
+  const matchedIn: MatchField[] = [];
   let total = 0;
-  if (concept.id.toLowerCase().includes(q)) total += 5;
-  if (title?.toLowerCase().includes(q)) total += 5;
-  if (description?.toLowerCase().includes(q)) total += 3;
-  if ((tags ?? []).some((tag) => tag.toLowerCase().includes(q))) total += 3;
-  if (concept.body.toLowerCase().includes(q)) total += 1;
-  return total;
+  const hit = (points: number, field: MatchField) => {
+    total += points;
+    matchedIn.push(field);
+  };
+  if (concept.id.toLowerCase().includes(q)) hit(5, "id");
+  if (title?.toLowerCase().includes(q)) hit(5, "title");
+  if (description?.toLowerCase().includes(q)) hit(3, "description");
+  if ((tags ?? []).some((tag) => tag.toLowerCase().includes(q))) hit(3, "tags");
+  if (concept.body.toLowerCase().includes(q)) hit(1, "body");
+  return { total, matchedIn };
+}
+
+const SNIPPET_MAX_LENGTH = 240;
+
+/**
+ * Whole lines of body context around the first match: the matched line, plus
+ * the following line when the matched line alone gives little context. Long
+ * lines are truncated to a window around the match without splitting
+ * surrogate pairs; `…` marks truncation.
+ */
+function extractSnippet(body: string, query: string): string | undefined {
+  const idx = body.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return undefined;
+  const start = body.lastIndexOf("\n", idx) + 1;
+  let end = body.indexOf("\n", idx + query.length);
+  if (end === -1) end = body.length;
+  if (end - start < SNIPPET_MAX_LENGTH / 2 && end < body.length) {
+    const nextEnd = body.indexOf("\n", end + 1);
+    const extendedEnd = nextEnd === -1 ? body.length : nextEnd;
+    if (body.slice(end + 1, extendedEnd).trim() !== "") end = extendedEnd;
+  }
+  let from = start;
+  let to = end;
+  if (to - from > SNIPPET_MAX_LENGTH) {
+    const lead = Math.floor((SNIPPET_MAX_LENGTH - query.length) / 2);
+    from = Math.max(start, Math.min(idx - lead, end - SNIPPET_MAX_LENGTH));
+    to = Math.min(end, from + SNIPPET_MAX_LENGTH);
+    if (isLowSurrogate(body, from)) from += 1;
+    if (isLowSurrogate(body, to)) to -= 1;
+  }
+  const prefix = from > start ? "…" : "";
+  const suffix = to < end ? "…" : "";
+  return prefix + body.slice(from, to).trim() + suffix;
+}
+
+function isLowSurrogate(text: string, index: number): boolean {
+  const code = text.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 /**
@@ -63,6 +113,8 @@ export function searchConcepts(
   const types = lower(filters.types);
   const tagsAny = lower(filters.tagsAny);
   const tagsAll = lower(filters.tagsAll);
+  const trimmedQuery = filters.query?.trim();
+  const query = trimmedQuery === "" ? undefined : trimmedQuery;
 
   const hits: SearchHit[] = [];
   for (const bundle of bundles) {
@@ -91,9 +143,14 @@ export function searchConcepts(
       if (linkedIds !== null && linkedIds.has(concept.id)) continue;
 
       let relevance = 0;
-      if (filters.query !== undefined && filters.query.trim() !== "") {
-        relevance = score(concept, filters.query.trim());
-        if (relevance === 0) continue;
+      let matchedIn: MatchField[] | undefined;
+      let snippet: string | undefined;
+      if (query !== undefined) {
+        const match = score(concept, query);
+        if (match.total === 0) continue;
+        relevance = match.total;
+        matchedIn = match.matchedIn;
+        if (matchedIn.includes("body")) snippet = extractSnippet(concept.body, query);
       }
       hits.push({
         bundle: bundle.id,
@@ -105,6 +162,8 @@ export function searchConcepts(
         }),
         ...(concept.frontmatter.tags !== undefined && { tags: concept.frontmatter.tags }),
         score: relevance,
+        ...(matchedIn !== undefined && { matchedIn }),
+        ...(snippet !== undefined && { snippet }),
       });
     }
   }

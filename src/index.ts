@@ -12,12 +12,16 @@ export { buildBundle, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export { serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type { FrontmatterSplit } from "./frontmatter.js";
+export { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
+export type { FileCommit } from "./git.js";
 export {
   buildGraph,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
+  listTags,
+  listTypes,
 } from "./graph.js";
 export type {
   ConceptGraph,
@@ -28,6 +32,8 @@ export type {
   GraphOptions,
   GraphSummary,
   NeighborsResult,
+  TagCount,
+  TypeCount,
 } from "./graph.js";
 export { conceptIdFromPath, extractLinks, parseConceptDocument } from "./parser.js";
 export type { ParsedConceptDocument } from "./parser.js";
@@ -43,6 +49,8 @@ export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
 export { createOkfServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
 export { OkfStore } from "./store.js";
+export { suggestConceptPath } from "./suggest.js";
+export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export type { BundleReloadStats, OkfStoreOptions } from "./store.js";
 export { okfUri, OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 export type {

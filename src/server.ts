@@ -15,15 +15,19 @@ import {
   writeConcept,
 } from "./authoring.js";
 import { readBundleDocument } from "./bundle.js";
+import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
+  listTags,
+  listTypes,
 } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
+import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
@@ -59,6 +63,22 @@ function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
 }
 
 /**
+ * Reject document paths that are absolute, escape the bundle root, or enter
+ * dot-directories. Unlike assertSafeConceptPath this allows reserved files
+ * (index.md, log.md) and non-.md extensions. Returns the normalized path.
+ */
+function assertSafeDocumentPath(relPath: string): string {
+  const normalized = path.posix.normalize(relPath.replaceAll("\\", "/"));
+  if (path.posix.isAbsolute(normalized) || normalized.startsWith("..")) {
+    throw new Error(`document path must stay inside the bundle: ${relPath}`);
+  }
+  if (normalized.split("/").some((segment) => segment.startsWith("."))) {
+    throw new Error(`document path segments must not start with ".": ${relPath}`);
+  }
+  return normalized;
+}
+
+/**
  * Build the OKF MCP server: one markdown resource per document in each
  * bundle, plus tools for search, graph navigation, validation, and
  * (optionally) authoring.
@@ -68,6 +88,16 @@ export function createOkfServer(
   options: ServerOptions = {},
 ): McpServer {
   const server = new McpServer({ name: "okf-mcp", version: "0.1.0" });
+
+  const selectBundles = (bundle: string | undefined) =>
+    bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
+
+  /** Read any bundle document (concept or reserved file) after path validation. */
+  const readDocument = (bundleId: string | undefined, relPath: string) => {
+    const bundle = store.bundle(bundleId);
+    const safePath = assertSafeDocumentPath(relPath);
+    return readBundleDocument(bundle, safePath);
+  };
 
   server.registerResource(
     "okf-document",
@@ -97,12 +127,7 @@ export function createOkfServer(
       mimeType: "text/markdown",
     },
     async (uri, variables) => {
-      const bundle = store.bundle(String(variables.bundle));
-      const relPath = path.posix.normalize(String(variables.path));
-      if (relPath.startsWith("..") || path.posix.isAbsolute(relPath)) {
-        throw new Error(`invalid document path: ${relPath}`);
-      }
-      const text = await readBundleDocument(bundle, relPath);
+      const text = await readDocument(String(variables.bundle), String(variables.path));
       return {
         contents: [{ uri: uri.href, mimeType: "text/markdown", text }],
       };
@@ -227,16 +252,14 @@ export function createOkfServer(
         type: z.string().optional().describe("Only this frontmatter type"),
       },
     },
-    async ({ bundle, pathPrefix, type }) => {
-      const bundles = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(
-        searchConcepts(bundles, {
+    async ({ bundle, pathPrefix, type }) =>
+      json(
+        searchConcepts(selectBundles(bundle), {
           ...(pathPrefix !== undefined && { pathPrefix }),
           ...(type !== undefined && { types: [type] }),
           limit: 500,
         }).hits.map(({ score: _score, ...hit }) => hit),
-      );
-    },
+      ),
   );
 
   server.registerTool(
@@ -255,6 +278,22 @@ export function createOkfServer(
       if (!concept) throw new Error(`unknown concept: ${id}`);
       return json(concept);
     },
+  );
+
+  server.registerTool(
+    "read_document",
+    {
+      title: "Read document",
+      description:
+        "Read the raw markdown of any bundle document by path — reserved files (index.md, log.md) as well as concepts",
+      inputSchema: {
+        bundle: bundleParam,
+        path: z
+          .string()
+          .describe("Bundle-relative path, e.g. log.md or tables/orders.md"),
+      },
+    },
+    async ({ bundle, path: relPath }) => markdown(await readDocument(bundle, relPath)),
   );
 
   server.registerTool(
@@ -277,10 +316,58 @@ export function createOkfServer(
         offset: z.number().int().nonnegative().optional(),
       },
     },
-    async ({ bundle, ...filters }) => {
-      const bundles = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(searchConcepts(bundles, filters));
+    async ({ bundle, ...filters }) => json(searchConcepts(selectBundles(bundle), filters)),
+  );
+
+  server.registerTool(
+    "list_types",
+    {
+      title: "List types",
+      description:
+        "Distinct concept `type` values with usage counts, sorted by count. Reuse an existing type when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
     },
+    async ({ bundle }) => json(listTypes(selectBundles(bundle))),
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "List tags",
+      description:
+        "Distinct tag values with usage counts, sorted by count. Reuse an existing tag when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
+    },
+    async ({ bundle }) => json(listTags(selectBundles(bundle))),
+  );
+
+  server.registerTool(
+    "suggest_concept_path",
+    {
+      title: "Suggest concept path",
+      description:
+        "Suggest where a new concept file should live, ranked by where existing concepts of the same type (and overlapping tags) already live. Call before write_concept to keep placement consistent.",
+      inputSchema: {
+        bundle: bundleParam,
+        type: z.string().min(1).describe("Frontmatter `type` the new concept will carry"),
+        title: z
+          .string()
+          .optional()
+          .describe("Planned title; slugged into the suggested filename"),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe("Planned tags; used as a secondary placement signal"),
+      },
+    },
+    async ({ bundle, type, title, tags }) =>
+      json(
+        suggestConceptPath(store.bundle(bundle), {
+          type,
+          ...(title !== undefined && { title }),
+          ...(tags !== undefined && { tags }),
+        }),
+      ),
   );
 
   server.registerTool(
@@ -353,6 +440,64 @@ export function createOkfServer(
       ),
   );
 
+  /**
+   * Resolve a concept for the git tools, returning its bundle plus either the
+   * concept or a graceful "not a git repository" result for non-git bundles.
+   */
+  const resolveGitConcept = async (bundleId: string | undefined, id: string) => {
+    const bundle = store.bundle(bundleId);
+    const concept = store.getConcept(bundleId, id);
+    if (!concept) throw new Error(`unknown concept: ${id}`);
+    const notGit = (await isGitWorkTree(bundle.root))
+      ? undefined
+      : json({
+          error: "not a git repository",
+          message: `bundle "${bundle.id}" is not inside a git work tree`,
+        });
+    return { bundle, concept, notGit };
+  };
+
+  server.registerTool(
+    "concept_history",
+    {
+      title: "Concept history",
+      description:
+        "Git commit history (hash, date, author, subject) for a concept file, newest first, following renames. Requires the bundle to live in a git work tree.",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+        limit: z.number().int().positive().max(200).optional(),
+      },
+    },
+    async ({ bundle, id, limit }) => {
+      const { bundle: target, concept, notGit } = await resolveGitConcept(bundle, id);
+      if (notGit) return notGit;
+      return json(await fileHistory(target.root, concept.path, limit));
+    },
+  );
+
+  server.registerTool(
+    "concept_diff",
+    {
+      title: "Concept diff",
+      description:
+        "Unified git diff of a concept file against a ref (default: the commit before the last one touching the file, i.e. its most recent change). Requires the bundle to live in a git work tree.",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+        ref: z
+          .string()
+          .optional()
+          .describe("Git ref to diff against, e.g. a commit hash or HEAD~3"),
+      },
+    },
+    async ({ bundle, id, ref }) => {
+      const { bundle: target, concept, notGit } = await resolveGitConcept(bundle, id);
+      if (notGit) return notGit;
+      return markdown(await fileDiff(target.root, concept.path, ref));
+    },
+  );
+
   server.registerTool(
     "validate_bundle",
     {
@@ -360,10 +505,8 @@ export function createOkfServer(
       description: "Report OKF v0.1 conformance errors and soft warnings",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => {
-      const targets = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(await Promise.all(targets.map(validateBundle)));
-    },
+    async ({ bundle }) =>
+      json(await Promise.all(selectBundles(bundle).map(validateBundle))),
   );
 
   if (options.writable) {

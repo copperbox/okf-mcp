@@ -5,6 +5,7 @@ import { before, describe, it } from "node:test";
 import { loadBundle } from "../src/bundle.js";
 import { searchConcepts } from "../src/search.js";
 import type { LoadedBundle } from "../src/types.js";
+import { makeBundle } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
@@ -52,5 +53,60 @@ describe("searchConcepts", () => {
     const result = searchConcepts(bundles, { pathPrefix: "tables/", limit: 1 });
     assert.equal(result.hits.length, 1);
     assert.equal(result.total, 2);
+  });
+
+  it("reports matchedIn and a body snippet for body matches", () => {
+    const { hits } = searchConcepts(bundles, { query: "lags more than" });
+    assert.equal(hits.length, 1);
+    const hit = hits[0]!;
+    assert.equal(hit.id, "playbooks/freshness");
+    assert.deepEqual(hit.matchedIn, ["body"]);
+    // the matched line, markdown intact, plus the following line for context
+    assert.ok(hit.snippet?.includes("[orders](/tables/orders.md) lags more than"));
+    assert.ok(hit.snippet?.includes("30 minutes behind its SLA"));
+  });
+
+  it("omits the snippet when the query only matched frontmatter", () => {
+    const { hits } = searchConcepts(bundles, { query: "registered" });
+    assert.equal(hits.length, 1);
+    const hit = hits[0]!;
+    assert.equal(hit.id, "tables/customers");
+    assert.deepEqual(hit.matchedIn, ["description"]);
+    assert.equal("snippet" in hit, false);
+  });
+
+  it("lists every matched field in matchedIn", () => {
+    const { hits } = searchConcepts(bundles, { query: "orders" });
+    const hit = hits.find((h) => h.id === "tables/orders");
+    assert.deepEqual(hit?.matchedIn, ["id", "title", "tags", "body"]);
+    assert.ok(hit?.snippet?.includes("orders"));
+  });
+
+  it("omits matchedIn and snippet when no query is given", () => {
+    const { hits } = searchConcepts(bundles, { pathPrefix: "tables/" });
+    for (const hit of hits) {
+      assert.equal("matchedIn" in hit, false);
+      assert.equal("snippet" in hit, false);
+    }
+  });
+
+  it("caps snippet length on long lines, keeping the match visible", () => {
+    const body = `${"x".repeat(300)} needle ${"y".repeat(300)}`;
+    const { hits } = searchConcepts([makeBundle([{ id: "notes/long", type: "Note", body }])], { query: "needle" });
+    const snippet = hits[0]?.snippet;
+    assert.ok(snippet !== undefined);
+    assert.ok(snippet.includes("needle"));
+    assert.ok(snippet.length <= 260, `snippet too long: ${snippet.length}`);
+    assert.ok(snippet.startsWith("…") && snippet.endsWith("…"));
+  });
+
+  it("never splits multi-byte characters when truncating", () => {
+    const body = `${"😀".repeat(200)}needle${"😀".repeat(200)}`;
+    const { hits } = searchConcepts([makeBundle([{ id: "notes/long", type: "Note", body }])], { query: "needle" });
+    const snippet = hits[0]?.snippet;
+    assert.ok(snippet !== undefined);
+    assert.ok(snippet.includes("needle"));
+    const loneSurrogate = /(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+    assert.doesNotMatch(snippet, loneSurrogate, "snippet contains a lone surrogate");
   });
 });
