@@ -1,0 +1,47 @@
+{
+  "name": "okf-mcp",
+  "version": "0.1.0",
+  "description": "An MCP server providing an Open Knowledge Format (OKF) backend in a standardized way to coding agents",
+  "homepage": "https://github.com/copperbox/okf-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/copperbox/okf-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/copperbox/okf-mcp.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "okf-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sandcastle": "npx tsx .sandcastle/main.mts",
+    "sandcastle:loop": "bash scripts/sandcastle-loop.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@copperbox/sandcastle-workflow": "github:copperbox/sandcastle-workflow",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.0"
+  }
+}

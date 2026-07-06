@@ -1,0 +1,19 @@
+{
+  // Type-check config for the Sandcastle orchestration scripts. These run via
+  // `npx tsx .sandcastle/main.mts` (tsx does the transpile/emit); this file
+  // exists so editors and `tsc --noEmit` resolve them the same way tsx does --
+  // Node's ESM resolution plus @types/node for `process`, `child_process`, etc.
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "strict": true,
+    "types": ["node"],
+    // main.mts imports "./config.mts" with its extension, which tsx resolves
+    // natively; allow it here so type-checking matches runtime.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["*.mts"]
+}
