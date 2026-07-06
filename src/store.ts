@@ -70,19 +70,13 @@ export class OkfStore {
    * concept IDs were added, removed, or changed since the previous load.
    */
   async reloadBundles(id?: string): Promise<BundleReloadStats[]> {
-    const targets =
-      id !== undefined
-        ? this.configs.filter((c) => c.id === id)
-        : this.configs;
-    if (id !== undefined && targets.length === 0) {
-      throw new Error(`unknown bundle: ${id}`);
-    }
+    const ids = id !== undefined ? [id] : this.configs.map((c) => c.id);
     const stats: BundleReloadStats[] = [];
-    for (const config of targets) {
-      const previous = this.loaded.get(config.id);
-      const next = await this.reloadBundle(config.id);
+    for (const bundleId of ids) {
+      const previous = this.loaded.get(bundleId);
+      const next = await this.reloadBundle(bundleId);
       stats.push({
-        bundle: config.id,
+        bundle: bundleId,
         concepts: next.concepts.size,
         problems: next.problems.length,
         ...diffConcepts(previous, next),
