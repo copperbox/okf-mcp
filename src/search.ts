@@ -113,6 +113,8 @@ export function searchConcepts(
   const types = lower(filters.types);
   const tagsAny = lower(filters.tagsAny);
   const tagsAll = lower(filters.tagsAll);
+  const trimmedQuery = filters.query?.trim();
+  const query = trimmedQuery === "" ? undefined : trimmedQuery;
 
   const hits: SearchHit[] = [];
   for (const bundle of bundles) {
@@ -143,8 +145,7 @@ export function searchConcepts(
       let relevance = 0;
       let matchedIn: MatchField[] | undefined;
       let snippet: string | undefined;
-      if (filters.query !== undefined && filters.query.trim() !== "") {
-        const query = filters.query.trim();
+      if (query !== undefined) {
         const match = score(concept, query);
         if (match.total === 0) continue;
         relevance = match.total;
