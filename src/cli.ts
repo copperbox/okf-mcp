@@ -29,7 +29,8 @@ Commands:
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
-                          (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]);
+                          (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
+                          or a .tar.gz/.tgz/.zip archive (URL or local path);
                           repeatable, indexed in memory at startup.
   --writable              Enable authoring: write_concept tool and index command
   --help                  Show this help
@@ -50,7 +51,7 @@ function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
   return values.map((value) => {
     const eq = value.indexOf("=");
     if (eq <= 0 || value.slice(eq + 1) === "") {
-      throw new Error(`--remote-bundle requires id=<github tree url>, got: ${value}`);
+      throw new Error(`--remote-bundle requires id=<tree url or archive>, got: ${value}`);
     }
     return { id: value.slice(0, eq), url: value.slice(eq + 1) };
   });

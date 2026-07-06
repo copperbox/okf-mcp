@@ -39,6 +39,7 @@ export { conceptIdFromPath, extractLinks, parseConceptDocument } from "./parser.
 export type { ParsedConceptDocument } from "./parser.js";
 export {
   loadRemoteBundle,
+  MAX_ARCHIVE_DOWNLOAD_BYTES,
   MAX_REMOTE_BYTES,
   MAX_REMOTE_FILES,
   parseGitHubTreeUrl,

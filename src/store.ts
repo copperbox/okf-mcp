@@ -40,7 +40,7 @@ function diffConcepts(
 }
 
 export interface OkfStoreOptions {
-  /** Read-only remote bundles to fetch from public GitHub trees on load(). */
+  /** Read-only remote bundles (GitHub trees or archives) fetched on load(). */
   remotes?: RemoteBundleConfig[];
   /** Injectable fetch for remote bundles (tests). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
@@ -121,7 +121,7 @@ export class OkfStore {
 
   /**
    * Re-read bundles to pick up external edits: local bundles from disk,
-   * remote bundles by refetching their GitHub tree. With no id, all
+   * remote bundles by refetching their tree or archive. With no id, all
    * bundles reload. Returns per-bundle stats including which concept IDs
    * were added, removed, or changed since the previous load.
    */
