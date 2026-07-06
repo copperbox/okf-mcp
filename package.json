@@ -1,6 +1,6 @@
 {
   "name": "okf-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "An MCP server providing an Open Knowledge Format (OKF) backend in a standardized way to coding agents",
   "homepage": "https://github.com/copperbox/okf-mcp#readme",
   "bugs": {
