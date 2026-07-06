@@ -111,6 +111,22 @@ export function createOkfServer(
   );
 
   server.registerTool(
+    "reload_bundles",
+    {
+      title: "Reload bundles",
+      description:
+        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed.",
+      inputSchema: {
+        bundle: z
+          .string()
+          .optional()
+          .describe("Bundle ID to reload; omitted reloads all configured bundles"),
+      },
+    },
+    async ({ bundle }) => json(await store.reloadBundles(bundle)),
+  );
+
+  server.registerTool(
     "list_concepts",
     {
       title: "List concepts",

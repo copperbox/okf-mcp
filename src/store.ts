@@ -1,6 +1,38 @@
 import { loadBundle } from "./bundle.js";
 import type { BundleConfig, Concept, LoadedBundle } from "./types.js";
 
+/** Per-bundle result of a reload: new counts plus a delta vs. the previous load. */
+export interface BundleReloadStats {
+  bundle: string;
+  concepts: number;
+  problems: number;
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+/** A concept counts as changed when its own source differs, not when link
+ * resolution shifted because a neighbor appeared or disappeared. */
+function conceptFingerprint(concept: Concept): string {
+  return JSON.stringify({ frontmatter: concept.frontmatter, body: concept.body });
+}
+
+function diffConcepts(
+  previous: LoadedBundle | undefined,
+  next: LoadedBundle,
+): Pick<BundleReloadStats, "added" | "removed" | "changed"> {
+  const before = previous?.concepts ?? new Map<string, Concept>();
+  const added: string[] = [];
+  const changed: string[] = [];
+  for (const [id, concept] of next.concepts) {
+    const old = before.get(id);
+    if (!old) added.push(id);
+    else if (conceptFingerprint(old) !== conceptFingerprint(concept)) changed.push(id);
+  }
+  const removed = [...before.keys()].filter((id) => !next.concepts.has(id));
+  return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
+}
+
 /**
  * In-memory index over one or more OKF bundles. There is no file watcher;
  * callers reload after external changes (authoring reloads automatically).
@@ -30,6 +62,33 @@ export class OkfStore {
     const bundle = await loadBundle(config);
     this.loaded.set(id, bundle);
     return bundle;
+  }
+
+  /**
+   * Re-read bundles from disk to pick up external edits. With no id, all
+   * configured bundles reload. Returns per-bundle stats including which
+   * concept IDs were added, removed, or changed since the previous load.
+   */
+  async reloadBundles(id?: string): Promise<BundleReloadStats[]> {
+    const targets =
+      id !== undefined
+        ? this.configs.filter((c) => c.id === id)
+        : this.configs;
+    if (id !== undefined && targets.length === 0) {
+      throw new Error(`unknown bundle: ${id}`);
+    }
+    const stats: BundleReloadStats[] = [];
+    for (const config of targets) {
+      const previous = this.loaded.get(config.id);
+      const next = await this.reloadBundle(config.id);
+      stats.push({
+        bundle: config.id,
+        concepts: next.concepts.size,
+        problems: next.problems.length,
+        ...diffConcepts(previous, next),
+      });
+    }
+    return stats;
   }
 
   bundles(): LoadedBundle[] {

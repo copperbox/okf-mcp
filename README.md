@@ -77,6 +77,7 @@ Read tools:
 | Tool | Purpose |
 |---|---|
 | `list_bundles` | Configured bundles with concept counts |
+| `reload_bundles` | Re-read bundles from disk to pick up external edits; reports added/removed/changed concepts |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated |
@@ -119,4 +120,4 @@ npm run build       # emit dist/
 
 Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `graph.ts` / `search.ts` (traversal and structured search), `validate.ts` (conformance), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
-There is no file watcher: restart or reload after editing bundle files outside the server. Concepts written through `write_concept` refresh the index immediately.
+There is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.
