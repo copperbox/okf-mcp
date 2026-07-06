@@ -59,6 +59,95 @@ export async function writeConcept(
   return { path: safePath, created: !exists };
 }
 
+export interface DeleteConceptOptions {
+  /** Refuse to delete when other concepts still link to the target. */
+  failIfLinked?: boolean;
+}
+
+export interface DeleteConceptResult {
+  id: string;
+  path: string;
+  /** Frontmatter title of the deleted concept, when it had one. */
+  title?: string;
+  /** IDs of concepts whose links resolved to the deleted concept. */
+  inboundLinks: string[];
+  /** Bundle-relative directories removed because the delete emptied them. */
+  removedDirs: string[];
+}
+
+/**
+ * Delete one concept from a bundle by ID or path. Broken inbound links are
+ * spec-legal (§5.3), so linking concepts are reported rather than blocking —
+ * unless `failIfLinked` asks for the strict behavior. Directories emptied by
+ * the delete are removed along with their generated `index.md`. Does not
+ * touch the in-memory index — reload the bundle afterwards.
+ */
+export async function deleteConcept(
+  bundle: LoadedBundle,
+  idOrPath: string,
+  options: DeleteConceptOptions = {},
+): Promise<DeleteConceptResult> {
+  if (/(^|\/)(index|log)(\.md)?$/i.test(idOrPath)) {
+    throw new Error(`${idOrPath} is a reserved file and cannot be deleted as a concept`);
+  }
+  const concept =
+    bundle.concepts.get(idOrPath) ??
+    bundle.concepts.get(idOrPath.replace(/\.md$/i, ""));
+  if (!concept) throw new Error(`unknown concept: ${idOrPath}`);
+
+  const inboundLinks = [...bundle.concepts.values()]
+    .filter(
+      (other) =>
+        other.id !== concept.id &&
+        other.links.some((link) => link.resolvedId === concept.id),
+    )
+    .map((other) => other.id)
+    .sort();
+  if (options.failIfLinked && inboundLinks.length > 0) {
+    throw new Error(
+      `concept ${concept.id} is still linked from: ${inboundLinks.join(", ")}`,
+    );
+  }
+
+  await fs.rm(path.join(bundle.root, concept.path));
+  const removedDirs = await removeEmptyDirectories(
+    bundle.root,
+    path.posix.dirname(concept.path),
+  );
+
+  const result: DeleteConceptResult = {
+    id: concept.id,
+    path: concept.path,
+    inboundLinks,
+    removedDirs,
+  };
+  if (concept.frontmatter.title !== undefined) result.title = concept.frontmatter.title;
+  return result;
+}
+
+/**
+ * Walk from `dir` up toward the bundle root, removing each directory that
+ * holds nothing but its generated `index.md`. Returns the removed
+ * bundle-relative directories, deepest first.
+ */
+async function removeEmptyDirectories(
+  bundleRoot: string,
+  dir: string,
+): Promise<string[]> {
+  const removed: string[] = [];
+  let current = dir === "." ? "" : dir;
+  while (current !== "") {
+    const absolute = path.join(bundleRoot, current);
+    const entries = await fs.readdir(absolute);
+    if (entries.some((name) => name.toLowerCase() !== "index.md")) break;
+    await fs.rm(absolute, { recursive: true });
+    removed.push(current);
+    current = path.posix.dirname(current);
+    if (current === ".") current = "";
+  }
+  return removed;
+}
+
 /**
  * Prepend an entry to the bundle root `log.md`, newest-first under an ISO
  * date heading (spec §7). Creates the log when absent.

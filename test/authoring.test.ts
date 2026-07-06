@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   appendLogEntry,
   assertSafeConceptPath,
+  deleteConcept,
   generateIndexes,
   writeConcept,
 } from "../src/authoring.js";
@@ -65,6 +66,75 @@ describe("authoring", () => {
     const log = await fs.readFile(path.join(root, "log.md"), "utf8");
     assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("## 2026-07-01"));
     assert.ok(log.indexOf("third") < log.indexOf("second"));
+  });
+
+  it("deletes a concept and reports concepts still linking to it", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    await writeConcept(
+      root,
+      "metrics/revenue.md",
+      { type: "Metric", title: "Revenue" },
+      "Derived from [Orders](/tables/orders.md).",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await deleteConcept(bundle, "tables/orders");
+    assert.equal(result.path, "tables/orders.md");
+    assert.deepEqual(result.inboundLinks, ["metrics/revenue"]);
+    await assert.rejects(fs.access(path.join(root, "tables/orders.md")));
+  });
+
+  it("resolves a trailing .md and rejects reserved or unknown targets", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(deleteConcept(bundle, "log.md"), /reserved/);
+    await assert.rejects(deleteConcept(bundle, "tables/index"), /reserved/);
+    await assert.rejects(deleteConcept(bundle, "nope"), /unknown concept/);
+
+    const result = await deleteConcept(bundle, "tables/orders.md");
+    assert.equal(result.path, "tables/orders.md");
+  });
+
+  it("refuses to delete a linked concept when failIfLinked is set", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    await writeConcept(
+      root,
+      "metrics/revenue.md",
+      { type: "Metric" },
+      "See [Orders](/tables/orders.md).",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      deleteConcept(bundle, "tables/orders", { failIfLinked: true }),
+      /still linked/,
+    );
+    await fs.access(path.join(root, "tables/orders.md"));
+  });
+
+  it("removes now-empty directories and their generated index.md", async () => {
+    await writeConcept(root, "tables/sales/orders.md", { type: "Table" }, "Body");
+    await writeConcept(root, "metrics/revenue.md", { type: "Metric" }, "Body");
+    let bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    bundle = await loadBundle({ id: "t", root });
+    const result = await deleteConcept(bundle, "tables/sales/orders");
+    assert.deepEqual(result.removedDirs, ["tables/sales", "tables"]);
+    await assert.rejects(fs.access(path.join(root, "tables")));
+    // Unrelated directories stay put.
+    await fs.access(path.join(root, "metrics/revenue.md"));
+  });
+
+  it("keeps a directory that still contains other concepts", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    await writeConcept(root, "tables/customers.md", { type: "Table" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await deleteConcept(bundle, "tables/orders");
+    assert.deepEqual(result.removedDirs, []);
+    await fs.access(path.join(root, "tables/customers.md"));
   });
 
   it("generates index.md files with titles and descriptions per directory", async () => {

@@ -34,6 +34,66 @@ describe("server tools", () => {
     return client;
   }
 
+  describe("delete_concept", () => {
+    it("is not registered on a read-only server", async () => {
+      const client = await connect();
+      const tools = await client.listTools();
+      assert.ok(!tools.tools.some((tool) => tool.name === "delete_concept"));
+    });
+
+    it("deletes the file, logs a Deletion entry, and reports inbound links", async () => {
+      await writeConcept(
+        root,
+        "metrics/revenue.md",
+        { type: "Metric", title: "Revenue" },
+        "From [Orders](/tables/orders.md).",
+      );
+      const client = await connect({ writable: true });
+      const result = await client.callTool({
+        name: "delete_concept",
+        arguments: { id: "tables/orders" },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(
+        (result.content as Array<{ text: string }>)[0]!.text,
+      );
+      assert.deepEqual(payload.inboundLinks, ["metrics/revenue"]);
+      assert.deepEqual(payload.removedDirs, ["tables"]);
+
+      await assert.rejects(fs.access(path.join(root, "tables")));
+      const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+      assert.match(log, /\*\*Deletion\*\*: Deleted \[Orders\]\(\/tables\/orders\.md\)\./);
+      const index = await fs.readFile(path.join(root, "index.md"), "utf8");
+      assert.doesNotMatch(index, /tables/);
+    });
+
+    it("fails without deleting when failIfLinked is set and links exist", async () => {
+      await writeConcept(
+        root,
+        "metrics/revenue.md",
+        { type: "Metric" },
+        "From [Orders](/tables/orders.md).",
+      );
+      const client = await connect({ writable: true });
+      const result = await client.callTool({
+        name: "delete_concept",
+        arguments: { id: "tables/orders", failIfLinked: true },
+      });
+      assert.equal(result.isError, true);
+      await fs.access(path.join(root, "tables/orders.md"));
+    });
+
+    it("rejects reserved files", async () => {
+      const client = await connect({ writable: true });
+      const result = await client.callTool({
+        name: "delete_concept",
+        arguments: { id: "log.md" },
+      });
+      assert.equal(result.isError, true);
+      await fs.access(path.join(root, "tables/orders.md"));
+    });
+  });
+
   describe("append_log_entry", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connect();

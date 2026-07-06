@@ -8,7 +8,12 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { appendLogEntry, generateIndexes, writeConcept } from "./authoring.js";
+import {
+  appendLogEntry,
+  deleteConcept,
+  generateIndexes,
+  writeConcept,
+} from "./authoring.js";
 import {
   buildGraph,
   exportGraph,
@@ -301,6 +306,44 @@ export function createOkfServer(
         await generateIndexes(reloaded);
         await store.reloadBundle(target.id);
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
+      },
+    );
+
+    server.registerTool(
+      "delete_concept",
+      {
+        title: "Delete concept",
+        description:
+          "Delete a concept document, append a log.md entry, regenerate index.md files, and report concepts that still link to it",
+        inputSchema: {
+          bundle: bundleParam,
+          id: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
+          logMessage: z
+            .string()
+            .optional()
+            .describe("Entry for log.md; a default is generated when omitted"),
+          failIfLinked: z
+            .boolean()
+            .optional()
+            .describe(
+              "Refuse to delete while other concepts still link to the target (broken links are otherwise spec-legal)",
+            ),
+        },
+      },
+      async ({ bundle, id, logMessage, failIfLinked }) => {
+        const target = store.bundle(bundle);
+        const result = await deleteConcept(target, id, {
+          ...(failIfLinked !== undefined && { failIfLinked }),
+        });
+        await appendLogEntry(
+          target.root,
+          logMessage ??
+            `**Deletion**: Deleted [${result.title ?? result.id}](/${result.path}).`,
+        );
+        const reloaded = await store.reloadBundle(target.id);
+        await generateIndexes(reloaded);
+        await store.reloadBundle(target.id);
+        return json({ ...result, bundle: target.id });
       },
     );
 
