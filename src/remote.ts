@@ -437,7 +437,7 @@ async function loadArchiveBundle(
 
 /**
  * Fetch a read-only OKF bundle from a public GitHub tree, or from a
- * `.tar.gz`/`.tgz`/`.zip` archive (any https URL, or a local path),
+ * `.tar.gz`/`.tgz`/`.zip` archive (any http(s) URL, or a local path),
  * detected by extension. Only `.md` files are indexed, size and count
  * limits are enforced up front, and remote content is only ever parsed
  * as markdown — never executed. The result lives purely in memory
