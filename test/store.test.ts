@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { OkfStore } from "../src/store.js";
+import { fakeGitHub } from "./fake-github.js";
 
 async function writeDoc(root: string, relPath: string, frontmatter: string, body: string): Promise<void> {
   const absolute = path.join(root, relPath);
@@ -78,6 +79,83 @@ describe("OkfStore.reloadBundles", () => {
       await assert.rejects(store.reloadBundles("nope"), /unknown bundle/);
     } finally {
       await fs.rm(other, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("OkfStore remote bundles", () => {
+  const DOC = "---\ntype: Table\n---\n\nRows.\n";
+  const URL = "https://github.com/acme/kb/tree/main/kb";
+
+  it("loads configured remote bundles at startup, read-only", async () => {
+    const store = new OkfStore([], {
+      remotes: [{ id: "shared", url: URL }],
+      fetchImpl: fakeGitHub({ "kb/tables/orders.md": DOC }),
+    });
+    await store.load();
+    const bundle = store.bundle("shared");
+    assert.equal(bundle.readOnly, true);
+    assert.equal(store.getConcept("shared", "tables/orders")?.frontmatter.type, "Table");
+  });
+
+  it("addRemoteBundle mutates only the in-memory index and rejects duplicate ids", async () => {
+    let root: string | undefined;
+    try {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+      await writeDoc(root, "a.md", "type: Note", "A.");
+      const store = new OkfStore([{ id: "local", root }], {
+        fetchImpl: fakeGitHub({ "kb/b.md": DOC }),
+      });
+      await store.load();
+
+      const bundle = await store.addRemoteBundle({ id: "shared", url: URL });
+      assert.equal(bundle.readOnly, true);
+      assert.deepEqual([...bundle.concepts.keys()], ["b"]);
+      assert.deepEqual(store.remoteBundleConfigs(), [{ id: "shared", url: URL }]);
+
+      await assert.rejects(
+        store.addRemoteBundle({ id: "local", url: URL }),
+        /duplicate bundle id/,
+      );
+      await assert.rejects(
+        store.addRemoteBundle({ id: "shared", url: URL }),
+        /duplicate bundle id/,
+      );
+    } finally {
+      if (root !== undefined) await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reloadBundles refetches remote bundles and reports the delta", async () => {
+    const before = { "kb/a.md": DOC };
+    const after = { "kb/a.md": DOC, "kb/b.md": DOC };
+    let files = before;
+    const store = new OkfStore([], {
+      remotes: [{ id: "shared", url: URL }],
+      fetchImpl: ((...params: Parameters<typeof fetch>) =>
+        fakeGitHub(files)(...params)) as typeof fetch,
+    });
+    await store.load();
+
+    files = after;
+    const stats = await store.reloadBundles();
+    assert.deepEqual(stats, [
+      { bundle: "shared", concepts: 2, problems: 0, added: ["b"], removed: [], changed: [] },
+    ]);
+  });
+
+  it("rejects a remote id colliding with a local bundle id at construction", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    try {
+      assert.throws(
+        () =>
+          new OkfStore([{ id: "x", root }], {
+            remotes: [{ id: "x", url: URL }],
+          }),
+        /duplicate bundle id/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -72,13 +72,28 @@ export interface BundleConfig {
   root: string;
 }
 
+/** A read-only bundle fetched from a public GitHub tree (issue: exchange goal). */
+export interface RemoteBundleConfig {
+  id: string;
+  /** Public GitHub tree URL: https://github.com/<owner>/<repo>/tree/<ref>[/<path>] */
+  url: string;
+  /** Glob patterns over bundle-relative paths; when present, only matches load. */
+  include?: string[];
+  /** Glob patterns over bundle-relative paths to skip. */
+  exclude?: string[];
+}
+
 export interface LoadedBundle {
   id: string;
-  /** Absolute path to the bundle root. */
+  /** Absolute path to the bundle root, or the source URL for remote bundles. */
   root: string;
   concepts: Map<string, Concept>;
   reserved: ReservedFile[];
   problems: BundleProblem[];
+  /** Read-only bundles are rejected by all authoring paths (remote bundles). */
+  readOnly: boolean;
+  /** Raw document sources, present only for bundles with no local files. */
+  sources?: Map<string, string>;
 }
 
 /** Canonical URI for a concept or reserved file, used for MCP resources. */

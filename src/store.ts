@@ -1,5 +1,11 @@
 import { loadBundle } from "./bundle.js";
-import type { BundleConfig, Concept, LoadedBundle } from "./types.js";
+import { loadRemoteBundle } from "./remote.js";
+import type {
+  BundleConfig,
+  Concept,
+  LoadedBundle,
+  RemoteBundleConfig,
+} from "./types.js";
 
 /** Per-bundle result of a reload: new counts plus a delta vs. the previous load. */
 export interface BundleReloadStats {
@@ -33,20 +39,36 @@ function diffConcepts(
   return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
 }
 
+export interface OkfStoreOptions {
+  /** Read-only remote bundles to fetch from public GitHub trees on load(). */
+  remotes?: RemoteBundleConfig[];
+  /** Injectable fetch for remote bundles (tests). Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
 /**
  * In-memory index over one or more OKF bundles. There is no file watcher;
  * callers reload after external changes (authoring reloads automatically).
  */
 export class OkfStore {
   private loaded = new Map<string, LoadedBundle>();
+  private readonly remotes = new Map<string, RemoteBundleConfig>();
+  private readonly fetchImpl: typeof fetch;
 
-  constructor(private readonly configs: BundleConfig[]) {
+  constructor(
+    private readonly configs: BundleConfig[],
+    options: OkfStoreOptions = {},
+  ) {
+    this.fetchImpl = options.fetchImpl ?? fetch;
     const ids = new Set<string>();
-    for (const config of configs) {
+    for (const config of [...configs, ...(options.remotes ?? [])]) {
       if (ids.has(config.id)) {
         throw new Error(`duplicate bundle id: ${config.id}`);
       }
       ids.add(config.id);
+    }
+    for (const remote of options.remotes ?? []) {
+      this.remotes.set(remote.id, remote);
     }
   }
 
@@ -54,23 +76,59 @@ export class OkfStore {
     for (const config of this.configs) {
       this.loaded.set(config.id, await loadBundle(config));
     }
+    for (const remote of this.remotes.values()) {
+      this.loaded.set(remote.id, await loadRemoteBundle(remote, this.fetchImpl));
+    }
   }
 
   async reloadBundle(id: string): Promise<LoadedBundle> {
+    const remote = this.remotes.get(id);
     const config = this.configs.find((c) => c.id === id);
-    if (!config) throw new Error(`unknown bundle: ${id}`);
-    const bundle = await loadBundle(config);
+    if (remote === undefined && config === undefined) {
+      throw new Error(`unknown bundle: ${id}`);
+    }
+    const bundle =
+      remote !== undefined
+        ? await loadRemoteBundle(remote, this.fetchImpl)
+        : await loadBundle(config!);
     this.loaded.set(id, bundle);
     return bundle;
   }
 
   /**
-   * Re-read bundles from disk to pick up external edits. With no id, all
-   * configured bundles reload. Returns per-bundle stats including which
-   * concept IDs were added, removed, or changed since the previous load.
+   * Fetch a read-only remote bundle and add it to the index. Nothing is
+   * written to disk; the bundle lives in memory and reloads (refetches)
+   * through the same reload_bundles path as local bundles.
+   */
+  async addRemoteBundle(config: RemoteBundleConfig): Promise<LoadedBundle> {
+    if (
+      this.remotes.has(config.id) ||
+      this.configs.some((c) => c.id === config.id)
+    ) {
+      throw new Error(`duplicate bundle id: ${config.id}`);
+    }
+    const bundle = await loadRemoteBundle(config, this.fetchImpl);
+    this.remotes.set(config.id, config);
+    this.loaded.set(config.id, bundle);
+    return bundle;
+  }
+
+  /** Configs of the remote bundles currently registered. */
+  remoteBundleConfigs(): RemoteBundleConfig[] {
+    return [...this.remotes.values()];
+  }
+
+  /**
+   * Re-read bundles to pick up external edits: local bundles from disk,
+   * remote bundles by refetching their GitHub tree. With no id, all
+   * bundles reload. Returns per-bundle stats including which concept IDs
+   * were added, removed, or changed since the previous load.
    */
   async reloadBundles(id?: string): Promise<BundleReloadStats[]> {
-    const ids = id !== undefined ? [id] : this.configs.map((c) => c.id);
+    const ids =
+      id !== undefined
+        ? [id]
+        : [...this.configs.map((c) => c.id), ...this.remotes.keys()];
     const stats: BundleReloadStats[] = [];
     for (const bundleId of ids) {
       const previous = this.loaded.get(bundleId);
