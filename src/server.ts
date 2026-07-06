@@ -12,6 +12,7 @@ import {
   appendLogEntry,
   deleteConcept,
   generateIndexes,
+  renameConcept,
   writeConcept,
 } from "./authoring.js";
 import {
@@ -30,7 +31,8 @@ import { validateBundle } from "./validate.js";
 export interface ServerOptions {
   /**
    * Allow the authoring tools (write_concept, delete_concept,
-   * append_log_entry, regenerate_indexes). Default: read-only.
+   * rename_concept, append_log_entry, regenerate_indexes).
+   * Default: read-only.
    */
   writable?: boolean;
 }
@@ -353,6 +355,34 @@ export function createOkfServer(
             `**Deletion**: Deleted [${result.title ?? result.id}](/${result.path}).`,
         );
         return json({ ...result, bundle: target.id });
+      },
+    );
+
+    server.registerTool(
+      "rename_concept",
+      {
+        title: "Rename concept",
+        description:
+          "Move a concept to a new path, rewriting links that pointed at it across the bundle (and the moved file's own relative links), then log the change and regenerate index.md files",
+        inputSchema: {
+          bundle: bundleParam,
+          from: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
+          to: z.string().describe("New bundle-relative path ending in .md"),
+          logMessage: z
+            .string()
+            .optional()
+            .describe("Entry for log.md; a default is generated when omitted"),
+        },
+      },
+      async ({ bundle, from, to, logMessage }) => {
+        const target = store.bundle(bundle);
+        const result = await renameConcept(target, from, to);
+        await logAndReindex(
+          target,
+          logMessage ??
+            `**Update**: Renamed [${result.title ?? result.id}](/${result.to}) (was /${result.from}).`,
+        );
+        return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.to) });
       },
     );
 

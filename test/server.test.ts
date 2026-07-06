@@ -94,6 +94,56 @@ describe("server tools", () => {
     });
   });
 
+  describe("rename_concept", () => {
+    it("is not registered on a read-only server", async () => {
+      const client = await connect();
+      const tools = await client.listTools();
+      assert.ok(!tools.tools.some((tool) => tool.name === "rename_concept"));
+    });
+
+    it("moves the file, rewrites inbound links, logs an Update entry, and reindexes", async () => {
+      await writeConcept(
+        root,
+        "metrics/revenue.md",
+        { type: "Metric", title: "Revenue" },
+        "From [Orders](/tables/orders.md).",
+      );
+      const client = await connect({ writable: true });
+      const result = await client.callTool({
+        name: "rename_concept",
+        arguments: { from: "tables/orders", to: "archive/orders.md" },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(
+        (result.content as Array<{ text: string }>)[0]!.text,
+      );
+      assert.equal(payload.from, "tables/orders.md");
+      assert.equal(payload.to, "archive/orders.md");
+      assert.deepEqual(payload.rewrittenFiles, ["metrics/revenue.md"]);
+      assert.deepEqual(payload.removedDirs, ["tables"]);
+
+      await fs.access(path.join(root, "archive/orders.md"));
+      const revenue = await fs.readFile(path.join(root, "metrics/revenue.md"), "utf8");
+      assert.match(revenue, /\[Orders\]\(\/archive\/orders\.md\)/);
+      const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+      assert.match(log, /\*\*Update\*\*: Renamed \[Orders\]\(\/archive\/orders\.md\) \(was \/tables\/orders\.md\)\./);
+      const index = await fs.readFile(path.join(root, "index.md"), "utf8");
+      assert.match(index, /archive/);
+      assert.doesNotMatch(index, /tables/);
+    });
+
+    it("refuses to overwrite an existing concept", async () => {
+      await writeConcept(root, "tables/customers.md", { type: "Table" }, "Body");
+      const client = await connect({ writable: true });
+      const result = await client.callTool({
+        name: "rename_concept",
+        arguments: { from: "tables/orders", to: "tables/customers.md" },
+      });
+      assert.equal(result.isError, true);
+      await fs.access(path.join(root, "tables/orders.md"));
+    });
+  });
+
   describe("append_log_entry", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connect();

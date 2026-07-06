@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
-import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
+import { conceptIdFromPath, extractLinks } from "./parser.js";
+import type { ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
 /**
@@ -123,6 +124,161 @@ export async function deleteConcept(
   };
   if (concept.frontmatter.title !== undefined) result.title = concept.frontmatter.title;
   return result;
+}
+
+export interface RenameConceptResult {
+  /** New concept ID. */
+  id: string;
+  /** Old bundle-relative path. */
+  from: string;
+  /** New bundle-relative path. */
+  to: string;
+  /** Frontmatter title of the moved concept, when it had one. */
+  title?: string;
+  /** Bundle-relative paths of files whose link targets were rewritten. */
+  rewrittenFiles: string[];
+  /** Bundle-relative directories removed because the move emptied them. */
+  removedDirs: string[];
+}
+
+/**
+ * Move a concept to a new path, rewriting every link in the bundle that
+ * resolved to it — each in its original form (absolute stays absolute,
+ * relative is recomputed from the linking file's directory) — plus the moved
+ * file's own relative links, which were written against its old directory.
+ * Refuses to overwrite an existing concept. Does not touch the in-memory
+ * index — reload the bundle afterwards.
+ */
+export async function renameConcept(
+  bundle: LoadedBundle,
+  fromIdOrPath: string,
+  toRelPath: string,
+): Promise<RenameConceptResult> {
+  if (/(^|\/)(index|log)(\.md)?$/i.test(fromIdOrPath)) {
+    throw new Error(`${fromIdOrPath} is a reserved file and cannot be renamed as a concept`);
+  }
+  const concept =
+    bundle.concepts.get(fromIdOrPath) ??
+    bundle.concepts.get(fromIdOrPath.replace(/\.md$/i, ""));
+  if (!concept) throw new Error(`unknown concept: ${fromIdOrPath}`);
+
+  const toPath = assertSafeConceptPath(toRelPath);
+  const toId = conceptIdFromPath(toPath);
+  if (toId === concept.id) {
+    throw new Error(`rename source and target are the same concept: ${toPath}`);
+  }
+  const toAbsolute = path.join(bundle.root, toPath);
+  if (bundle.concepts.has(toId) || (await fileExists(toAbsolute))) {
+    throw new Error(`concept already exists: ${toPath}`);
+  }
+
+  await fs.mkdir(path.dirname(toAbsolute), { recursive: true });
+  await fs.rename(path.join(bundle.root, concept.path), toAbsolute);
+
+  const rewrittenFiles: string[] = [];
+
+  // The moved file: links to itself now point at toPath; links to anything
+  // else keep their destination but relative ones need recomputing.
+  const movedChanged = await rewriteLinksInFile(bundle.root, toPath, concept.path, (link) =>
+    link.path !== undefined && conceptIdFromPath(link.path) === concept.id
+      ? toPath
+      : link.path ?? null,
+  );
+  if (movedChanged) rewrittenFiles.push(toPath);
+
+  // Inbound linkers, selected from the in-memory link graph like
+  // deleteConcept's inbound report, then rewritten from their raw source.
+  for (const other of bundle.concepts.values()) {
+    if (other.id === concept.id) continue;
+    if (!other.links.some((link) => link.resolvedId === concept.id)) continue;
+    const changed = await rewriteLinksInFile(bundle.root, other.path, other.path, (link) =>
+      link.path !== undefined && conceptIdFromPath(link.path) === concept.id ? toPath : null,
+    );
+    if (changed) rewrittenFiles.push(other.path);
+  }
+
+  const removedDirs = await removeEmptyDirectories(
+    bundle.root,
+    path.posix.dirname(concept.path),
+  );
+
+  const result: RenameConceptResult = {
+    id: toId,
+    from: concept.path,
+    to: toPath,
+    rewrittenFiles: rewrittenFiles.sort(),
+    removedDirs,
+  };
+  if (concept.frontmatter.title !== undefined) result.title = concept.frontmatter.title;
+  return result;
+}
+
+/**
+ * Rewrite concept-link targets in one file by splicing the original source,
+ * preserving everything outside the rewritten spans byte-for-byte.
+ *
+ * `resolveAt` is the bundle-relative path whose directory the file's relative
+ * links were written against (the old location for a just-moved file);
+ * `fileAt` is where the file lives on disk now and the directory relative
+ * targets are re-rendered from. `newDestFor` maps each concept link to the
+ * bundle-relative path it should point at, or null to leave it alone.
+ * Returns whether anything changed.
+ */
+async function rewriteLinksInFile(
+  bundleRoot: string,
+  fileAt: string,
+  resolveAt: string,
+  newDestFor: (link: ConceptLink) => string | null,
+): Promise<boolean> {
+  const absolute = path.join(bundleRoot, fileAt);
+  const source = await fs.readFile(absolute, "utf8");
+  const split = splitFrontmatter(source);
+  // Link offsets are relative to the body; when the body is a literal suffix
+  // of the source (always true for LF documents), shift them to source
+  // offsets. Otherwise scan the whole source so offsets stay valid.
+  const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+  const fromDir = path.posix.dirname(fileAt);
+
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const link of extractLinks(source.slice(bodyStart), resolveAt)) {
+    if (link.kind !== "concept") continue;
+    const dest = newDestFor(link);
+    if (dest === null) continue;
+    const replacement = renderTarget(link.target, dest, fromDir === "." ? "" : fromDir);
+    if (replacement === link.target) continue;
+    edits.push({
+      start: bodyStart + link.targetStart,
+      end: bodyStart + link.targetEnd,
+      replacement,
+    });
+  }
+  if (edits.length === 0) return false;
+
+  let updated = source;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    updated = updated.slice(0, edit.start) + edit.replacement + updated.slice(edit.end);
+  }
+  await fs.writeFile(absolute, updated, "utf8");
+  return true;
+}
+
+/**
+ * Re-render a link target to point at `destPath`, preserving the original's
+ * form: absolute stays absolute, relative is recomputed from `fromDir`
+ * (keeping a leading `./` when one was written), an extensionless target
+ * stays extensionless, and any #fragment/?query suffix is carried over.
+ */
+function renderTarget(rawTarget: string, destPath: string, fromDir: string): string {
+  const pathPart = rawTarget.split("#")[0]!.split("?")[0]!;
+  const suffix = rawTarget.slice(pathPart.length);
+  const dest = pathPart.toLowerCase().endsWith(".md")
+    ? destPath
+    : destPath.replace(/\.md$/i, "");
+  if (pathPart.startsWith("/")) return `/${dest}${suffix}`;
+  const relative = path.posix.relative(fromDir, dest);
+  const dotted =
+    pathPart.startsWith("./") && !relative.startsWith("../") ? `./${relative}` : relative;
+  return dotted + suffix;
 }
 
 /**
