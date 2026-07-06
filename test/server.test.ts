@@ -626,9 +626,10 @@ describe("server instructions", () => {
       assert.ok(instructions.includes(needle), `instructions should mention ${needle}`);
     }
     // Instructions cost context in every session — keep them short.
+    const lineCount = instructions.split("\n").length;
     assert.ok(
-      instructions.split("\n").length <= 40,
-      `instructions should stay under ~40 lines, got ${instructions.split("\n").length}`,
+      lineCount <= 40,
+      `instructions should stay under ~40 lines, got ${lineCount}`,
     );
     await client.close();
   });

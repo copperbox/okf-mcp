@@ -91,6 +91,8 @@ To view the brain in Obsidian, open the bundle directory as a vault (File → Op
 
 Resources: one `text/markdown` resource per document, at `okf://<bundle>/<path>`.
 
+The server also declares MCP server-level instructions — a short primer on OKF conventions (concept IDs, link form, reserved files, the read/write tool flow) that clients inject into the agent's context. Authoring guidance is included only when the server runs with `--writable`.
+
 Read tools:
 
 | Tool | Purpose |
