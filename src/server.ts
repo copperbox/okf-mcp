@@ -9,6 +9,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { appendLogEntry, generateIndexes, writeConcept } from "./authoring.js";
+import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
   exportGraph,
@@ -301,6 +302,64 @@ export function createOkfServer(
           format ?? "json",
         ),
       ),
+  );
+
+  /**
+   * Resolve a concept for the git tools, returning its bundle plus either the
+   * concept or a graceful "not a git repository" result for non-git bundles.
+   */
+  const resolveGitConcept = async (bundleId: string | undefined, id: string) => {
+    const bundle = store.bundle(bundleId);
+    const concept = store.getConcept(bundleId, id);
+    if (!concept) throw new Error(`unknown concept: ${id}`);
+    const notGit = (await isGitWorkTree(bundle.root))
+      ? undefined
+      : json({
+          error: "not a git repository",
+          message: `bundle "${bundle.id}" is not inside a git work tree`,
+        });
+    return { bundle, concept, notGit };
+  };
+
+  server.registerTool(
+    "concept_history",
+    {
+      title: "Concept history",
+      description:
+        "Git commit history (hash, date, author, subject) for a concept file, newest first, following renames. Requires the bundle to live in a git work tree.",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+        limit: z.number().int().positive().max(200).optional(),
+      },
+    },
+    async ({ bundle, id, limit }) => {
+      const { bundle: target, concept, notGit } = await resolveGitConcept(bundle, id);
+      if (notGit) return notGit;
+      return json(await fileHistory(target.root, concept.path, limit));
+    },
+  );
+
+  server.registerTool(
+    "concept_diff",
+    {
+      title: "Concept diff",
+      description:
+        "Unified git diff of a concept file against a ref (default: the commit before the last one touching the file, i.e. its most recent change). Requires the bundle to live in a git work tree.",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+        ref: z
+          .string()
+          .optional()
+          .describe("Git ref to diff against, e.g. a commit hash or HEAD~3"),
+      },
+    },
+    async ({ bundle, id, ref }) => {
+      const { bundle: target, concept, notGit } = await resolveGitConcept(bundle, id);
+      if (notGit) return notGit;
+      return markdown(await fileDiff(target.root, concept.path, ref));
+    },
   );
 
   server.registerTool(

@@ -11,6 +11,8 @@ export type { WriteConceptOptions } from "./authoring.js";
 export { loadBundle } from "./bundle.js";
 export { serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type { FrontmatterSplit } from "./frontmatter.js";
+export { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
+export type { FileCommit } from "./git.js";
 export {
   buildGraph,
   exportGraph,
