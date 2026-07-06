@@ -43,6 +43,22 @@ const bundleParam = z
   .describe("Bundle ID; may be omitted when exactly one bundle is configured");
 
 /**
+ * Reject document paths that are absolute, escape the bundle root, or enter
+ * dot-directories. Unlike assertSafeConceptPath this allows reserved files
+ * (index.md, log.md) and non-.md extensions. Returns the normalized path.
+ */
+function assertSafeDocumentPath(relPath: string): string {
+  const normalized = path.posix.normalize(relPath.replaceAll("\\", "/"));
+  if (path.posix.isAbsolute(normalized) || normalized.startsWith("..")) {
+    throw new Error(`document path must stay inside the bundle: ${relPath}`);
+  }
+  if (normalized.split("/").some((segment) => segment.startsWith("."))) {
+    throw new Error(`document path segments must not start with ".": ${relPath}`);
+  }
+  return normalized;
+}
+
+/**
  * Build the OKF MCP server: one markdown resource per document in each
  * bundle, plus tools for search, graph navigation, validation, and
  * (optionally) authoring.
@@ -85,10 +101,7 @@ export function createOkfServer(
     },
     async (uri, variables) => {
       const bundle = store.bundle(String(variables.bundle));
-      const relPath = path.posix.normalize(String(variables.path));
-      if (relPath.startsWith("..") || path.posix.isAbsolute(relPath)) {
-        throw new Error(`invalid document path: ${relPath}`);
-      }
+      const relPath = assertSafeDocumentPath(String(variables.path));
       const text = await fs.readFile(path.join(bundle.root, relPath), "utf8");
       return {
         contents: [{ uri: uri.href, mimeType: "text/markdown", text }],
@@ -152,6 +165,26 @@ export function createOkfServer(
       const concept = store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       return json(concept);
+    },
+  );
+
+  server.registerTool(
+    "read_document",
+    {
+      title: "Read document",
+      description:
+        "Read the raw markdown of any bundle document by path — reserved files (index.md, log.md) as well as concepts",
+      inputSchema: {
+        bundle: bundleParam,
+        path: z
+          .string()
+          .describe("Bundle-relative path, e.g. log.md or tables/orders.md"),
+      },
+    },
+    async ({ bundle, path: relPath }) => {
+      const target = store.bundle(bundle);
+      const safePath = assertSafeDocumentPath(relPath);
+      return markdown(await fs.readFile(path.join(target.root, safePath), "utf8"));
     },
   );
 

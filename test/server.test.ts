@@ -53,4 +53,41 @@ describe("server vocabulary tools", () => {
       { tag: "orders", count: 1 },
     ]);
   });
+
+  async function callText(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+    return (await client.callTool({ name, arguments: args })) as CallToolResult;
+  }
+
+  it("read_document returns reserved files as raw markdown", async () => {
+    const result = await callText("read_document", { bundle: "acme", path: "log.md" });
+    assert.ok(!result.isError);
+    const first = result.content[0];
+    assert.ok(first?.type === "text");
+    assert.match(first.text, /^# Update Log/);
+  });
+
+  it("read_document returns concepts with frontmatter intact", async () => {
+    const result = await callText("read_document", { path: "tables/orders.md" });
+    assert.ok(!result.isError);
+    const first = result.content[0];
+    assert.ok(first?.type === "text");
+    assert.match(first.text, /^---\ntype: BigQuery Table\n/);
+  });
+
+  it("read_document normalizes redundant path segments", async () => {
+    const result = await callText("read_document", { path: "tables/./orders.md" });
+    assert.ok(!result.isError);
+  });
+
+  it("read_document rejects unsafe paths", async () => {
+    for (const path of ["../outside.md", "/etc/passwd", ".obsidian/x.md", "tables/../../x.md"]) {
+      const result = await callText("read_document", { path });
+      assert.ok(result.isError, `expected error for ${path}`);
+    }
+  });
+
+  it("read_document reports missing files as errors", async () => {
+    const result = await callText("read_document", { path: "tables/nope.md" });
+    assert.ok(result.isError);
+  });
 });
