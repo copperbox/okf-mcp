@@ -5,6 +5,7 @@ export {
   assertSafeConceptPath,
   generateIndexes,
   readDeclaredVersion,
+  renderIndexes,
   writeConcept,
 } from "./authoring.js";
 export type { AppendLogEntryOptions, WriteConceptOptions } from "./authoring.js";

@@ -10,6 +10,7 @@ import {
   deleteConcept,
   generateIndexes,
   renameConcept,
+  renderIndexes,
   writeConcept,
 } from "../src/authoring.js";
 import { loadBundle } from "../src/bundle.js";
@@ -342,5 +343,27 @@ describe("authoring", () => {
 
     const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
     assert.match(tablesIndex, /\[Orders\]\(orders\.md\) - Order rows\./);
+  });
+
+  it("renders index content in memory without writing files", async () => {
+    await writeConcept(
+      root,
+      "tables/orders.md",
+      { type: "Table", title: "Orders", description: "Order rows." },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    const rendered = renderIndexes(bundle);
+
+    assert.deepEqual([...rendered.keys()].sort(), ["index.md", "tables/index.md"]);
+    assert.match(rendered.get("index.md")!, /okf_version: "0.1"/);
+    assert.match(rendered.get("index.md")!, /\[tables\]\(tables\/\)/);
+    assert.match(
+      rendered.get("tables/index.md")!,
+      /\[Orders\]\(orders\.md\) - Order rows\./,
+    );
+    // Pure rendering: nothing hit the disk.
+    await assert.rejects(fs.access(path.join(root, "index.md")));
+    await assert.rejects(fs.access(path.join(root, "tables/index.md")));
   });
 });

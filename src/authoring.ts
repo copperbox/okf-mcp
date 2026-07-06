@@ -404,12 +404,13 @@ export async function appendLogEntry(
 }
 
 /**
- * Regenerate `index.md` in every directory of the bundle for progressive
- * disclosure (spec §6). Existing index files are overwritten — they are
- * generated artifacts here. Entries use frontmatter titles/descriptions,
- * so the same files double as navigation pages in Obsidian.
+ * Render the `index.md` content for every directory of the bundle from
+ * concept frontmatter (spec §6), keyed by bundle-relative index path
+ * ("index.md", "tables/index.md", ...). Pure in-memory rendering — spec §6
+ * lets consumers synthesize an index when none is present, so this also
+ * serves read-only bundles where generateIndexes cannot write.
  */
-export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
+export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
   const directories = new Map<string, { files: string[]; dirs: Set<string> }>();
   const entryFor = (dir: string) => {
     let entry = directories.get(dir);
@@ -433,7 +434,7 @@ export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
     }
   }
 
-  const written: string[] = [];
+  const rendered = new Map<string, string>();
   for (const [dir, { files, dirs }] of directories) {
     const lines: string[] = [];
     if (dir === "") {
@@ -459,11 +460,21 @@ export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
       lines.push("");
     }
     const indexPath = dir === "" ? "index.md" : `${dir}/index.md`;
-    await fs.writeFile(
-      path.join(bundle.root, indexPath),
-      lines.join("\n").trimEnd() + "\n",
-      "utf8",
-    );
+    rendered.set(indexPath, lines.join("\n").trimEnd() + "\n");
+  }
+  return rendered;
+}
+
+/**
+ * Regenerate `index.md` in every directory of the bundle for progressive
+ * disclosure (spec §6). Existing index files are overwritten — they are
+ * generated artifacts here. Entries use frontmatter titles/descriptions,
+ * so the same files double as navigation pages in Obsidian.
+ */
+export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
+  const written: string[] = [];
+  for (const [indexPath, content] of renderIndexes(bundle)) {
+    await fs.writeFile(path.join(bundle.root, indexPath), content, "utf8");
     written.push(indexPath);
   }
   return written.sort();

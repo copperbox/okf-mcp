@@ -101,7 +101,7 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
-| `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md` |
+| `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations and a body snippet |
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |

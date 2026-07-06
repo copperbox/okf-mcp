@@ -243,6 +243,57 @@ describe("remote bundle tools", () => {
     assert.match((log.content as Array<{ text: string }>)[0]!.text, /read-only/);
   });
 
+  it("synthesizes index.md views for remote bundles published without them", async () => {
+    const store = new OkfStore([{ id: "t", root }], {
+      fetchImpl: fakeGitHub({ "kb/tables/orders.md": DOC }),
+    });
+    await store.load();
+    await store.addRemoteBundle({ id: "shared", url: URL });
+    const client = await connect(store);
+
+    const rootIndex = await callTool(client, "read_document", {
+      bundle: "shared",
+      path: "index.md",
+    });
+    assert.notEqual(rootIndex.isError, true);
+    assert.equal((rootIndex as { synthesized?: boolean }).synthesized, true);
+    assert.match(textContent(rootIndex), /# Bundle Index/);
+    assert.match(textContent(rootIndex), /\[tables\]\(tables\/\)/);
+
+    const tablesIndex = await callTool(client, "read_document", {
+      bundle: "shared",
+      path: "tables/index.md",
+    });
+    assert.equal((tablesIndex as { synthesized?: boolean }).synthesized, true);
+    assert.match(textContent(tablesIndex), /\* \[Orders\]\(orders\.md\)/);
+
+    // The okf:// resource serves the same synthesized view.
+    const resource = await client.readResource({ uri: "okf://shared/index.md" });
+    assert.match((resource.contents[0] as { text: string }).text, /# Bundle Index/);
+
+    // Indexes of directories the bundle does not have still fail.
+    const missing = await callTool(client, "read_document", {
+      bundle: "shared",
+      path: "nope/index.md",
+    });
+    assert.equal(missing.isError, true);
+  });
+
+  it("serves a real remote index.md verbatim without the synthesized mark", async () => {
+    const store = storeWithRemote();
+    await store.load();
+    await store.addRemoteBundle({ id: "shared", url: URL });
+    const client = await connect(store);
+
+    const result = await callTool(client, "read_document", {
+      bundle: "shared",
+      path: "index.md",
+    });
+    assert.notEqual(result.isError, true);
+    assert.equal(textContent(result), "# Index\n");
+    assert.equal((result as { synthesized?: boolean }).synthesized, undefined);
+  });
+
   it("load_remote_bundle reports duplicate ids as tool errors", async () => {
     const store = storeWithRemote();
     await store.load();
@@ -314,6 +365,15 @@ describe("server tools", () => {
   it("read_document reports missing files as errors", async () => {
     const result = await callTool(client, "read_document", { path: "tables/nope.md" });
     assert.ok(result.isError);
+  });
+
+  it("read_document synthesizes a missing directory index for local bundles", async () => {
+    const result = await callTool(client, "read_document", { path: "tables/index.md" });
+    assert.ok(!result.isError);
+    assert.equal((result as { synthesized?: boolean }).synthesized, true);
+    assert.match(textContent(result), /\* \[.+\]\(orders\.md\)/);
+    // Synthesized views are never written to disk.
+    await assert.rejects(fs.access(path.join(FIXTURE, "tables", "index.md")));
   });
 
   it("suggest_concept_path ranks directories by existing type placement", async () => {
