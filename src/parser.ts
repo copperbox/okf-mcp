@@ -214,8 +214,12 @@ export function extractCitations(
     const line = rawLine.trim();
     if (line === "") continue;
     const entry = CITATION_ENTRY.exec(line);
-    const link = entry === null ? undefined : extractLinks(entry[2]!, conceptPath)[0];
-    if (entry === null || link === undefined) {
+    if (entry === null) {
+      malformed.push(line);
+      continue;
+    }
+    const link = extractLinks(entry[2]!, conceptPath)[0];
+    if (link === undefined) {
       malformed.push(line);
       continue;
     }

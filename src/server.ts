@@ -310,11 +310,11 @@ export function createOkfServer(
       },
     },
     async ({ bundle, id }) => {
-      const target = store.bundle(bundle);
+      const loadedBundle = store.bundle(bundle);
       const concept = store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const { citations } = extractCitations(concept.body, concept.path, (cid) =>
-        target.concepts.has(cid),
+        loadedBundle.concepts.has(cid),
       );
       return json(citations);
     },
