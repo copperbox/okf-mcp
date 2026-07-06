@@ -11,7 +11,7 @@ import { OkfStore } from "../src/store.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
-describe("server vocabulary tools", () => {
+describe("server tools", () => {
   let client: Client;
   before(async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
@@ -28,11 +28,18 @@ describe("server vocabulary tools", () => {
     await client.close();
   });
 
-  async function callJson(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
+  async function callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+    return (await client.callTool({ name, arguments: args })) as CallToolResult;
+  }
+
+  function textContent(result: CallToolResult): string {
     const first = result.content[0];
     assert.ok(first?.type === "text");
-    return JSON.parse(first.text);
+    return first.text;
+  }
+
+  async function callJson(name: string, args: Record<string, unknown>): Promise<unknown> {
+    return JSON.parse(textContent(await callTool(name, args)));
   }
 
   it("list_types returns type counts sorted by count", async () => {
@@ -54,40 +61,32 @@ describe("server vocabulary tools", () => {
     ]);
   });
 
-  async function callText(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
-    return (await client.callTool({ name, arguments: args })) as CallToolResult;
-  }
-
   it("read_document returns reserved files as raw markdown", async () => {
-    const result = await callText("read_document", { bundle: "acme", path: "log.md" });
+    const result = await callTool("read_document", { bundle: "acme", path: "log.md" });
     assert.ok(!result.isError);
-    const first = result.content[0];
-    assert.ok(first?.type === "text");
-    assert.match(first.text, /^# Update Log/);
+    assert.match(textContent(result), /^# Update Log/);
   });
 
   it("read_document returns concepts with frontmatter intact", async () => {
-    const result = await callText("read_document", { path: "tables/orders.md" });
+    const result = await callTool("read_document", { path: "tables/orders.md" });
     assert.ok(!result.isError);
-    const first = result.content[0];
-    assert.ok(first?.type === "text");
-    assert.match(first.text, /^---\ntype: BigQuery Table\n/);
+    assert.match(textContent(result), /^---\ntype: BigQuery Table\n/);
   });
 
   it("read_document normalizes redundant path segments", async () => {
-    const result = await callText("read_document", { path: "tables/./orders.md" });
+    const result = await callTool("read_document", { path: "tables/./orders.md" });
     assert.ok(!result.isError);
   });
 
   it("read_document rejects unsafe paths", async () => {
-    for (const path of ["../outside.md", "/etc/passwd", ".obsidian/x.md", "tables/../../x.md"]) {
-      const result = await callText("read_document", { path });
-      assert.ok(result.isError, `expected error for ${path}`);
+    for (const unsafePath of ["../outside.md", "/etc/passwd", ".obsidian/x.md", "tables/../../x.md"]) {
+      const result = await callTool("read_document", { path: unsafePath });
+      assert.ok(result.isError, `expected error for ${unsafePath}`);
     }
   });
 
   it("read_document reports missing files as errors", async () => {
-    const result = await callText("read_document", { path: "tables/nope.md" });
+    const result = await callTool("read_document", { path: "tables/nope.md" });
     assert.ok(result.isError);
   });
 });
