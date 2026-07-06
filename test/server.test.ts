@@ -600,6 +600,51 @@ describe("authoring tools", () => {
   });
 });
 
+describe("server instructions", () => {
+  it("teaches the OKF conventions, including the write flow when writable", async () => {
+    const client = await connectClient(
+      new OkfStore([{ id: "acme", root: FIXTURE }]),
+      { writable: true },
+    );
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    for (const needle of [
+      "concept",
+      "frontmatter",
+      "bundle-absolute",
+      "graph_summary",
+      "search_concepts",
+      "get_concept",
+      "get_neighbors",
+      "suggest_concept_path",
+      "write_concept",
+      "append_log_entry",
+      "reload_bundles",
+      "index.md",
+      "log.md",
+    ]) {
+      assert.ok(instructions.includes(needle), `instructions should mention ${needle}`);
+    }
+    // Instructions cost context in every session — keep them short.
+    assert.ok(
+      instructions.split("\n").length <= 40,
+      `instructions should stay under ~40 lines, got ${instructions.split("\n").length}`,
+    );
+    await client.close();
+  });
+
+  it("omits authoring guidance on a read-only server", async () => {
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    assert.ok(!instructions.includes("write_concept"));
+    assert.ok(!instructions.includes("suggest_concept_path"));
+    assert.ok(instructions.includes("read-only"));
+    assert.ok(instructions.includes("reload_bundles"));
+    await client.close();
+  });
+});
+
 describe("README tool documentation", () => {
   it("documents every registered tool in a table row", async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
