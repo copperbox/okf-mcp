@@ -30,6 +30,7 @@ export function makeBundle(
     ),
     reserved: [],
     problems: [],
+    readOnly: false,
   };
 }
 
