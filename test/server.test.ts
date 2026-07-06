@@ -14,18 +14,29 @@ import { commitAll, initRepo } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
+/** Load the store's bundles and connect an in-memory client to a fresh server. */
+async function connectClient(store: OkfStore): Promise<Client> {
+  await store.load();
+  const server = createOkfServer(store);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test", version: "0.0.0" });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  return client;
+}
+
+function textContent(result: CallToolResult): string {
+  const first = result.content[0];
+  assert.ok(first?.type === "text");
+  return first.text;
+}
+
 describe("server tools", () => {
   let client: Client;
   before(async () => {
-    const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
-    await store.load();
-    const server = createOkfServer(store);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    client = new Client({ name: "test", version: "0.0.0" });
-    await Promise.all([
-      server.connect(serverTransport),
-      client.connect(clientTransport),
-    ]);
+    client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
   });
   after(async () => {
     await client.close();
@@ -33,12 +44,6 @@ describe("server tools", () => {
 
   async function callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     return (await client.callTool({ name, arguments: args })) as CallToolResult;
-  }
-
-  function textContent(result: CallToolResult): string {
-    const first = result.content[0];
-    assert.ok(first?.type === "text");
-    return first.text;
   }
 
   async function callJson(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -118,18 +123,12 @@ describe("git tools", () => {
       "---\ntype: Note\n---\n\nNo repo here.\n",
     );
 
-    const store = new OkfStore([
-      { id: "repo", root: repoRoot },
-      { id: "plain", root: plainRoot },
-    ]);
-    await store.load();
-    const server = createOkfServer(store);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    client = new Client({ name: "test", version: "0.0.0" });
-    await Promise.all([
-      server.connect(serverTransport),
-      client.connect(clientTransport),
-    ]);
+    client = await connectClient(
+      new OkfStore([
+        { id: "repo", root: repoRoot },
+        { id: "plain", root: plainRoot },
+      ]),
+    );
   });
   after(async () => {
     await client.close();
@@ -138,12 +137,6 @@ describe("git tools", () => {
 
   async function callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     return (await client.callTool({ name, arguments: args })) as CallToolResult;
-  }
-
-  function textContent(result: CallToolResult): string {
-    const first = result.content[0];
-    assert.ok(first?.type === "text");
-    return first.text;
   }
 
   it("concept_history returns commits newest-first", async () => {
