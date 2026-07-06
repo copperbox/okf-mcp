@@ -84,13 +84,14 @@ export class OkfStore {
   async reloadBundle(id: string): Promise<LoadedBundle> {
     const remote = this.remotes.get(id);
     const config = this.configs.find((c) => c.id === id);
-    if (remote === undefined && config === undefined) {
+    let bundle: LoadedBundle;
+    if (remote !== undefined) {
+      bundle = await loadRemoteBundle(remote, this.fetchImpl);
+    } else if (config !== undefined) {
+      bundle = await loadBundle(config);
+    } else {
       throw new Error(`unknown bundle: ${id}`);
     }
-    const bundle =
-      remote !== undefined
-        ? await loadRemoteBundle(remote, this.fetchImpl)
-        : await loadBundle(config!);
     this.loaded.set(id, bundle);
     return bundle;
   }
