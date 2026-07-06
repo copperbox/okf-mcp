@@ -21,6 +21,7 @@ import {
 } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
+import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
@@ -232,6 +233,35 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) => json(listTags(selectBundles(bundle))),
+  );
+
+  server.registerTool(
+    "suggest_concept_path",
+    {
+      title: "Suggest concept path",
+      description:
+        "Suggest where a new concept file should live, ranked by where existing concepts of the same type (and overlapping tags) already live. Call before write_concept to keep placement consistent.",
+      inputSchema: {
+        bundle: bundleParam,
+        type: z.string().min(1).describe("Frontmatter `type` the new concept will carry"),
+        title: z
+          .string()
+          .optional()
+          .describe("Planned title; slugged into the suggested filename"),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe("Planned tags; used as a secondary placement signal"),
+      },
+    },
+    async ({ bundle, type, title, tags }) =>
+      json(
+        suggestConceptPath(store.bundle(bundle), {
+          type,
+          ...(title !== undefined && { title }),
+          ...(tags !== undefined && { tags }),
+        }),
+      ),
   );
 
   server.registerTool(

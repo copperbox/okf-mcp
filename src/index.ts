@@ -41,6 +41,8 @@ export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
 export { createOkfServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
 export { OkfStore } from "./store.js";
+export { suggestConceptPath } from "./suggest.js";
+export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export { okfUri, OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 export type {
   BundleConfig,

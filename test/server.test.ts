@@ -97,6 +97,32 @@ describe("server tools", () => {
     const result = await callTool("read_document", { path: "tables/nope.md" });
     assert.ok(result.isError);
   });
+
+  it("suggest_concept_path ranks directories by existing type placement", async () => {
+    const suggestions = (await callJson("suggest_concept_path", {
+      bundle: "acme",
+      type: "Playbook",
+      title: "Schema Drift Runbook",
+    })) as Array<{ path: string; reason: string }>;
+    assert.equal(suggestions[0]?.path, "playbooks/schema-drift-runbook.md");
+    assert.match(suggestions[0]?.reason ?? "", /`Playbook`/);
+  });
+
+  it("suggest_concept_path falls back to a root-level path for new types", async () => {
+    const suggestions = (await callJson("suggest_concept_path", {
+      type: "Dashboard",
+      title: "Revenue Overview",
+    })) as Array<{ path: string; reason: string }>;
+    assert.deepEqual(
+      suggestions.map((s) => s.path),
+      ["revenue-overview.md"],
+    );
+  });
+
+  it("suggest_concept_path requires a non-empty type", async () => {
+    const result = await callTool("suggest_concept_path", { type: "" });
+    assert.ok(result.isError);
+  });
 });
 
 describe("git tools", () => {
