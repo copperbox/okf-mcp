@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # npm --provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      - name: Verify tag matches package version
+        run: |
+          node -e "
+            const v = require('./package.json').version;
+            if (process.env.GITHUB_REF_NAME !== 'v' + v) {
+              console.error('Tag ' + process.env.GITHUB_REF_NAME + ' does not match package.json version ' + v);
+              process.exit(1);
+            }
+          "
+
+      - name: Verify CLI shebang and executable bit
+        run: |
+          head -n 1 dist/cli.js | grep -qx '#!/usr/bin/env node'
+          test -x dist/cli.js
+
+      - name: Verify pack contents
+        run: |
+          node -e "
+            const { execFileSync } = require('child_process');
+            const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+            const files = JSON.parse(out)[0].files.map((f) => f.path);
+            const allowed = (p) => p === 'package.json' || p === 'README.md' || p === 'LICENSE' || p.startsWith('dist/');
+            const unexpected = files.filter((p) => !allowed(p));
+            if (unexpected.length > 0) {
+              console.error('Unexpected files in npm pack:', unexpected);
+              process.exit(1);
+            }
+            if (!files.includes('dist/cli.js')) {
+              console.error('dist/cli.js missing from npm pack');
+              process.exit(1);
+            }
+            console.log('Pack contents OK (' + files.length + ' files)');
+          "
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

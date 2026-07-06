@@ -32,6 +32,25 @@ node dist/cli.js --bundle /path/to/your/bundle
 
 ## MCP client configuration
 
+The package is published to npm, so the easiest setup runs it through `npx`:
+
+```json
+{
+  "mcpServers": {
+    "okf": {
+      "command": "npx",
+      "args": [
+        "-y", "okf-mcp",
+        "--bundle", "brain=/absolute/path/to/your/bundle",
+        "--writable"
+      ]
+    }
+  }
+}
+```
+
+Alternatively, point at a local checkout you built yourself (`npm run build`):
+
 ```json
 {
   "mcpServers": {

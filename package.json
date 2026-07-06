@@ -11,7 +11,7 @@
     "url": "git+https://github.com/copperbox/okf-mcp.git"
   },
   "license": "ISC",
-  "author": "",
+  "author": "Dan Essig <dan.essig@gmail.com>",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,7 +26,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
+    "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
