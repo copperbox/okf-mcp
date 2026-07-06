@@ -39,9 +39,13 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@copperbox/sandcastle-workflow": "github:copperbox/sandcastle-workflow",
+    "@copperbox/sandcastle-workflow": "github:copperbox/sandcastle-workflow#semver:^0.2.0",
     "@types/node": "^24.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.8.0"
+  },
+  "allowScripts": {
+    "github:copperbox/sandcastle-workflow#3d9deea6458faf1a985e1528a9cf65bc3b2954d9": true,
+    "esbuild@0.28.1": true
   }
 }
