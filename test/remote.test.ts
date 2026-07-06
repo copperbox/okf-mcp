@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 import { describe, it } from "node:test";
 
 import {
@@ -300,7 +301,6 @@ describe("loadRemoteBundle from archives", () => {
 
   it("guards against gzip decompression bombs", async () => {
     // A tiny download that decompresses far past the unpacked cap.
-    const zlib = await import("node:zlib");
     const fetchImpl = fakeArchiveServer({
       [URL]: zlib.gzipSync(Buffer.alloc(200 * 1024 * 1024)),
     });

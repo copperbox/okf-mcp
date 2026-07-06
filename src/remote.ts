@@ -261,8 +261,10 @@ function parseTarEntries(tar: Buffer): ArchiveEntry[] {
     if (typeflag === "L") {
       const nul = body.indexOf(0);
       overrideName = body.toString("utf8", 0, nul === -1 ? body.length : nul);
-    } else if (typeflag === "x" || typeflag === "g") {
-      if (typeflag === "x") overrideName = paxPath(body) ?? overrideName;
+    } else if (typeflag === "x") {
+      overrideName = paxPath(body) ?? overrideName;
+    } else if (typeflag === "g") {
+      // pax global header: ignore, but keep any pending name override
     } else {
       if (typeflag === "0" || typeflag === "\0") {
         let name = tarString(header, 0, 100);
