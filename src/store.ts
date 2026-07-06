@@ -47,8 +47,10 @@ export interface OkfStoreOptions {
 }
 
 /**
- * In-memory index over one or more OKF bundles. There is no file watcher;
- * callers reload after external changes (authoring reloads automatically).
+ * In-memory index over one or more OKF bundles. The store itself never
+ * watches the filesystem; callers reload after external changes (authoring
+ * reloads automatically, and watchBundles in watch.ts drives reloads for
+ * `--watch`).
  */
 export class OkfStore {
   private loaded = new Map<string, LoadedBundle>();
