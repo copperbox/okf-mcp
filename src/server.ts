@@ -15,6 +15,8 @@ import {
   findPath,
   getNeighbors,
   graphSummary,
+  listTags,
+  listTypes,
 } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
@@ -50,6 +52,9 @@ export function createOkfServer(
   options: ServerOptions = {},
 ): McpServer {
   const server = new McpServer({ name: "okf-mcp", version: "0.1.0" });
+
+  const selectBundles = (bundle: string | undefined) =>
+    bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
 
   server.registerResource(
     "okf-document",
@@ -122,16 +127,14 @@ export function createOkfServer(
         type: z.string().optional().describe("Only this frontmatter type"),
       },
     },
-    async ({ bundle, pathPrefix, type }) => {
-      const bundles = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(
-        searchConcepts(bundles, {
+    async ({ bundle, pathPrefix, type }) =>
+      json(
+        searchConcepts(selectBundles(bundle), {
           ...(pathPrefix !== undefined && { pathPrefix }),
           ...(type !== undefined && { types: [type] }),
           limit: 500,
         }).hits.map(({ score: _score, ...hit }) => hit),
-      );
-    },
+      ),
   );
 
   server.registerTool(
@@ -172,10 +175,29 @@ export function createOkfServer(
         offset: z.number().int().nonnegative().optional(),
       },
     },
-    async ({ bundle, ...filters }) => {
-      const bundles = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(searchConcepts(bundles, filters));
+    async ({ bundle, ...filters }) => json(searchConcepts(selectBundles(bundle), filters)),
+  );
+
+  server.registerTool(
+    "list_types",
+    {
+      title: "List types",
+      description:
+        "Distinct concept `type` values with usage counts, sorted by count. Reuse an existing type when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
     },
+    async ({ bundle }) => json(listTypes(selectBundles(bundle))),
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "List tags",
+      description:
+        "Distinct tag values with usage counts, sorted by count. Reuse an existing tag when authoring or filtering instead of inventing a variant.",
+      inputSchema: { bundle: bundleParam },
+    },
+    async ({ bundle }) => json(listTags(selectBundles(bundle))),
   );
 
   server.registerTool(
@@ -255,10 +277,8 @@ export function createOkfServer(
       description: "Report OKF v0.1 conformance errors and soft warnings",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => {
-      const targets = bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
-      return json(await Promise.all(targets.map(validateBundle)));
-    },
+    async ({ bundle }) =>
+      json(await Promise.all(selectBundles(bundle).map(validateBundle))),
   );
 
   if (options.writable) {
