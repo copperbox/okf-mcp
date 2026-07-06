@@ -35,8 +35,15 @@ export type {
   TagCount,
   TypeCount,
 } from "./graph.js";
-export { conceptIdFromPath, extractLinks, parseConceptDocument } from "./parser.js";
-export type { ParsedConceptDocument } from "./parser.js";
+export {
+  conceptIdFromPath,
+  extractLinks,
+  extractSection,
+  parseConceptDocument,
+  sectionAt,
+  splitSections,
+} from "./parser.js";
+export type { BodySection, ParsedConceptDocument } from "./parser.js";
 export {
   loadRemoteBundle,
   MAX_REMOTE_BYTES,

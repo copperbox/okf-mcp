@@ -287,6 +287,44 @@ describe("server tools", () => {
     ]);
   });
 
+  it("get_concept lists body section headings alongside the full body", async () => {
+    const concept = (await callJson(client, "get_concept", { id: "tables/orders" })) as {
+      body: string;
+      sections: string[];
+    };
+    assert.deepEqual(concept.sections, ["Schema", "Citations"]);
+    assert.match(concept.body, /# Schema/);
+  });
+
+  it("get_concept returns a single section case-insensitively", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "citations",
+    })) as {
+      id: string;
+      frontmatter: { type: string };
+      section: { heading: string; level: number; content: string };
+      sections: string[];
+    };
+    assert.equal(result.id, "tables/orders");
+    assert.equal(result.frontmatter.type, "BigQuery Table");
+    assert.deepEqual(result.sections, ["Schema", "Citations"]);
+    assert.equal(result.section.heading, "Citations");
+    assert.equal(result.section.level, 1);
+    assert.match(result.section.content, /BigQuery table schema/);
+    assert.doesNotMatch(result.section.content, /order_id/);
+    assert.equal("body" in result, false);
+  });
+
+  it("get_concept rejects an unknown section, listing what is available", async () => {
+    const result = await callTool(client, "get_concept", {
+      id: "tables/orders",
+      section: "Examples",
+    });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /Schema, Citations/);
+  });
+
   it("read_document returns reserved files as raw markdown", async () => {
     const result = await callTool(client, "read_document", { bundle: "acme", path: "log.md" });
     assert.ok(!result.isError);

@@ -100,9 +100,9 @@ Read tools:
 | `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL, in memory only |
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
-| `get_concept` | One full document: frontmatter, body, outgoing links |
+| `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md` |
-| `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations and a body snippet |
+| `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |
 | `suggest_concept_path` | Where a new concept should live, ranked by where same-type (and same-tag) concepts already are |
@@ -150,6 +150,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 There is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

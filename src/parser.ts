@@ -63,6 +63,111 @@ export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
   return links;
 }
 
+/** One heading-delimited slice of a concept body (spec §4.2 conventional sections). */
+export interface BodySection {
+  /** Heading text without the leading #s or an ATX closing sequence. */
+  heading: string;
+  /** Heading level, 1–6. */
+  level: number;
+  /** Section text (trimmed); for splitSections, up to the next heading of any level. */
+  content: string;
+}
+
+// ATX heading: 1–6 #s followed by a space (or nothing), up to 3 spaces indent.
+const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
+// Opening or closing code fence: ``` or ~~~ of length >= 3, up to 3 spaces indent.
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+interface SectionBounds {
+  heading: string;
+  level: number;
+  /** Offset of the heading line's first character within the body. */
+  start: number;
+  /** Offset just past the heading line, where the section's content begins. */
+  contentStart: number;
+}
+
+/** Locate every markdown heading in a body, skipping fenced code blocks. */
+function sectionBounds(body: string): SectionBounds[] {
+  const bounds: SectionBounds[] = [];
+  let fence: { char: string; length: number } | null = null;
+  let offset = 0;
+  for (const line of body.split("\n")) {
+    const start = offset;
+    offset += line.length + 1;
+    const fenceMatch = FENCE.exec(line);
+    if (fence !== null) {
+      const closes =
+        fenceMatch !== null &&
+        fenceMatch[1]![0] === fence.char &&
+        fenceMatch[1]!.length >= fence.length &&
+        fenceMatch[2]!.trim() === "";
+      if (closes) fence = null;
+      continue;
+    }
+    if (fenceMatch !== null) {
+      fence = { char: fenceMatch[1]![0]!, length: fenceMatch[1]!.length };
+      continue;
+    }
+    const heading = ATX_HEADING.exec(line);
+    if (heading === null) continue;
+    bounds.push({
+      heading: (heading[2] ?? "").replace(/[ \t]+#+$/, ""),
+      level: heading[1]!.length,
+      start,
+      contentStart: Math.min(offset, body.length),
+    });
+  }
+  return bounds;
+}
+
+/**
+ * Split a concept body into its heading-delimited sections (spec §4.2), in
+ * document order. Each section's content runs to the next heading of any
+ * level; text before the first heading belongs to no section. Headings
+ * inside fenced code blocks are body text, not section boundaries.
+ */
+export function splitSections(body: string): BodySection[] {
+  const bounds = sectionBounds(body);
+  return bounds.map((b, i) => ({
+    heading: b.heading,
+    level: b.level,
+    content: body.slice(b.contentStart, bounds[i + 1]?.start ?? body.length).trim(),
+  }));
+}
+
+/**
+ * Find a section by heading name (case-insensitive, first match wins). The
+ * returned content spans the section's whole subtree: everything up to the
+ * next heading of the same or a shallower level.
+ */
+export function extractSection(body: string, name: string): BodySection | undefined {
+  const bounds = sectionBounds(body);
+  const wanted = name.trim().toLowerCase();
+  const index = bounds.findIndex((b) => b.heading.toLowerCase() === wanted);
+  if (index === -1) return undefined;
+  const target = bounds[index]!;
+  const next = bounds.slice(index + 1).find((b) => b.level <= target.level);
+  return {
+    heading: target.heading,
+    level: target.level,
+    content: body.slice(target.contentStart, next?.start ?? body.length).trim(),
+  };
+}
+
+/**
+ * Heading of the section enclosing a body offset — the nearest heading at or
+ * above the offset — or undefined before the first heading.
+ */
+export function sectionAt(body: string, offset: number): string | undefined {
+  let enclosing: string | undefined;
+  for (const b of sectionBounds(body)) {
+    if (b.start > offset) break;
+    enclosing = b.heading;
+  }
+  return enclosing;
+}
+
 function normalizeTags(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   const list = Array.isArray(value) ? value : [value];

@@ -5,7 +5,10 @@ import { splitFrontmatter, serializeDocument } from "../src/frontmatter.js";
 import {
   conceptIdFromPath,
   extractLinks,
+  extractSection,
   parseConceptDocument,
+  sectionAt,
+  splitSections,
 } from "../src/parser.js";
 
 describe("splitFrontmatter", () => {
@@ -100,6 +103,78 @@ describe("parseConceptDocument", () => {
   it("normalizes a scalar tags value into an array", () => {
     const parsed = parseConceptDocument("---\ntype: T\ntags: solo\n---\n", "x.md");
     assert.deepEqual(parsed.frontmatter?.tags, ["solo"]);
+  });
+});
+
+describe("splitSections", () => {
+  it("splits on ATX headings, recording heading, level, and content", () => {
+    const body = "# Schema\n\nColumns here.\n\n## Keys\n\nPrimary key.\n\n# Examples\n\nQuery one.\n";
+    assert.deepEqual(splitSections(body), [
+      { heading: "Schema", level: 1, content: "Columns here." },
+      { heading: "Keys", level: 2, content: "Primary key." },
+      { heading: "Examples", level: 1, content: "Query one." },
+    ]);
+  });
+
+  it("excludes preamble text before the first heading", () => {
+    const sections = splitSections("Intro line.\n\n# Schema\n\nBody.\n");
+    assert.deepEqual(sections.map((s) => s.heading), ["Schema"]);
+  });
+
+  it("ignores heading-like lines inside fenced code blocks", () => {
+    const body = "# Real\n\n```md\n# not a heading\n```\n\n~~~\n## also not\n~~~\n\n# Also Real\n";
+    assert.deepEqual(splitSections(body).map((s) => s.heading), ["Real", "Also Real"]);
+    assert.ok(splitSections(body)[0]?.content.includes("# not a heading"));
+  });
+
+  it("strips ATX closing sequences and requires a space after the #s", () => {
+    const sections = splitSections("# Title ##\n\n#hashtag is body text\n");
+    assert.deepEqual(sections, [
+      { heading: "Title", level: 1, content: "#hashtag is body text" },
+    ]);
+  });
+
+  it("returns an empty list for a body with no headings", () => {
+    assert.deepEqual(splitSections("Just prose.\n"), []);
+  });
+});
+
+describe("extractSection", () => {
+  const body =
+    "Intro.\n\n# Schema\n\nColumns.\n\n## Keys\n\nPrimary key.\n\n# Examples\n\nQuery.\n";
+
+  it("matches the heading case-insensitively", () => {
+    const section = extractSection(body, "schema");
+    assert.equal(section?.heading, "Schema");
+    assert.equal(section?.level, 1);
+  });
+
+  it("includes subsections up to the next same-or-shallower heading", () => {
+    const section = extractSection(body, "Schema");
+    assert.equal(section?.content, "Columns.\n\n## Keys\n\nPrimary key.");
+  });
+
+  it("ends a subsection at the next heading regardless of depth", () => {
+    const section = extractSection(body, "Keys");
+    assert.equal(section?.content, "Primary key.");
+  });
+
+  it("returns undefined for an unknown heading", () => {
+    assert.equal(extractSection(body, "Citations"), undefined);
+  });
+});
+
+describe("sectionAt", () => {
+  const body = "Intro.\n\n# Schema\n\nColumns.\n\n## Keys\n\nPrimary key.\n\n# Examples\n\nQuery.\n";
+
+  it("returns the deepest enclosing section heading for an offset", () => {
+    assert.equal(sectionAt(body, body.indexOf("Columns")), "Schema");
+    assert.equal(sectionAt(body, body.indexOf("Primary")), "Keys");
+    assert.equal(sectionAt(body, body.indexOf("Query")), "Examples");
+  });
+
+  it("returns undefined for offsets before the first heading", () => {
+    assert.equal(sectionAt(body, body.indexOf("Intro")), undefined);
   });
 });
 

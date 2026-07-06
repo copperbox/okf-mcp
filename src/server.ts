@@ -25,6 +25,7 @@ import {
   listTags,
   listTypes,
 } from "./graph.js";
+import { extractSection, splitSections } from "./parser.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
@@ -267,16 +268,33 @@ export function createOkfServer(
     {
       title: "Get concept",
       description:
-        "Read one concept document: frontmatter, markdown body, and its outgoing links",
+        "Read one concept document: frontmatter, markdown body, outgoing links, and its body section headings. Pass `section` to fetch one section instead of the whole body.",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
+        section: z
+          .string()
+          .optional()
+          .describe(
+            "Body section heading (case-insensitive), e.g. Schema; returns just that section (including its subsections) instead of the full body",
+          ),
       },
     },
-    async ({ bundle, id }) => {
+    async ({ bundle, id, section }) => {
       const concept = store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
-      return json(concept);
+      const sections = splitSections(concept.body).map((s) => s.heading);
+      if (section === undefined) return json({ ...concept, sections });
+      const match = extractSection(concept.body, section);
+      if (!match) {
+        throw new Error(
+          `concept "${concept.id}" has no section "${section}"; available sections: ${
+            sections.join(", ") || "(none)"
+          }`,
+        );
+      }
+      const { body: _body, links: _links, ...rest } = concept;
+      return json({ ...rest, section: match, sections });
     },
   );
 
