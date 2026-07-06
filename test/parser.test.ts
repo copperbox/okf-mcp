@@ -40,10 +40,25 @@ describe("splitFrontmatter", () => {
 
 describe("extractLinks", () => {
   it("resolves bundle-absolute links from any directory", () => {
-    const links = extractLinks("See [orders](/tables/orders.md).", "playbooks/x.md");
+    const body = "See [orders](/tables/orders.md).";
+    const links = extractLinks(body, "playbooks/x.md");
     assert.deepEqual(links, [
-      { text: "orders", target: "/tables/orders.md", kind: "concept", path: "tables/orders.md" },
+      {
+        text: "orders",
+        target: "/tables/orders.md",
+        kind: "concept",
+        path: "tables/orders.md",
+        targetStart: body.indexOf("/tables"),
+        targetEnd: body.indexOf("/tables") + "/tables/orders.md".length,
+      },
     ]);
+  });
+
+  it("records target offsets that slice back to the raw target", () => {
+    const body = 'A [x](./a.md) then [y](<c.md> "t") and [z](b.md#frag).';
+    for (const link of extractLinks(body, "dir/doc.md")) {
+      assert.equal(body.slice(link.targetStart, link.targetEnd), link.target);
+    }
   });
 
   it("resolves relative links against the document's directory", () => {
