@@ -23,12 +23,15 @@ import {
 } from "./graph.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
-import type { ConceptFrontmatter } from "./types.js";
+import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
 
 export interface ServerOptions {
-  /** Allow write_concept / regenerate_indexes tools. Default: read-only. */
+  /**
+   * Allow the authoring tools (write_concept, delete_concept,
+   * append_log_entry, regenerate_indexes). Default: read-only.
+   */
   writable?: boolean;
 }
 
@@ -267,6 +270,18 @@ export function createOkfServer(
   );
 
   if (options.writable) {
+    /**
+     * After a concept write/delete: log the change, then regenerate indexes
+     * from a reloaded bundle so they reflect the change, then reload again so
+     * the store sees the freshly written index files.
+     */
+    async function logAndReindex(target: LoadedBundle, message: string): Promise<void> {
+      await appendLogEntry(target.root, message);
+      const reloaded = await store.reloadBundle(target.id);
+      await generateIndexes(reloaded);
+      await store.reloadBundle(target.id);
+    }
+
     server.registerTool(
       "write_concept",
       {
@@ -298,13 +313,10 @@ export function createOkfServer(
         const verb = result.created ? "Creation" : "Update";
         const title =
           (frontmatter as ConceptFrontmatter).title ?? result.path.replace(/\.md$/i, "");
-        await appendLogEntry(
-          target.root,
+        await logAndReindex(
+          target,
           logMessage ?? `**${verb}**: ${verb === "Creation" ? "Created" : "Updated"} [${title}](/${result.path}).`,
         );
-        const reloaded = await store.reloadBundle(target.id);
-        await generateIndexes(reloaded);
-        await store.reloadBundle(target.id);
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
       },
     );
@@ -335,14 +347,11 @@ export function createOkfServer(
         const result = await deleteConcept(target, id, {
           ...(failIfLinked !== undefined && { failIfLinked }),
         });
-        await appendLogEntry(
-          target.root,
+        await logAndReindex(
+          target,
           logMessage ??
             `**Deletion**: Deleted [${result.title ?? result.id}](/${result.path}).`,
         );
-        const reloaded = await store.reloadBundle(target.id);
-        await generateIndexes(reloaded);
-        await store.reloadBundle(target.id);
         return json({ ...result, bundle: target.id });
       },
     );
