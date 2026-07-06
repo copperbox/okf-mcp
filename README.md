@@ -120,7 +120,7 @@ Write tools (only with `--writable`):
 
 | Tool | Purpose |
 |---|---|
-| `write_concept` | Create/update a concept, append a `log.md` entry, regenerate `index.md` files |
+| `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
 | `append_log_entry` | Record a change-narrative entry in `log.md` without touching any concept |

@@ -46,7 +46,7 @@ const SPEC_KEYS = ["type", "title", "description", "resource", "tags"] as const;
  */
 function withDefaultTimestamp(frontmatter: ConceptFrontmatter): ConceptFrontmatter {
   if (frontmatter.timestamp !== undefined) return frontmatter;
-  const ordered: Record<string, unknown> = { type: frontmatter.type };
+  const ordered: Record<string, unknown> = {};
   for (const key of SPEC_KEYS) {
     if (frontmatter[key] !== undefined) ordered[key] = frontmatter[key];
   }
