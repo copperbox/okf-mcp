@@ -19,12 +19,15 @@ export function conceptIdFromPath(relPath: string): string {
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 // Markdown links, excluding images. Captures [text](target "optional title").
-const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/g;
+// The `d` flag records group offsets so link targets can be rewritten in place.
+const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/dg;
 
 /**
  * Extract cross-links from a concept body (spec §5). Targets beginning with
  * `/` are bundle-relative; other non-URI targets are relative to the
  * document's directory. Broken links are tolerated, never an error.
+ * Each link records the offsets of its raw target within `body`, so callers
+ * can rewrite targets by slicing without regenerating the document.
  */
 export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
   const links: ConceptLink[] = [];
@@ -32,17 +35,19 @@ export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
   for (const match of body.matchAll(MARKDOWN_LINK)) {
     const text = match[1] ?? "";
     const rawTarget = match[2] ?? "";
+    const [targetStart, targetEnd] = match.indices![2]!;
+    const base = { text, target: rawTarget, targetStart, targetEnd };
     if (rawTarget.startsWith("#")) {
-      links.push({ text, target: rawTarget, kind: "anchor" });
+      links.push({ ...base, kind: "anchor" });
       continue;
     }
     if (SCHEME.test(rawTarget) || rawTarget.startsWith("//")) {
-      links.push({ text, target: rawTarget, kind: "external" });
+      links.push({ ...base, kind: "external" });
       continue;
     }
     const withoutFragment = rawTarget.split("#")[0]!.split("?")[0]!;
     if (withoutFragment === "") {
-      links.push({ text, target: rawTarget, kind: "anchor" });
+      links.push({ ...base, kind: "anchor" });
       continue;
     }
     const joined = withoutFragment.startsWith("/")
@@ -50,10 +55,10 @@ export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
       : path.posix.join(fromDir === "." ? "" : fromDir, withoutFragment);
     const normalized = path.posix.normalize(joined);
     if (normalized.startsWith("..")) {
-      links.push({ text, target: rawTarget, kind: "outside", path: normalized });
+      links.push({ ...base, kind: "outside", path: normalized });
       continue;
     }
-    links.push({ text, target: rawTarget, kind: "concept", path: normalized });
+    links.push({ ...base, kind: "concept", path: normalized });
   }
   return links;
 }

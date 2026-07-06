@@ -35,6 +35,10 @@ export interface ConceptLink {
   /** Raw link target as written. */
   target: string;
   kind: LinkKind;
+  /** Offset of the raw target within the document body (for in-place rewrites). */
+  targetStart: number;
+  /** Offset just past the raw target within the document body. */
+  targetEnd: number;
   /** Bundle-relative path the link points at (concept/outside kinds). */
   path?: string;
   /** Concept ID the link resolves to, when the target exists in the bundle. */
