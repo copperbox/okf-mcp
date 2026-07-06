@@ -599,3 +599,21 @@ describe("authoring tools", () => {
     });
   });
 });
+
+describe("README tool documentation", () => {
+  it("documents every registered tool in a table row", async () => {
+    const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const client = await connectClient(store, { writable: true });
+    const { tools } = await client.listTools();
+    assert.ok(tools.length > 0);
+
+    const readme = await fs.readFile(
+      path.join(import.meta.dirname, "..", "README.md"),
+      "utf8",
+    );
+    const undocumented = tools
+      .map((tool) => tool.name)
+      .filter((name) => !readme.includes(`| \`${name}\` |`));
+    assert.deepEqual(undocumented, []);
+  });
+});
