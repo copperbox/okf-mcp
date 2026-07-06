@@ -168,6 +168,82 @@ export function sectionAt(body: string, offset: number): string | undefined {
   return enclosing;
 }
 
+/** One numbered entry under a concept's `# Citations` heading (spec §8). */
+export interface Citation {
+  /** Citation number as written, e.g. 1 for `[1]`. */
+  index: number;
+  /** Link text of the citation. */
+  text: string;
+  /** Raw link target as written. */
+  target: string;
+  /**
+   * external: the target has a URI scheme; concept: it resolves to a
+   * concept in the bundle; missing: bundle-relative but unresolved.
+   */
+  kind: "external" | "concept" | "missing";
+}
+
+export interface ExtractedCitations {
+  citations: Citation[];
+  /** Non-blank section lines that are not `[n] [text](target)` entries. */
+  malformed: string[];
+}
+
+// A citation entry: `[n]` then a markdown link; trailing prose is allowed.
+const CITATION_ENTRY = /^\[(\d+)\][ \t]+(\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")?\))/;
+
+/**
+ * Extract the numbered citation entries under a concept's `# Citations`
+ * heading (spec §8). Targets are classified like body links, with
+ * bundle-relative targets resolved through `conceptExists`; unresolved
+ * ones are `missing`, never an error (consistent with §9 tolerance).
+ */
+export function extractCitations(
+  body: string,
+  conceptPath: string,
+  conceptExists: (id: string) => boolean,
+): ExtractedCitations {
+  const citations: Citation[] = [];
+  const malformed: string[] = [];
+  const section = splitSections(body).find(
+    (s) => s.heading.toLowerCase() === "citations",
+  );
+  if (section === undefined) return { citations, malformed };
+
+  for (const rawLine of section.content.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") continue;
+    const entry = CITATION_ENTRY.exec(line);
+    const link = entry === null ? undefined : extractLinks(entry[2]!, conceptPath)[0];
+    if (entry === null || link === undefined) {
+      malformed.push(line);
+      continue;
+    }
+    citations.push({
+      index: Number(entry[1]),
+      text: link.text,
+      target: link.target,
+      kind: citationKind(link, conceptExists),
+    });
+  }
+  return { citations, malformed };
+}
+
+function citationKind(
+  link: ConceptLink,
+  conceptExists: (id: string) => boolean,
+): Citation["kind"] {
+  if (link.kind === "external") return "external";
+  if (
+    link.kind === "concept" &&
+    link.path !== undefined &&
+    conceptExists(conceptIdFromPath(link.path))
+  ) {
+    return "concept";
+  }
+  return "missing";
+}
+
 function normalizeTags(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   const list = Array.isArray(value) ? value : [value];

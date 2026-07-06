@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { splitFrontmatter, serializeDocument } from "../src/frontmatter.js";
 import {
   conceptIdFromPath,
+  extractCitations,
   extractLinks,
   extractSection,
   parseConceptDocument,
@@ -175,6 +176,94 @@ describe("sectionAt", () => {
 
   it("returns undefined for offsets before the first heading", () => {
     assert.equal(sectionAt(body, body.indexOf("Intro")), undefined);
+  });
+});
+
+describe("extractCitations", () => {
+  const exists = (id: string) => id === "tables/customers" || id === "references/runbook";
+
+  it("parses numbered entries and classifies external, concept, and missing targets", () => {
+    const body = [
+      "# Schema",
+      "",
+      "Columns.",
+      "",
+      "# Citations",
+      "",
+      "[1] [BigQuery docs](https://cloud.google.com/bigquery/docs)",
+      "[2] [Customer table](/tables/customers.md)",
+      "[3] [Gone](/playbooks/retired)",
+      "",
+    ].join("\n");
+    const { citations, malformed } = extractCitations(body, "tables/orders.md", exists);
+    assert.deepEqual(citations, [
+      {
+        index: 1,
+        text: "BigQuery docs",
+        target: "https://cloud.google.com/bigquery/docs",
+        kind: "external",
+      },
+      {
+        index: 2,
+        text: "Customer table",
+        target: "/tables/customers.md",
+        kind: "concept",
+      },
+      { index: 3, text: "Gone", target: "/playbooks/retired", kind: "missing" },
+    ]);
+    assert.deepEqual(malformed, []);
+  });
+
+  it("resolves relative and extensionless targets against the document directory", () => {
+    const body = "# Citations\n\n[1] [Runbook mirror](../references/runbook)\n";
+    const { citations } = extractCitations(body, "tables/orders.md", exists);
+    assert.equal(citations[0]?.kind, "concept");
+  });
+
+  it("returns nothing for a body without a Citations section", () => {
+    const body = "# Schema\n\n[1] [not a citation](https://example.com)\n";
+    assert.deepEqual(extractCitations(body, "a.md", exists), {
+      citations: [],
+      malformed: [],
+    });
+  });
+
+  it("matches the Citations heading case-insensitively", () => {
+    const body = "# citations\n\n[1] [Docs](https://example.com)\n";
+    const { citations } = extractCitations(body, "a.md", exists);
+    assert.equal(citations.length, 1);
+  });
+
+  it("reports non-blank lines that are not numbered link entries as malformed", () => {
+    const body = [
+      "# Citations",
+      "",
+      "[1] [Docs](https://example.com)",
+      "Ask the warehouse team for details.",
+      "[2] an unlinked source",
+      "[not numbered](https://example.com)",
+      "",
+    ].join("\n");
+    const { citations, malformed } = extractCitations(body, "a.md", exists);
+    assert.equal(citations.length, 1);
+    assert.deepEqual(malformed, [
+      "Ask the warehouse team for details.",
+      "[2] an unlinked source",
+      "[not numbered](https://example.com)",
+    ]);
+  });
+
+  it("allows trailing prose after the citation link", () => {
+    const body = "# Citations\n\n[1] [Docs](https://example.com), accessed 2026-05-28\n";
+    const { citations, malformed } = extractCitations(body, "a.md", exists);
+    assert.deepEqual(malformed, []);
+    assert.equal(citations[0]?.target, "https://example.com");
+  });
+
+  it("ignores citation-shaped lines outside the Citations section", () => {
+    const body = "# Notes\n\n[1] [Docs](https://example.com)\n\n# Citations\n\n[1] [Real](https://real.example)\n";
+    const { citations } = extractCitations(body, "a.md", exists);
+    assert.deepEqual(citations.map((c) => c.target), ["https://real.example"]);
   });
 });
 

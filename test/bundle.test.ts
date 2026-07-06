@@ -41,7 +41,11 @@ describe("loadBundle", () => {
     const bundle = await loadBundle({ id: "acme", root: FIXTURE });
     const orders = bundle.concepts.get("tables/orders")!;
     const targets = orders.links.map((l) => l.resolvedId).filter(Boolean);
-    assert.deepEqual(targets.sort(), ["datasets/sales", "tables/customers"]);
+    assert.deepEqual(targets.sort(), [
+      "datasets/sales",
+      "tables/customers",
+      "tables/customers", // the schema link and citation [2] both point here
+    ]);
   });
 });
 
@@ -53,5 +57,23 @@ describe("validateBundle", () => {
     assert.equal(report.errors.length, 1);
     assert.equal(report.errors[0]?.path, "notes/no-type.md");
     assert.ok(report.warnings.length >= 1);
+  });
+
+  it("warns on malformed citation entries and unresolved citation targets", async () => {
+    const bundle = await loadBundle({ id: "acme", root: FIXTURE });
+    const report = await validateBundle(bundle);
+    const citationWarnings = report.warnings.filter((w) => w.path === "tables/orders.md");
+    assert.ok(
+      citationWarnings.some((w) => /malformed citation entry/.test(w.message)),
+      "expected a malformed-citation warning",
+    );
+    assert.ok(
+      citationWarnings.some((w) =>
+        /citation \[3\] target does not resolve.*\/playbooks\/retired-runbook/.test(w.message),
+      ),
+      "expected an unresolved-citation warning",
+    );
+    // Citation problems stay soft (spec §9): still exactly one hard error.
+    assert.equal(report.errors.length, 1);
   });
 });

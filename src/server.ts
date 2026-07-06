@@ -25,7 +25,7 @@ import {
   listTags,
   listTypes,
 } from "./graph.js";
-import { extractSection, splitSections } from "./parser.js";
+import { extractCitations, extractSection, splitSections } from "./parser.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
@@ -295,6 +295,28 @@ export function createOkfServer(
       }
       const { body: _body, links: _links, ...rest } = concept;
       return json({ ...rest, section: match, sections });
+    },
+  );
+
+  server.registerTool(
+    "get_citations",
+    {
+      title: "Get citations",
+      description:
+        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept in the bundle, or missing (a bundle-relative target that does not resolve)",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+      },
+    },
+    async ({ bundle, id }) => {
+      const target = store.bundle(bundle);
+      const concept = store.getConcept(bundle, id);
+      if (!concept) throw new Error(`unknown concept: ${id}`);
+      const { citations } = extractCitations(concept.body, concept.path, (cid) =>
+        target.concepts.has(cid),
+      );
+      return json(citations);
     },
   );
 

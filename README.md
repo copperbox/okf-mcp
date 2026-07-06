@@ -101,6 +101,7 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
+| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing` |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md` |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
@@ -112,7 +113,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid` |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed or unresolved citations) |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 

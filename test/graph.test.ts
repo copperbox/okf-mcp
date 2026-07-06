@@ -26,7 +26,7 @@ describe("graph", () => {
   it("builds one edge per resolved link and warns on broken links", () => {
     const graph = buildGraph(bundle);
     assert.equal(graph.nodes.length, 5);
-    assert.equal(graph.edges.length, 5);
+    assert.equal(graph.edges.length, 6); // includes both orders→customers links (schema + citation)
     assert.equal(graph.warnings.length, 1);
     assert.match(graph.warnings[0]!, /shipments/);
   });

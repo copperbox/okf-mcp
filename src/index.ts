@@ -37,13 +37,19 @@ export type {
 } from "./graph.js";
 export {
   conceptIdFromPath,
+  extractCitations,
   extractLinks,
   extractSection,
   parseConceptDocument,
   sectionAt,
   splitSections,
 } from "./parser.js";
-export type { BodySection, ParsedConceptDocument } from "./parser.js";
+export type {
+  BodySection,
+  Citation,
+  ExtractedCitations,
+  ParsedConceptDocument,
+} from "./parser.js";
 export {
   loadRemoteBundle,
   MAX_REMOTE_BYTES,

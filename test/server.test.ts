@@ -325,6 +325,48 @@ describe("server tools", () => {
     assert.match(textContent(result), /Schema, Citations/);
   });
 
+  it("get_citations classifies external, concept, and missing targets", async () => {
+    assert.deepEqual(await callJson(client, "get_citations", { id: "tables/orders" }), [
+      {
+        index: 1,
+        text: "BigQuery table schema",
+        target: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+        kind: "external",
+      },
+      {
+        index: 2,
+        text: "Customer dimension table",
+        target: "/tables/customers.md",
+        kind: "concept",
+      },
+      {
+        index: 3,
+        text: "Retired ingestion runbook",
+        target: "/playbooks/retired-runbook",
+        kind: "missing",
+      },
+    ]);
+  });
+
+  it("get_citations returns an empty list for a concept without a Citations section", async () => {
+    assert.deepEqual(await callJson(client, "get_citations", { id: "datasets/sales" }), []);
+  });
+
+  it("get_citations rejects an unknown concept", async () => {
+    const result = await callTool(client, "get_citations", { id: "tables/nope" });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /unknown concept/);
+  });
+
+  it("validate_bundle reports citation warnings", async () => {
+    const [report] = (await callJson(client, "validate_bundle", { bundle: "acme" })) as Array<{
+      warnings: Array<{ path?: string; message: string }>;
+    }>;
+    assert.ok(
+      report!.warnings.some((w) => /malformed citation entry/.test(w.message)),
+    );
+  });
+
   it("read_document returns reserved files as raw markdown", async () => {
     const result = await callTool(client, "read_document", { bundle: "acme", path: "log.md" });
     assert.ok(!result.isError);
