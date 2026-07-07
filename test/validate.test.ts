@@ -60,6 +60,43 @@ describe("validateBundle reserved-file structure (spec §9.3)", () => {
     assert.match(frontmatter[0]!.message, /bundle root/);
   });
 
+  it("does not warn when non-root index frontmatter is only the generated: false marker", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "guides/index.md",
+          source: "---\ngenerated: false\n---\n\n# Curated\n\n* [Note](../note.md)\n",
+        },
+        { path: "note.md", source: "---\ntype: Note\n---\n\nBody.\n" },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    assert.deepEqual(
+      result.warnings.filter((p) => p.message.includes("bundle root")),
+      [],
+    );
+  });
+
+  it("still warns when curated non-root index frontmatter carries other keys", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "guides/index.md",
+          source: "---\ngenerated: false\nowner: docs\n---\n\n# Curated\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const frontmatter = result.warnings.filter((p) => p.message.includes("bundle root"));
+    assert.equal(frontmatter.length, 1);
+  });
+
   it("reports no reserved-file problems for a well-formed bundle", async () => {
     const result = await report(ACME);
     const reserved = [...result.errors, ...result.warnings].filter(

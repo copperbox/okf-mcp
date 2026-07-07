@@ -90,17 +90,20 @@ function checkLogStructure(path: string, source: string): BundleProblem[] {
 /**
  * Structure checks for an index file (spec §6): sections of link
  * bullets under headings (SHOULD → warnings), with frontmatter only
- * permitted at the bundle root (spec §11).
+ * permitted at the bundle root (spec §11) — except the bare
+ * `generated: false` opt-out marker for hand-curated indexes.
  */
 function checkIndexStructure(path: string, source: string): BundleProblem[] {
   const problems: BundleProblem[] = [];
   const frontmatter = splitFrontmatter(source);
-  if (frontmatter.present && path !== "index.md") {
+  const keys = frontmatter.data === null ? null : Object.keys(frontmatter.data);
+  const onlyCuratedMarker = keys !== null && keys.length === 1 && keys[0] === "generated";
+  if (frontmatter.present && path !== "index.md" && !onlyCuratedMarker) {
     problems.push({
       severity: "warning",
       path,
       message:
-        "index.md frontmatter is only permitted at the bundle root (spec §11)",
+        "index.md frontmatter is only permitted at the bundle root (spec §11; the `generated: false` opt-out marker is the exception)",
     });
   }
   // Report line numbers relative to the full file, not the

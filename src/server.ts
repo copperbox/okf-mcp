@@ -777,15 +777,15 @@ export function createOkfServer(
       {
         title: "Regenerate indexes",
         description:
-          "Rewrite index.md files in every bundle directory from concept frontmatter (spec §6)",
+          "Rewrite index.md files in every bundle directory from concept frontmatter (spec §6); hand-curated indexes (frontmatter `generated: false`) are skipped and reported",
         inputSchema: { bundle: bundleParam },
       },
       async ({ bundle }) => {
         const target = store.bundle(bundle);
         assertWritableBundle(target);
-        const written = await generateIndexes(target);
+        const { written, skipped } = await generateIndexes(target);
         await store.reloadBundle(target.id);
-        return json({ bundle: target.id, written });
+        return json({ bundle: target.id, written, skipped });
       },
     );
   }

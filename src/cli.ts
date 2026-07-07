@@ -178,8 +178,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           console.error(`${bundle.id}: skipped (read-only remote bundle)`);
           continue;
         }
-        const written = await generateIndexes(bundle);
-        console.log(`${bundle.id}: wrote ${written.length} index files`);
+        const { written, skipped } = await generateIndexes(bundle);
+        const skippedNote =
+          skipped.length > 0 ? `, skipped ${skipped.length} hand-curated` : "";
+        console.log(`${bundle.id}: wrote ${written.length} index files${skippedNote}`);
       }
       return 0;
     }

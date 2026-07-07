@@ -762,6 +762,51 @@ describe("authoring tools", () => {
     });
   });
 
+  describe("hand-curated indexes (generated: false)", () => {
+    const CURATED_ROOT =
+      '---\nokf_version: "0.2"\nowner: data-team\n---\n\n# Home\n';
+
+    it("write_concept keeps a curated directory index and root frontmatter intact", async () => {
+      await fs.writeFile(path.join(root, "index.md"), CURATED_ROOT);
+      const curatedTables =
+        "---\ngenerated: false\n---\n\n# Start Here\n\n* [Orders](orders.md) - first stop\n";
+      await fs.writeFile(path.join(root, "tables/index.md"), curatedTables);
+
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/customers.md",
+        frontmatter: { type: "Table", title: "Customers" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      // The curated directory index survives byte-for-byte.
+      const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+      assert.equal(tablesIndex, curatedTables);
+      // The root index is regenerated but its frontmatter is carried over.
+      const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+      assert.match(rootIndex, /okf_version: "0\.2"/);
+      assert.match(rootIndex, /owner: data-team/);
+      assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    });
+
+    it("regenerate_indexes reports which indexes were skipped and why", async () => {
+      await fs.writeFile(
+        path.join(root, "tables/index.md"),
+        "---\ngenerated: false\n---\n\n# Start Here\n",
+      );
+      const client = await connectLocal({ writable: true });
+      const payload = (await callJson(client, "regenerate_indexes", {})) as {
+        written: string[];
+        skipped: Array<{ path: string; reason: string }>;
+      };
+      assert.deepEqual(payload.written, ["index.md"]);
+      assert.equal(payload.skipped.length, 1);
+      assert.equal(payload.skipped[0]!.path, "tables/index.md");
+      assert.match(payload.skipped[0]!.reason, /generated: false/);
+    });
+  });
+
   describe("append_log_entry", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connectLocal();

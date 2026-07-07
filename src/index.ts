@@ -4,11 +4,17 @@ export {
   appendLogEntry,
   assertSafeConceptPath,
   generateIndexes,
+  isCuratedIndex,
   readDeclaredVersion,
   renderIndexes,
   writeConcept,
 } from "./authoring.js";
-export type { AppendLogEntryOptions, WriteConceptOptions } from "./authoring.js";
+export type {
+  AppendLogEntryOptions,
+  GenerateIndexesResult,
+  SkippedIndex,
+  WriteConceptOptions,
+} from "./authoring.js";
 export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export { serializeDocument, splitFrontmatter } from "./frontmatter.js";

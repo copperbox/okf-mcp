@@ -317,8 +317,9 @@ function renderTarget(rawTarget: string, destPath: string, fromDir: string): str
 
 /**
  * Walk from `dir` up toward the bundle root, removing each directory that
- * holds nothing but its generated `index.md`. Returns the removed
- * bundle-relative directories, deepest first.
+ * holds nothing but its generated `index.md`. A hand-curated index
+ * (`generated: false` frontmatter) keeps its directory alive. Returns the
+ * removed bundle-relative directories, deepest first.
  */
 async function removeEmptyDirectories(
   bundleRoot: string,
@@ -330,6 +331,13 @@ async function removeEmptyDirectories(
     const absolute = path.join(bundleRoot, current);
     const entries = await fs.readdir(absolute);
     if (entries.some((name) => name.toLowerCase() !== "index.md")) break;
+    const index = entries[0];
+    if (
+      index !== undefined &&
+      isCuratedIndex(await fs.readFile(path.join(absolute, index), "utf8"))
+    ) {
+      break;
+    }
     await fs.rm(absolute, { recursive: true });
     removed.push(current);
     current = path.posix.dirname(current);
@@ -405,6 +413,17 @@ export async function appendLogEntry(
 }
 
 /**
+ * Whether an `index.md` source opts out of regeneration: frontmatter
+ * declaring `generated: false` marks the file as hand-curated, so authoring
+ * writes leave it (and, on deletes, its directory) untouched. Spec §6
+ * supports human-curated indexes with meaningful section groupings; this
+ * sentinel lets them coexist with agent writes.
+ */
+export function isCuratedIndex(source: string): boolean {
+  return splitFrontmatter(source).data?.generated === false;
+}
+
+/**
  * Render the `index.md` content for every directory of the bundle from
  * concept frontmatter (spec §6), keyed by bundle-relative index path
  * ("index.md", "tables/index.md", ...). Pure in-memory rendering — spec §6
@@ -466,19 +485,70 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
   return rendered;
 }
 
+/** An index.md left alone by generateIndexes, and the reason it was. */
+export interface SkippedIndex {
+  path: string;
+  reason: string;
+}
+
+export interface GenerateIndexesResult {
+  /** Bundle-relative paths of the index files written, sorted. */
+  written: string[];
+  /** Hand-curated index files left untouched, sorted by path. */
+  skipped: SkippedIndex[];
+}
+
+/**
+ * Merge the frontmatter a producer put on the existing bundle-root index
+ * into freshly rendered content: every declared key survives — a declared
+ * okf_version included (spec §11) — and `okf_version` is stamped only when
+ * absent. Without existing frontmatter the rendered content stands as-is.
+ */
+function withPreservedFrontmatter(existing: string, rendered: string): string {
+  const declared = splitFrontmatter(existing).data;
+  if (declared === null || Object.keys(declared).length === 0) return rendered;
+  const merged =
+    declared.okf_version === undefined
+      ? { okf_version: OKF_VERSION, ...declared }
+      : declared;
+  return serializeDocument(merged, splitFrontmatter(rendered).body);
+}
+
 /**
  * Regenerate `index.md` in every directory of the bundle for progressive
- * disclosure (spec §6). Existing index files are overwritten — they are
- * generated artifacts here. Entries use frontmatter titles/descriptions,
- * so the same files double as navigation pages in Obsidian.
+ * disclosure (spec §6). Existing index files are overwritten as generated
+ * artifacts — except hand-curated ones opting out via `generated: false`
+ * frontmatter, which are reported as skipped, and the bundle root's
+ * frontmatter, which is carried over rather than restamped. Entries use
+ * frontmatter titles/descriptions, so the same files double as navigation
+ * pages in Obsidian.
  */
-export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
+export async function generateIndexes(
+  bundle: LoadedBundle,
+): Promise<GenerateIndexesResult> {
   const written: string[] = [];
+  const skipped: SkippedIndex[] = [];
   for (const [indexPath, content] of renderIndexes(bundle)) {
-    await fs.writeFile(path.join(bundle.root, indexPath), content, "utf8");
+    const absolute = path.join(bundle.root, indexPath);
+    const existing = (await fileExists(absolute))
+      ? await fs.readFile(absolute, "utf8")
+      : undefined;
+    if (existing !== undefined && isCuratedIndex(existing)) {
+      skipped.push({
+        path: indexPath,
+        reason: "hand-curated: frontmatter declares `generated: false`",
+      });
+      continue;
+    }
+    const finalContent =
+      indexPath === "index.md" && existing !== undefined
+        ? withPreservedFrontmatter(existing, content)
+        : content;
+    await fs.writeFile(absolute, finalContent, "utf8");
     written.push(indexPath);
   }
-  return written.sort();
+  const byPath = (a: SkippedIndex, b: SkippedIndex) => (a.path < b.path ? -1 : 1);
+  return { written: written.sort(), skipped: skipped.sort(byPath) };
 }
 
 /** The okf_version a bundle root's index.md declares on disk, if any (spec §11). */

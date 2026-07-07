@@ -228,6 +228,18 @@ describe("authoring", () => {
     await fs.access(path.join(root, "metrics/revenue.md"));
   });
 
+  it("keeps a directory whose index.md is hand-curated when the last concept leaves", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    await writeConcept(root, "metrics/revenue.md", { type: "Metric" }, "Body");
+    const curated = "---\ngenerated: false\n---\n\n# Tables, by hand\n";
+    await fs.writeFile(path.join(root, "tables/index.md"), curated);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await deleteConcept(bundle, "tables/orders");
+    assert.deepEqual(result.removedDirs, []);
+    assert.equal(await fs.readFile(path.join(root, "tables/index.md"), "utf8"), curated);
+  });
+
   it("keeps a directory that still contains other concepts", async () => {
     await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
     await writeConcept(root, "tables/customers.md", { type: "Table" }, "Body");
@@ -334,8 +346,9 @@ describe("authoring", () => {
       "Body",
     );
     const bundle = await loadBundle({ id: "t", root });
-    const written = await generateIndexes(bundle);
+    const { written, skipped } = await generateIndexes(bundle);
     assert.deepEqual(written, ["index.md", "tables/index.md"]);
+    assert.deepEqual(skipped, []);
 
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
     assert.match(rootIndex, /okf_version: "0.1"/);
@@ -343,6 +356,70 @@ describe("authoring", () => {
 
     const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
     assert.match(tablesIndex, /\[Orders\]\(orders\.md\) - Order rows\./);
+  });
+
+  it("preserves root-index frontmatter and a declared okf_version on regeneration", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\nokf_version: "0.2"\nowner: data-team\n---\n\n# Old Index\n',
+    );
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+    assert.match(rootIndex, /okf_version: "0\.2"/);
+    assert.match(rootIndex, /owner: data-team/);
+    // The body is still regenerated; only the frontmatter is carried over.
+    assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    assert.doesNotMatch(rootIndex, /Old Index/);
+    const reloaded = await loadBundle({ id: "t", root });
+    assert.equal(reloaded.okfVersion, "0.2");
+  });
+
+  it("stamps okf_version only when the existing root frontmatter lacks it", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      "---\nowner: data-team\n---\n\n# Old Index\n",
+    );
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+    assert.match(rootIndex, /okf_version: "0.1"/);
+    assert.match(rootIndex, /owner: data-team/);
+  });
+
+  it("skips hand-curated indexes marked generated: false and reports why", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    const curated =
+      "---\ngenerated: false\n---\n\n# Getting Started\n\n* [Orders](orders.md) - start here\n";
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(path.join(root, "tables/index.md"), curated);
+
+    const bundle = await loadBundle({ id: "t", root });
+    const { written, skipped } = await generateIndexes(bundle);
+    assert.deepEqual(written, ["index.md"]);
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0]!.path, "tables/index.md");
+    assert.match(skipped[0]!.reason, /generated: false/);
+
+    const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+    assert.equal(tablesIndex, curated);
+  });
+
+  it("skips a hand-curated bundle-root index entirely", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    const curated =
+      '---\nokf_version: "0.1"\ngenerated: false\n---\n\n# Curated Home\n\n* [Tables](tables/) - by hand\n';
+    await fs.writeFile(path.join(root, "index.md"), curated);
+
+    const bundle = await loadBundle({ id: "t", root });
+    const { written, skipped } = await generateIndexes(bundle);
+    assert.deepEqual(written, ["tables/index.md"]);
+    assert.deepEqual(skipped.map((s) => s.path), ["index.md"]);
+    assert.equal(await fs.readFile(path.join(root, "index.md"), "utf8"), curated);
   });
 
   it("renders index content in memory without writing files", async () => {
