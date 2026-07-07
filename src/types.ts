@@ -96,6 +96,8 @@ export interface LoadedBundle {
   problems: BundleProblem[];
   /** Read-only bundles are rejected by all authoring paths (remote bundles). */
   readOnly: boolean;
+  /** OKF version declared by the bundle-root index.md frontmatter (spec §11). */
+  okfVersion?: string;
   /** Raw document sources, present only for bundles with no local files. */
   sources?: Map<string, string>;
 }
