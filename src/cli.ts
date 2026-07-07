@@ -11,11 +11,12 @@ import { createOkfServer } from "./server.js";
 import { OkfStore } from "./store.js";
 import type { BundleConfig, RemoteBundleConfig } from "./types.js";
 import { validateBundle } from "./validate.js";
+import { watchBundles } from "./watch.js";
 
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [command]
+  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [command]
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -29,9 +30,13 @@ Commands:
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
-                          (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]);
+                          (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
+                          or a .tar.gz/.tgz/.zip archive (URL or local path);
                           repeatable, indexed in memory at startup.
   --writable              Enable authoring: write_concept tool and index command
+  --watch                 mcp only: auto-reload local bundles when .md files
+                          change on disk (remote bundles still reload only via
+                          the reload_bundles tool)
   --help                  Show this help
 `;
 
@@ -50,7 +55,7 @@ function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
   return values.map((value) => {
     const eq = value.indexOf("=");
     if (eq <= 0 || value.slice(eq + 1) === "") {
-      throw new Error(`--remote-bundle requires id=<github tree url>, got: ${value}`);
+      throw new Error(`--remote-bundle requires id=<tree url or archive>, got: ${value}`);
     }
     return { id: value.slice(0, eq), url: value.slice(eq + 1) };
   });
@@ -63,6 +68,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       bundle: { type: "string", multiple: true },
       "remote-bundle": { type: "string", multiple: true },
       writable: { type: "boolean" },
+      watch: { type: "boolean" },
       help: { type: "boolean" },
     },
     allowPositionals: true,
@@ -93,6 +99,26 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         `okf-mcp serving ${[...configs, ...remotes].map((c) => c.id).join(", ")} over stdio` +
           (values.writable ? " (writable)" : " (read-only)"),
       );
+      if (values.watch) {
+        const watcher = watchBundles(store, configs, {
+          onReload: (stats) => {
+            for (const s of stats) {
+              if (s.added.length + s.removed.length + s.changed.length === 0) continue;
+              console.error(
+                `okf-mcp: reloaded ${s.bundle} ` +
+                  `(+${s.added.length} -${s.removed.length} ~${s.changed.length})`,
+              );
+            }
+          },
+          onError: (bundleId, error) =>
+            console.error(`okf-mcp: watch ${bundleId}: ${error.message}`),
+        });
+        if (watcher.watching.length > 0) {
+          console.error(`okf-mcp: watching ${watcher.watching.join(", ")} for changes`);
+        } else {
+          console.error("okf-mcp: --watch: no local bundles are being watched");
+        }
+      }
       return -1; // keep the process alive for the transport
     }
     case "inspect": {
