@@ -26,7 +26,7 @@ import {
   listTags,
   listTypes,
 } from "./graph.js";
-import { extractCitations, extractSection, splitSections } from "./parser.js";
+import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
@@ -163,7 +163,7 @@ export function createOkfServer(
         resources: store.bundles().flatMap((bundle) => [
           ...[...bundle.concepts.values()].map((concept) => ({
             uri: okfUri(bundle.id, concept.path),
-            name: concept.frontmatter.title ?? concept.id,
+            name: deriveTitle(concept),
             ...(concept.frontmatter.description !== undefined && {
               description: concept.frontmatter.description,
             }),

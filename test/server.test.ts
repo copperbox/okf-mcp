@@ -116,6 +116,16 @@ describe("reload_bundles tool", () => {
     );
     assert.equal(concept.frontmatter.type, "Table");
   });
+
+  it("derives resource names from the filename when frontmatter has no title", async () => {
+    const store = new OkfStore([{ id: "t", root }]);
+    await store.load();
+    const client = await connect(store);
+
+    const resources = await client.listResources();
+    const orders = resources.resources.find((r) => r.uri === "okf://t/orders.md");
+    assert.equal(orders?.name, "Orders");
+  });
 });
 
 describe("remote bundle tools", () => {

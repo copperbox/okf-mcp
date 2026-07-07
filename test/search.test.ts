@@ -49,6 +49,20 @@ describe("searchConcepts", () => {
     assert.deepEqual(hits.map((h) => h.id), ["notes/no-type"]);
   });
 
+  it("derives hit titles from the filename when frontmatter has none", () => {
+    const synthetic = makeBundle([{ id: "docs/customer-order-history", type: "Doc" }]);
+    const { hits } = searchConcepts([synthetic]);
+    assert.equal(hits[0]?.title, "Customer Order History");
+    assert.equal(hits[0]?.titleDerived, true);
+  });
+
+  it("passes authored titles through without the titleDerived flag", () => {
+    const { hits } = searchConcepts(bundles, { query: "orders" });
+    const orders = hits.find((h) => h.id === "tables/orders");
+    assert.equal(orders?.title, "Orders");
+    assert.equal(orders?.titleDerived, undefined);
+  });
+
   it("applies limit and reports the pre-pagination total", () => {
     const result = searchConcepts(bundles, { pathPrefix: "tables/", limit: 1 });
     assert.equal(result.hits.length, 1);
