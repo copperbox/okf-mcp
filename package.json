@@ -1,5 +1,5 @@
 {
-  "name": "okf-mcp",
+  "name": "@copperbox/okf-mcp",
   "version": "0.9.1",
   "description": "An MCP server providing an Open Knowledge Format (OKF) backend in a standardized way to coding agents",
   "homepage": "https://github.com/copperbox/okf-mcp#readme",
@@ -40,7 +40,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@copperbox/sandcastle-workflow": "github:copperbox/sandcastle-workflow#semver:^0.2.0",
+    "@copperbox/sandcastle-workflow": "^0.3.0",
     "@types/node": "^24.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.8.0"

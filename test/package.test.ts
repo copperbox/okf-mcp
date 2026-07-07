@@ -49,6 +49,6 @@ describe("npm packaging", () => {
   it("documents the npx install path in the README", async () => {
     const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
     assert.match(readme, /npx/);
-    assert.match(readme, /"okf-mcp"/);
+    assert.match(readme, /"@copperbox\/okf-mcp"/);
   });
 });

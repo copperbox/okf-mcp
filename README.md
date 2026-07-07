@@ -40,7 +40,7 @@ The package is published to npm, so the easiest setup runs it through `npx`:
     "okf": {
       "command": "npx",
       "args": [
-        "-y", "okf-mcp",
+        "-y", "@copperbox/okf-mcp",
         "--bundle", "brain=/absolute/path/to/your/bundle",
         "--writable"
       ]
