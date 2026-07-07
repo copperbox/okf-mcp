@@ -10,6 +10,7 @@ import {
   deleteConcept,
   generateIndexes,
   renameConcept,
+  renderIndexes,
   writeConcept,
 } from "../src/authoring.js";
 import { loadBundle } from "../src/bundle.js";
@@ -60,13 +61,112 @@ describe("authoring", () => {
     );
   });
 
+  it("defaults timestamp to now, between tags and extension keys", async () => {
+    const before = Date.now();
+    await writeConcept(
+      root,
+      "metrics/revenue.md",
+      { type: "Metric", owner: "data-team", tags: ["finance"] },
+      "Body",
+    );
+    const after = Date.now();
+
+    const bundle = await loadBundle({ id: "t", root });
+    const timestamp = bundle.concepts.get("metrics/revenue")?.frontmatter.timestamp;
+    assert.equal(typeof timestamp, "string");
+    assert.match(timestamp as string, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const written = Date.parse(timestamp as string);
+    assert.ok(written >= before && written <= after);
+
+    const source = await fs.readFile(path.join(root, "metrics/revenue.md"), "utf8");
+    const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
+    assert.deepEqual(keys, ["type", "tags", "timestamp", "owner"]);
+  });
+
+  it("preserves a caller-provided timestamp verbatim", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-05-04T00:00:00Z" },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    assert.equal(bundle.concepts.get("x")?.frontmatter.timestamp, "2020-05-04T00:00:00Z");
+  });
+
+  it("refreshes the timestamp when an update omits it", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-01-01T00:00:00Z" },
+      "Old body",
+    );
+    const before = Date.now();
+    await writeConcept(root, "x.md", { type: "Note" }, "New body");
+
+    const bundle = await loadBundle({ id: "t", root });
+    const timestamp = bundle.concepts.get("x")?.frontmatter.timestamp;
+    assert.equal(typeof timestamp, "string");
+    assert.ok(Date.parse(timestamp as string) >= before);
+  });
+
   it("prepends log entries newest-first grouped by day", async () => {
-    await appendLogEntry(root, "**Creation**: first", new Date("2026-07-01T10:00:00Z"));
-    await appendLogEntry(root, "**Update**: second", new Date("2026-07-06T10:00:00Z"));
-    await appendLogEntry(root, "**Update**: third", new Date("2026-07-06T11:00:00Z"));
+    await appendLogEntry(root, "**Creation**: first", { date: new Date("2026-07-01T10:00:00Z") });
+    await appendLogEntry(root, "**Update**: second", { date: new Date("2026-07-06T10:00:00Z") });
+    const result = await appendLogEntry(root, "**Update**: third", {
+      date: new Date("2026-07-06T11:00:00Z"),
+    });
+    assert.equal(result.path, "log.md");
     const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+    assert.ok(log.startsWith("# Update Log\n"));
     assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("## 2026-07-01"));
     assert.ok(log.indexOf("third") < log.indexOf("second"));
+  });
+
+  it("writes scoped entries to the directory's log.md, creating it on first use", async () => {
+    const result = await appendLogEntry(root, "**Update**: scoped", {
+      directory: "tables",
+      date: new Date("2026-07-06T10:00:00Z"),
+    });
+    assert.equal(result.path, "tables/log.md");
+    const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+    assert.ok(log.startsWith("# Directory Update Log\n"));
+    assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("scoped"));
+    // The root log is untouched by a scoped entry.
+    await assert.rejects(fs.access(path.join(root, "log.md")));
+  });
+
+  it("groups scoped entries newest-first like the root log", async () => {
+    await appendLogEntry(root, "**Creation**: first", {
+      directory: "tables/facts",
+      date: new Date("2026-07-01T10:00:00Z"),
+    });
+    await appendLogEntry(root, "**Update**: second", {
+      directory: "tables/facts",
+      date: new Date("2026-07-06T10:00:00Z"),
+    });
+    const log = await fs.readFile(path.join(root, "tables/facts/log.md"), "utf8");
+    assert.ok(log.indexOf("## 2026-07-06") < log.indexOf("## 2026-07-01"));
+  });
+
+  it("treats '', '.', and trailing slashes as normalized directories", async () => {
+    const rootLog = await appendLogEntry(root, "**Update**: at root", { directory: "." });
+    assert.equal(rootLog.path, "log.md");
+    const scoped = await appendLogEntry(root, "**Update**: scoped", { directory: "tables/" });
+    assert.equal(scoped.path, "tables/log.md");
+  });
+
+  it("rejects log directories that escape the bundle or hide in dot-directories", async () => {
+    await assert.rejects(
+      appendLogEntry(root, "x", { directory: "../outside" }),
+      /inside the bundle/,
+    );
+    await assert.rejects(appendLogEntry(root, "x", { directory: "/etc" }), /inside the bundle/);
+    await assert.rejects(
+      appendLogEntry(root, "x", { directory: "tables/../../up" }),
+      /inside the bundle/,
+    );
+    await assert.rejects(appendLogEntry(root, "x", { directory: ".obsidian" }), /start with/);
   });
 
   it("deletes a concept and reports concepts still linking to it", async () => {
@@ -243,5 +343,27 @@ describe("authoring", () => {
 
     const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
     assert.match(tablesIndex, /\[Orders\]\(orders\.md\) - Order rows\./);
+  });
+
+  it("renders index content in memory without writing files", async () => {
+    await writeConcept(
+      root,
+      "tables/orders.md",
+      { type: "Table", title: "Orders", description: "Order rows." },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    const rendered = renderIndexes(bundle);
+
+    assert.deepEqual([...rendered.keys()].sort(), ["index.md", "tables/index.md"]);
+    assert.match(rendered.get("index.md")!, /okf_version: "0.1"/);
+    assert.match(rendered.get("index.md")!, /\[tables\]\(tables\/\)/);
+    assert.match(
+      rendered.get("tables/index.md")!,
+      /\[Orders\]\(orders\.md\) - Order rows\./,
+    );
+    // Pure rendering: nothing hit the disk.
+    await assert.rejects(fs.access(path.join(root, "index.md")));
+    await assert.rejects(fs.access(path.join(root, "tables/index.md")));
   });
 });

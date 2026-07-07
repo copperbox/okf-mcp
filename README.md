@@ -101,7 +101,7 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
-| `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md` |
+| `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; hits include match locations and a body snippet |
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |
@@ -120,10 +120,10 @@ Write tools (only with `--writable`):
 
 | Tool | Purpose |
 |---|---|
-| `write_concept` | Create/update a concept, append a `log.md` entry, regenerate `index.md` files |
+| `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
-| `append_log_entry` | Record a change-narrative entry in `log.md` without touching any concept |
+| `append_log_entry` | Record a change-narrative entry in the bundle-root `log.md` — or a per-directory one via `directory` — without touching any concept |
 | `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter |
 
 Writes are constrained to safe relative `.md` paths inside the bundle; reserved filenames (`index.md`, `log.md`) and dot-directories are rejected as concept paths.
