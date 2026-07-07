@@ -1,3 +1,4 @@
+import { sectionAt } from "./parser.js";
 import type { Concept, LoadedBundle } from "./types.js";
 
 export interface SearchFilters {
@@ -36,6 +37,8 @@ export interface SearchHit {
   matchedIn?: MatchField[];
   /** Body context around the first match. Present only when the body matched. */
   snippet?: string;
+  /** Heading of the section enclosing the first body match, when inside one. */
+  section?: string;
 }
 
 export interface SearchResult {
@@ -72,9 +75,7 @@ const SNIPPET_MAX_LENGTH = 240;
  * lines are truncated to a window around the match without splitting
  * surrogate pairs; `…` marks truncation.
  */
-function extractSnippet(body: string, query: string): string | undefined {
-  const idx = body.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return undefined;
+function extractSnippet(body: string, query: string, idx: number): string {
   const start = body.lastIndexOf("\n", idx) + 1;
   let end = body.indexOf("\n", idx + query.length);
   if (end === -1) end = body.length;
@@ -145,12 +146,17 @@ export function searchConcepts(
       let relevance = 0;
       let matchedIn: MatchField[] | undefined;
       let snippet: string | undefined;
+      let section: string | undefined;
       if (query !== undefined) {
         const match = score(concept, query);
         if (match.total === 0) continue;
         relevance = match.total;
         matchedIn = match.matchedIn;
-        if (matchedIn.includes("body")) snippet = extractSnippet(concept.body, query);
+        if (matchedIn.includes("body")) {
+          const idx = concept.body.toLowerCase().indexOf(query.toLowerCase());
+          snippet = extractSnippet(concept.body, query, idx);
+          section = sectionAt(concept.body, idx);
+        }
       }
       hits.push({
         bundle: bundle.id,
@@ -164,6 +170,7 @@ export function searchConcepts(
         score: relevance,
         ...(matchedIn !== undefined && { matchedIn }),
         ...(snippet !== undefined && { snippet }),
+        ...(section !== undefined && { section }),
       });
     }
   }

@@ -1,5 +1,6 @@
 import { readBundleDocument } from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
+import { extractCitations } from "./parser.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
 import { OKF_VERSION } from "./types.js";
 
@@ -121,8 +122,10 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
 
 /**
  * Report OKF v0.1 conformance for a loaded bundle. Loading already
- * collects most problems; this adds the reserved-file structure checks
- * of spec §9.3: every index.md follows §6 and every log.md follows §7.
+ * collects most problems; this adds reserved-file structure checks
+ * of spec §9.3 (every index.md follows §6, every log.md follows §7,
+ * and index.md frontmatter is only permitted at the bundle root per
+ * §11) and citation hygiene warnings (spec §8).
  */
 export async function validateBundle(
   bundle: LoadedBundle,
@@ -131,6 +134,30 @@ export async function validateBundle(
     ...bundle.problems,
     ...checkDeclaredVersion(bundle),
   ];
+
+  // Citation problems are soft, consistent with §9's broken-link tolerance.
+  for (const concept of bundle.concepts.values()) {
+    const { citations, malformed } = extractCitations(
+      concept.body,
+      concept.path,
+      (id) => bundle.concepts.has(id),
+    );
+    for (const line of malformed) {
+      problems.push({
+        severity: "warning",
+        path: concept.path,
+        message: `malformed citation entry (expected \`[n] [text](target)\`): ${line}`,
+      });
+    }
+    for (const citation of citations) {
+      if (citation.kind !== "missing") continue;
+      problems.push({
+        severity: "warning",
+        path: concept.path,
+        message: `citation [${citation.index}] target does not resolve in the bundle: ${citation.target}`,
+      });
+    }
+  }
 
   for (const file of bundle.reserved) {
     const check =
