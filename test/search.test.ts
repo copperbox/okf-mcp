@@ -73,6 +73,22 @@ describe("searchConcepts", () => {
     assert.equal(hit.id, "tables/customers");
     assert.deepEqual(hit.matchedIn, ["description"]);
     assert.equal("snippet" in hit, false);
+    assert.equal("section" in hit, false);
+  });
+
+  it("reports the enclosing section heading for body matches", () => {
+    const { hits } = searchConcepts(bundles, { query: "lags more than" });
+    assert.equal(hits[0]?.section, "Trigger");
+  });
+
+  it("omits the section when the body match precedes any heading", () => {
+    const body = "The needle sits in the preamble.\n\n# Later\n\nMore text.\n";
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/pre", type: "Note", body }])],
+      { query: "needle" },
+    );
+    assert.deepEqual(hits[0]?.matchedIn, ["body"]);
+    assert.equal("section" in hits[0]!, false);
   });
 
   it("lists every matched field in matchedIn", () => {

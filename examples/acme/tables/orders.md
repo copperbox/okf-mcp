@@ -20,3 +20,4 @@ Part of the [sales dataset](/datasets/sales.md).
 # Citations
 
 [1] [BigQuery table schema](https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders)
+[2] [Customer dimension table](/tables/customers.md)

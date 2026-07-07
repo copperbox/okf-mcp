@@ -381,6 +381,86 @@ describe("server tools", () => {
     ]);
   });
 
+  it("get_concept lists body section headings alongside the full body", async () => {
+    const concept = (await callJson(client, "get_concept", { id: "tables/orders" })) as {
+      body: string;
+      sections: string[];
+    };
+    assert.deepEqual(concept.sections, ["Schema", "Citations"]);
+    assert.match(concept.body, /# Schema/);
+  });
+
+  it("get_concept returns a single section case-insensitively", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "citations",
+    })) as {
+      id: string;
+      frontmatter: { type: string };
+      section: { heading: string; level: number; content: string };
+      sections: string[];
+    };
+    assert.equal(result.id, "tables/orders");
+    assert.equal(result.frontmatter.type, "BigQuery Table");
+    assert.deepEqual(result.sections, ["Schema", "Citations"]);
+    assert.equal(result.section.heading, "Citations");
+    assert.equal(result.section.level, 1);
+    assert.match(result.section.content, /BigQuery table schema/);
+    assert.doesNotMatch(result.section.content, /order_id/);
+    assert.equal("body" in result, false);
+  });
+
+  it("get_concept rejects an unknown section, listing what is available", async () => {
+    const result = await callTool(client, "get_concept", {
+      id: "tables/orders",
+      section: "Examples",
+    });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /Schema, Citations/);
+  });
+
+  it("get_citations classifies external, concept, and missing targets", async () => {
+    assert.deepEqual(await callJson(client, "get_citations", { id: "tables/orders" }), [
+      {
+        index: 1,
+        text: "BigQuery table schema",
+        target: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+        kind: "external",
+      },
+      {
+        index: 2,
+        text: "Customer dimension table",
+        target: "/tables/customers.md",
+        kind: "concept",
+      },
+      {
+        index: 3,
+        text: "Retired ingestion runbook",
+        target: "/playbooks/retired-runbook",
+        kind: "missing",
+      },
+    ]);
+  });
+
+  it("get_citations returns an empty list for a concept without a Citations section", async () => {
+    assert.deepEqual(await callJson(client, "get_citations", { id: "datasets/sales" }), []);
+  });
+
+  it("get_citations rejects an unknown concept", async () => {
+    const result = await callTool(client, "get_citations", { id: "tables/nope" });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /unknown concept/);
+  });
+
+  it("validate_bundle reports citation warnings", async () => {
+    const [report] = (await callJson(client, "validate_bundle", { bundle: "acme" })) as Array<{
+      warnings: Array<{ path?: string; message: string }>;
+    }>;
+    assert.ok(
+      report!.warnings.some((w) => /malformed citation entry/.test(w.message)),
+    );
+  });
+
   it("list_bundles and graph_summary surface the declared okf_version", async () => {
     const bundles = (await callJson(client, "list_bundles", {})) as Array<{
       id: string;
