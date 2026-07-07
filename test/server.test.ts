@@ -12,6 +12,7 @@ import { writeConcept } from "../src/authoring.js";
 import { createOkfServer } from "../src/server.js";
 import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
+import { fakeArchiveServer, makeTarGz } from "./archives.js";
 import { fakeGitHub } from "./fake-github.js";
 import { commitAll, initRepo } from "./helpers.js";
 
@@ -241,6 +242,48 @@ describe("remote bundle tools", () => {
     });
     assert.equal(log.isError, true);
     assert.match((log.content as Array<{ text: string }>)[0]!.text, /read-only/);
+  });
+
+  it("load_remote_bundle indexes a tar.gz archive URL and reports it as the source", async () => {
+    const archiveUrl = "https://example.com/dist/kb.tar.gz";
+    const store = new OkfStore([{ id: "t", root }], {
+      fetchImpl: fakeArchiveServer({
+        [archiveUrl]: makeTarGz({
+          "kb/index.md": "# Index\n",
+          "kb/tables/orders.md": DOC,
+        }),
+      }),
+    });
+    await store.load();
+    const client = await connect(store);
+
+    const loaded = toolJson(
+      await client.callTool({
+        name: "load_remote_bundle",
+        arguments: { id: "shared", url: archiveUrl },
+      }),
+    );
+    assert.deepEqual(loaded, {
+      id: "shared",
+      url: archiveUrl,
+      concepts: 1,
+      problems: 0,
+      readOnly: true,
+    });
+
+    // list_remote_bundles reports the archive URL as the source.
+    const listed = toolJson(
+      await client.callTool({ name: "list_remote_bundles", arguments: {} }),
+    );
+    assert.deepEqual(listed, [
+      { id: "shared", url: archiveUrl, concepts: 1, problems: 0, readOnly: true },
+    ]);
+
+    // Documents are served as resources straight from memory.
+    const resource = await client.readResource({
+      uri: "okf://shared/tables/orders.md",
+    });
+    assert.equal((resource.contents[0] as { text: string }).text, DOC);
   });
 
   it("synthesizes index.md views for remote bundles published without them", async () => {

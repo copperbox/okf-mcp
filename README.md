@@ -59,11 +59,12 @@ npm run dev -- \
   inspect
 ```
 
-`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported). The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded.
+`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
 
 Remote bundles are strictly read-only and sandboxed:
 
-- Only `.md` files are fetched (via the GitHub contents API; `GITHUB_TOKEN` is used for rate limits when set), bounded to 500 files / 10 MiB per bundle.
+- Only `.md` files are indexed (GitHub trees via the contents API; `GITHUB_TOKEN` is used for rate limits when set, and never sent to non-GitHub hosts), bounded to 500 files / 10 MiB per bundle; archive downloads are additionally capped at 10 MiB compressed.
+- Archive entries with path traversal (`..`, absolute paths) are rejected; a single top-level directory wrapping all files (as in GitHub source tarballs) is stripped; zip64 archives are not supported.
 - Remote content is parsed as markdown, never executed, and never written to disk.
 - All authoring tools reject read-only bundles, and `regenerate_indexes` / the `index` command skip them.
 - `reload_bundles` refetches them, reporting the same added/removed/changed delta as local bundles.
@@ -96,8 +97,8 @@ Read tools:
 | Tool | Purpose |
 |---|---|
 | `list_bundles` | Configured bundles with concept counts and read-only flags |
-| `reload_bundles` | Re-read bundles (disk or remote tree) to pick up external edits; reports added/removed/changed concepts |
-| `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL, in memory only |
+| `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts |
+| `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL or a `.tar.gz`/`.tgz`/`.zip` archive, in memory only |
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
 | `list_concepts` | Concept metadata, filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links |
@@ -131,7 +132,7 @@ Writes are constrained to safe relative `.md` paths inside the bundle; reserved 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [command]
+okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -142,6 +143,8 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [command]
   index               Regenerate index.md files (requires --writable)
 ```
 
+`--watch` (mcp only) auto-reloads local bundles when `.md` files change on disk, debounced so an editor save burst triggers one reload; `.obsidian/` and other dot directories are ignored. Remote bundles still reload only via the `reload_bundles` tool. Where recursive `fs.watch` is unsupported, the server logs a note to stderr and continues without watching.
+
 ## Development
 
 ```bash
@@ -150,6 +153,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing and link extraction), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
-There is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.
+Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.
