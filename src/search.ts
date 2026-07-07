@@ -1,4 +1,4 @@
-import { sectionAt } from "./parser.js";
+import { deriveTitle, sectionAt } from "./parser.js";
 import type { Concept, LoadedBundle } from "./types.js";
 
 export interface SearchFilters {
@@ -29,7 +29,10 @@ export interface SearchHit {
   bundle: string;
   id: string;
   type: string;
-  title?: string;
+  /** Frontmatter title, or a display title derived from the filename (spec §4.1). */
+  title: string;
+  /** True when `title` was derived — the concept has no authored frontmatter title. */
+  titleDerived?: boolean;
   description?: string;
   tags?: string[];
   score: number;
@@ -162,7 +165,8 @@ export function searchConcepts(
         bundle: bundle.id,
         id: concept.id,
         type: concept.frontmatter.type,
-        ...(concept.frontmatter.title !== undefined && { title: concept.frontmatter.title }),
+        title: deriveTitle(concept),
+        ...(concept.frontmatter.title === undefined && { titleDerived: true }),
         ...(concept.frontmatter.description !== undefined && {
           description: concept.frontmatter.description,
         }),
