@@ -72,6 +72,8 @@ Alternatively, point at a local checkout you built yourself (`npm run build`):
 
 The server is deliberately not opinionated about *when* knowledge gets captured: its built-in instructions teach connected agents the OKF conventions and the write flow (`suggest_concept_path` → `write_concept`), but nothing tells an agent to record what it learns as a side effect of ordinary work. Capture policy belongs in your agent's own configuration — `CLAUDE.md`, `AGENTS.md`, or the system prompt, whichever your client reads.
 
+The server also performs no git sync. If the bundle is shared — mounted from a local clone of a team repository — it is only as fresh as the clone's last `git pull`, and concepts written through `write_concept` reach teammates only after an out-of-band commit and push. Keeping a shared bundle in sync is your (or your agent's) responsibility, so it belongs in the same standing instructions.
+
 If you want the ambient "brain grows while you work" behavior, a standing instruction like this is enough to get started — copy it into your agent config and adjust to taste:
 
 ```markdown
@@ -90,6 +92,13 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
   links (`/tables/orders.md`) to related concepts, and reuse existing types and tags.
 - Don't record ephemera (task status, one-off debugging detail) — the brain is for
   knowledge that should still be true next month.
+- If the brain is shared (a clone of a team repo), the server never syncs git for you.
+  Before relying on it, make sure the clone is current — run `git pull` in the bundle
+  repo, then call `reload_bundles` so the index picks up the changes. For
+  `--remote-bundle` mounts, calling `reload_bundles` refetches.
+- After writing durable knowledge to a shared brain, commit and push it if you're
+  authorized to, or remind the user to — until then the new knowledge is invisible
+  to teammates.
 ```
 
 This works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, navigation indexes, and log.
