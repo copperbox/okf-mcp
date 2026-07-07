@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm --provenance
+  id-token: write # npm trusted publishing (OIDC) + provenance
 
 jobs:
   publish:
@@ -19,6 +19,9 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 bundles npm 10.
+      - run: npm install -g npm@latest
 
       - run: npm ci
 
@@ -62,7 +65,7 @@ jobs:
             console.log('Pack contents OK (' + files.length + ' files)');
           "
 
+      # Authenticates via the npm trusted publisher (OIDC) for this repo +
+      # workflow file — no NPM_TOKEN secret involved.
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
