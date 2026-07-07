@@ -1,3 +1,4 @@
+import { isCuratedIndex } from "./authoring.js";
 import { readBundleDocument } from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import { extractCitations } from "./parser.js";
@@ -96,8 +97,8 @@ function checkLogStructure(path: string, source: string): BundleProblem[] {
 function checkIndexStructure(path: string, source: string): BundleProblem[] {
   const problems: BundleProblem[] = [];
   const frontmatter = splitFrontmatter(source);
-  const keys = frontmatter.data === null ? null : Object.keys(frontmatter.data);
-  const onlyCuratedMarker = keys !== null && keys.length === 1 && keys[0] === "generated";
+  const onlyCuratedMarker =
+    isCuratedIndex(source) && Object.keys(frontmatter.data ?? {}).length === 1;
   if (frontmatter.present && path !== "index.md" && !onlyCuratedMarker) {
     problems.push({
       severity: "warning",

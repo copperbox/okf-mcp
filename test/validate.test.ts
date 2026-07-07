@@ -97,6 +97,23 @@ describe("validateBundle reserved-file structure (spec §9.3)", () => {
     assert.equal(frontmatter.length, 1);
   });
 
+  it("still warns when non-root index frontmatter declares generated: true", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "guides/index.md",
+          source: "---\ngenerated: true\n---\n\n# Not Curated\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const frontmatter = result.warnings.filter((p) => p.message.includes("bundle root"));
+    assert.equal(frontmatter.length, 1);
+  });
+
   it("reports no reserved-file problems for a well-formed bundle", async () => {
     const result = await report(ACME);
     const reserved = [...result.errors, ...result.warnings].filter(
