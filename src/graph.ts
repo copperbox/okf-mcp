@@ -85,6 +85,8 @@ export function buildGraph(
 
 export interface GraphSummary {
   bundle: string;
+  /** OKF version the bundle-root index.md declares, when present (spec §11). */
+  okfVersion?: string;
   concepts: number;
   edges: number;
   brokenLinks: number;
@@ -103,6 +105,7 @@ export function graphSummary(bundle: LoadedBundle): GraphSummary {
   }
   return {
     bundle: bundle.id,
+    okfVersion: bundle.okfVersion,
     concepts: bundle.concepts.size,
     edges: graph.edges.length,
     brokenLinks: graph.warnings.length,
