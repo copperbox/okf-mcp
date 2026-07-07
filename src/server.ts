@@ -43,6 +43,37 @@ export interface ServerOptions {
   writable?: boolean;
 }
 
+/**
+ * Server-level instructions clients inject into the agent's context every
+ * session (so kept deliberately short): the OKF conventions the tools assume
+ * but cannot express individually.
+ */
+function serverInstructions(writable: boolean): string {
+  const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
+concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
+A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
+Relationships are ordinary markdown links in the body; prefer the bundle-absolute form,
+e.g. [Orders](/tables/orders.md). index.md and log.md are reserved, generated files.
+
+Reading: orient with graph_summary and list_types / list_tags, narrow with
+search_concepts (text plus type/tag/path/link filters), then read specific concepts
+with get_concept and explore with get_neighbors / find_path — rather than dumping
+every document.
+
+If bundle files may have changed outside this server (e.g. a human editing in
+Obsidian), call reload_bundles before relying on current state.`;
+  if (!writable) {
+    return `${shared}\n\nThis server is read-only; authoring tools are not available.`;
+  }
+  return `${shared}
+
+Writing: call suggest_concept_path before creating a concept so placement matches
+where similar concepts live, and reuse existing types/tags. write_concept,
+rename_concept, and delete_concept keep index.md navigation and the log.md history
+current — never edit those reserved files directly. Use append_log_entry for change
+narrative not tied to a single concept write. Remote bundles are always read-only.`;
+}
+
 function json(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -101,7 +132,10 @@ export function createOkfServer(
   store: OkfStore,
   options: ServerOptions = {},
 ): McpServer {
-  const server = new McpServer({ name: "okf-mcp", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "okf-mcp", version: "0.1.0" },
+    { instructions: serverInstructions(options.writable ?? false) },
+  );
 
   const selectBundles = (bundle: string | undefined) =>
     bundle !== undefined ? [store.bundle(bundle)] : store.bundles();

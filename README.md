@@ -32,6 +32,25 @@ node dist/cli.js --bundle /path/to/your/bundle
 
 ## MCP client configuration
 
+The package is published to npm, so the easiest setup runs it through `npx`:
+
+```json
+{
+  "mcpServers": {
+    "okf": {
+      "command": "npx",
+      "args": [
+        "-y", "okf-mcp",
+        "--bundle", "brain=/absolute/path/to/your/bundle",
+        "--writable"
+      ]
+    }
+  }
+}
+```
+
+Alternatively, point at a local checkout you built yourself (`npm run build`):
+
 ```json
 {
   "mcpServers": {
@@ -91,6 +110,8 @@ To view the brain in Obsidian, open the bundle directory as a vault (File → Op
 ## MCP surface
 
 Resources: one `text/markdown` resource per document, at `okf://<bundle>/<path>`.
+
+The server also declares MCP server-level instructions — a short primer on OKF conventions (concept IDs, link form, reserved files, the read/write tool flow) that clients inject into the agent's context. Authoring guidance is included only when the server runs with `--writable`.
 
 Read tools:
 
