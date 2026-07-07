@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  # Dispatched by tag-release.yml on the new tag ref, since tags pushed with
+  # GITHUB_TOKEN don't trigger `on: push: tags` workflows.
+  workflow_dispatch:
 
 permissions:
   contents: read
