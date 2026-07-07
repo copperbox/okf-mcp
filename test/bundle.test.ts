@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { loadBundle } from "../src/bundle.js";
+import { buildBundle, loadBundle } from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
@@ -35,6 +35,27 @@ describe("loadBundle", () => {
     const broken = bundle.problems.filter((p) => p.message.includes("missing concept"));
     assert.equal(broken.length, 1);
     assert.equal(broken[0]?.severity, "warning");
+  });
+
+  it("parses okf_version from the bundle-root index.md (spec §11)", async () => {
+    const bundle = await loadBundle({ id: "acme", root: FIXTURE });
+    assert.equal(bundle.okfVersion, "0.1");
+  });
+
+  it("leaves okfVersion undefined when only a nested index declares one", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "# Index\n" },
+      { path: "guides/index.md", source: '---\nokf_version: "9.9"\n---\n\n# Guides\n' },
+      { path: "note.md", source: "---\ntype: Note\n---\n\nBody.\n" },
+    ]);
+    assert.equal(bundle.okfVersion, undefined);
+  });
+
+  it("ignores a non-string okf_version declaration", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "---\nokf_version: 0.1\n---\n\n# Index\n" },
+    ]);
+    assert.equal(bundle.okfVersion, undefined);
   });
 
   it("resolves relative and absolute link forms to the same concept space", async () => {

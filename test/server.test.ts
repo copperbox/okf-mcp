@@ -418,6 +418,19 @@ describe("server tools", () => {
     );
   });
 
+  it("list_bundles and graph_summary surface the declared okf_version", async () => {
+    const bundles = (await callJson(client, "list_bundles", {})) as Array<{
+      id: string;
+      okfVersion?: string;
+    }>;
+    assert.equal(bundles[0]?.okfVersion, "0.1");
+
+    const summary = (await callJson(client, "graph_summary", {
+      bundle: "acme",
+    })) as { okfVersion?: string };
+    assert.equal(summary.okfVersion, "0.1");
+  });
+
   it("read_document returns reserved files as raw markdown", async () => {
     const result = await callTool(client, "read_document", { bundle: "acme", path: "log.md" });
     assert.ok(!result.isError);

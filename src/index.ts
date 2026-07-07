@@ -9,7 +9,7 @@ export {
   writeConcept,
 } from "./authoring.js";
 export type { AppendLogEntryOptions, WriteConceptOptions } from "./authoring.js";
-export { buildBundle, loadBundle, readBundleDocument } from "./bundle.js";
+export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export { serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type { FrontmatterSplit } from "./frontmatter.js";

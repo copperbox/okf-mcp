@@ -39,6 +39,7 @@ describe("graph", () => {
 
   it("summarizes types, tags, and orphans", () => {
     const summary = graphSummary(bundle);
+    assert.equal(summary.okfVersion, "0.1");
     assert.equal(summary.concepts, 5);
     assert.equal(summary.types["BigQuery Table"], 2);
     assert.deepEqual(summary.orphans, ["notes/no-type"]);

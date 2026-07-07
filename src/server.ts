@@ -179,6 +179,7 @@ export function createOkfServer(
         store.bundles().map((bundle) => ({
           id: bundle.id,
           root: bundle.root,
+          okfVersion: bundle.okfVersion,
           concepts: bundle.concepts.size,
           reservedFiles: bundle.reserved.map((f) => f.path),
           problems: bundle.problems.length,
