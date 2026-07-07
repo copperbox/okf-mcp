@@ -68,6 +68,32 @@ Alternatively, point at a local checkout you built yourself (`npm run build`):
 
 `--bundle` accepts `path` or `id=path` and is repeatable. Omit `--writable` for a read-only server.
 
+## Teaching your agent to maintain the brain
+
+The server is deliberately not opinionated about *when* knowledge gets captured: its built-in instructions teach connected agents the OKF conventions and the write flow (`suggest_concept_path` → `write_concept`), but nothing tells an agent to record what it learns as a side effect of ordinary work. Capture policy belongs in your agent's own configuration — `CLAUDE.md`, `AGENTS.md`, or the system prompt, whichever your client reads.
+
+If you want the ambient "brain grows while you work" behavior, a standing instruction like this is enough to get started — copy it into your agent config and adjust to taste:
+
+```markdown
+## Knowledge capture (OKF brain)
+
+This project keeps a persistent knowledge base (the "brain") behind the `okf` MCP server.
+
+- Before starting non-trivial work, check the brain: orient with `graph_summary`, then
+  `search_concepts` for anything related to the task, and treat what you find as prior
+  context.
+- When you learn something durable — a decision and its rationale, a gotcha, how a
+  system actually works, a convention worth keeping — record it before finishing:
+  call `suggest_concept_path` to pick a placement, then `write_concept`. Prefer
+  updating an existing concept over creating a near-duplicate.
+- Keep concepts small and linked: one idea per concept, bundle-absolute markdown
+  links (`/tables/orders.md`) to related concepts, and reuse existing types and tags.
+- Don't record ephemera (task status, one-off debugging detail) — the brain is for
+  knowledge that should still be true next month.
+```
+
+This works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, navigation indexes, and log.
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
