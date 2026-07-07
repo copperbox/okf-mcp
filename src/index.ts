@@ -53,6 +53,7 @@ export type {
 } from "./parser.js";
 export {
   loadRemoteBundle,
+  MAX_ARCHIVE_DOWNLOAD_BYTES,
   MAX_REMOTE_BYTES,
   MAX_REMOTE_FILES,
   parseGitHubTreeUrl,
@@ -80,3 +81,5 @@ export type {
 } from "./types.js";
 export { validateBundle } from "./validate.js";
 export type { ValidationReport } from "./validate.js";
+export { DEFAULT_WATCH_DEBOUNCE_MS, watchBundles } from "./watch.js";
+export type { BundleWatcher, WatchBundlesOptions } from "./watch.js";

@@ -76,10 +76,14 @@ export interface BundleConfig {
   root: string;
 }
 
-/** A read-only bundle fetched from a public GitHub tree (issue: exchange goal). */
+/** A read-only bundle fetched from a remote source (issue: exchange goal). */
 export interface RemoteBundleConfig {
   id: string;
-  /** Public GitHub tree URL: https://github.com/<owner>/<repo>/tree/<ref>[/<path>] */
+  /**
+   * Public GitHub tree URL (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]),
+   * or a `.tar.gz`/`.tgz`/`.zip` archive — any http(s) URL or local path,
+   * detected by extension.
+   */
   url: string;
   /** Glob patterns over bundle-relative paths; when present, only matches load. */
   include?: string[];

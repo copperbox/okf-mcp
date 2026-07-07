@@ -220,7 +220,7 @@ export function createOkfServer(
     {
       title: "Load remote bundle",
       description:
-        "Fetch a read-only OKF bundle from a public GitHub tree URL and add it to the in-memory index. Only .md files are downloaded (bounded in count and size), nothing is written to disk, and remote content is never executed. Authoring tools reject the bundle.",
+        "Fetch a read-only OKF bundle from a public GitHub tree URL or a .tar.gz/.tgz/.zip archive (URL or local path) and add it to the in-memory index. Only .md files are indexed (bounded in count and size), nothing is written to disk, and remote content is never executed. Authoring tools reject the bundle.",
       inputSchema: {
         id: z
           .string()
@@ -229,7 +229,7 @@ export function createOkfServer(
         url: z
           .string()
           .describe(
-            "Public GitHub tree URL: https://github.com/<owner>/<repo>/tree/<ref>[/<path>]",
+            "Public GitHub tree URL (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]) or a .tar.gz/.tgz/.zip archive URL or local path",
           ),
         include: z
           .array(z.string())
@@ -259,7 +259,7 @@ export function createOkfServer(
     {
       title: "List remote bundles",
       description:
-        "List read-only remote bundles loaded from public GitHub trees, with concept counts",
+        "List read-only remote bundles (GitHub trees or archives) with their source URLs and concept counts",
       inputSchema: {},
     },
     async () =>
