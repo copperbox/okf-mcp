@@ -12,6 +12,7 @@ import {
   deleteConcept,
   generateIndexes,
   renameConcept,
+  renderIndexes,
   writeConcept,
 } from "./authoring.js";
 import { readBundleDocument } from "./bundle.js";
@@ -110,6 +111,18 @@ function assertSafeDocumentPath(relPath: string): string {
 }
 
 /**
+ * Synthesized index for a directory the bundle has but no index.md covers —
+ * spec §6 lets consumers synthesize one on the fly (the only entry point for
+ * read-only remote bundles published without index files). Never written to
+ * disk. Returns undefined for non-index paths and unknown directories.
+ */
+function synthesizeIndex(bundle: LoadedBundle, safePath: string): string | undefined {
+  if (path.posix.basename(safePath).toLowerCase() !== "index.md") return undefined;
+  const dir = path.posix.dirname(safePath);
+  return renderIndexes(bundle).get(dir === "." ? "index.md" : `${dir}/index.md`);
+}
+
+/**
  * Build the OKF MCP server: one markdown resource per document in each
  * bundle, plus tools for search, graph navigation, validation, and
  * (optionally) authoring.
@@ -126,11 +139,20 @@ export function createOkfServer(
   const selectBundles = (bundle: string | undefined) =>
     bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
 
-  /** Read any bundle document (concept or reserved file) after path validation. */
-  const readDocument = (bundleId: string | undefined, relPath: string) => {
+  /**
+   * Read any bundle document (concept or reserved file) after path
+   * validation, falling back to a synthesized view for a missing index.md.
+   */
+  const readDocument = async (bundleId: string | undefined, relPath: string) => {
     const bundle = store.bundle(bundleId);
     const safePath = assertSafeDocumentPath(relPath);
-    return readBundleDocument(bundle, safePath);
+    try {
+      return { text: await readBundleDocument(bundle, safePath), synthesized: false };
+    } catch (err) {
+      const text = synthesizeIndex(bundle, safePath);
+      if (text === undefined) throw err;
+      return { text, synthesized: true };
+    }
   };
 
   server.registerResource(
@@ -161,9 +183,19 @@ export function createOkfServer(
       mimeType: "text/markdown",
     },
     async (uri, variables) => {
-      const text = await readDocument(String(variables.bundle), String(variables.path));
+      const { text, synthesized } = await readDocument(
+        String(variables.bundle),
+        String(variables.path),
+      );
       return {
-        contents: [{ uri: uri.href, mimeType: "text/markdown", text }],
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/markdown",
+            text,
+            ...(synthesized && { _meta: { synthesized: true } }),
+          },
+        ],
       };
     },
   );
@@ -319,7 +351,7 @@ export function createOkfServer(
     {
       title: "Read document",
       description:
-        "Read the raw markdown of any bundle document by path — reserved files (index.md, log.md) as well as concepts",
+        "Read the raw markdown of any bundle document by path — reserved files (index.md, log.md) as well as concepts. A missing index.md is synthesized from frontmatter (spec §6) and marked with `synthesized: true` in the result",
       inputSchema: {
         bundle: bundleParam,
         path: z
@@ -327,7 +359,10 @@ export function createOkfServer(
           .describe("Bundle-relative path, e.g. log.md or tables/orders.md"),
       },
     },
-    async ({ bundle, path: relPath }) => markdown(await readDocument(bundle, relPath)),
+    async ({ bundle, path: relPath }) => {
+      const { text, synthesized } = await readDocument(bundle, relPath);
+      return { ...markdown(text), ...(synthesized && { synthesized: true }) };
+    },
   );
 
   server.registerTool(
@@ -568,7 +603,9 @@ export function createOkfServer(
           frontmatter: z
             .object({ type: z.string().min(1) })
             .passthrough()
-            .describe("YAML frontmatter; `type` is required, extra keys are preserved"),
+            .describe(
+              "YAML frontmatter; `type` is required, extra keys are preserved. `timestamp` defaults to the current UTC time when omitted (supply one to backdate)",
+            ),
           body: z.string().describe("Markdown body"),
           logMessage: z
             .string()
@@ -666,7 +703,7 @@ export function createOkfServer(
       {
         title: "Append log entry",
         description:
-          "Record a change-narrative entry in the bundle-root log.md (spec §7) without touching any concept",
+          "Record a change-narrative entry in a log.md (spec §7) — the bundle root's by default, or a per-directory scope — without touching any concept",
         inputSchema: {
           bundle: bundleParam,
           message: z
@@ -675,14 +712,22 @@ export function createOkfServer(
             .describe(
               "One-line markdown entry; conventionally starts with a bold verb like **Update**: or **Deprecation**:",
             ),
+          directory: z
+            .string()
+            .optional()
+            .describe(
+              "Bundle-relative directory whose log.md receives the entry (created when absent), e.g. tables; defaults to the bundle root",
+            ),
         },
       },
-      async ({ bundle, message }) => {
+      async ({ bundle, message, directory }) => {
         const target = store.bundle(bundle);
         assertWritableBundle(target);
-        await appendLogEntry(target.root, message);
+        const { path: logPath } = await appendLogEntry(target.root, message, {
+          ...(directory !== undefined && { directory }),
+        });
         await store.reloadBundle(target.id);
-        return json({ bundle: target.id, path: "log.md", uri: okfUri(target.id, "log.md") });
+        return json({ bundle: target.id, path: logPath, uri: okfUri(target.id, logPath) });
       },
     );
 
