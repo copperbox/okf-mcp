@@ -170,7 +170,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid` |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 
