@@ -52,3 +52,30 @@ describe("npm packaging", () => {
     assert.match(readme, /"@copperbox\/okf-mcp"/);
   });
 });
+
+describe("README agent guidance", () => {
+  it("covers keeping a shared bundle fresh (git pull + reload_bundles)", async () => {
+    const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
+    const heading = "## Teaching your agent to maintain the brain";
+    const start = readme.indexOf(heading);
+    assert.ok(start >= 0, "agent guidance section must exist");
+    // Slice to the next `## ` heading outside fenced code (the CLAUDE.md
+    // snippet itself contains a `##` heading).
+    const lines = readme.slice(start + heading.length).split("\n");
+    let inFence = false;
+    const sectionLines: string[] = [heading];
+    for (const line of lines) {
+      if (line.startsWith("```")) inFence = !inFence;
+      else if (!inFence && line.startsWith("## ")) break;
+      sectionLines.push(line);
+    }
+    const section = sectionLines.join("\n");
+
+    // The server does no git sync — the guidance must say so and put
+    // pull/reload (and publish-back) into the standing instructions.
+    assert.match(section, /git pull/);
+    assert.match(section, /reload_bundles/);
+    assert.match(section, /--remote-bundle/);
+    assert.match(section, /push/);
+  });
+});
