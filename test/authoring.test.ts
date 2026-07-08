@@ -125,7 +125,7 @@ describe("authoring", () => {
     assert.equal(result.id, "tables/orders");
     assert.equal(result.path, "tables/orders.md");
     assert.equal(result.title, "Order Facts");
-    assert.deepEqual(result.updatedKeys, ["title", "status"]);
+    assert.deepEqual(result.updatedKeys, ["title", "status", "timestamp"]);
     assert.deepEqual(result.deletedKeys, ["owner"]);
 
     const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
@@ -133,6 +133,111 @@ describe("authoring", () => {
     assert.doesNotMatch(source, /owner: data-team/);
     assert.match(source, /title: Order Facts/);
     assert.ok(source.endsWith("---\n\n# Schema\n\nColumns.\n"));
+  });
+
+  it("refreshes the timestamp by default on a frontmatter patch", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-01-01T00:00:00Z" },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const before = Date.now();
+    const result = await updateConcept(bundle, "x", { frontmatter: { owner: "data-team" } });
+    assert.deepEqual(result.updatedKeys, ["owner", "timestamp"]);
+
+    const reloaded = await loadBundle({ id: "t", root });
+    const timestamp = reloaded.concepts.get("x")?.frontmatter.timestamp;
+    assert.equal(typeof timestamp, "string");
+    assert.ok(Date.parse(timestamp as string) >= before);
+  });
+
+  it("refreshes the timestamp on a section-only update", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", timestamp: "2020-01-01T00:00:00Z" },
+      "# A\n\nOld.",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const before = Date.now();
+    const result = await updateConcept(bundle, "x", {
+      section: { heading: "A", content: "New." },
+    });
+    assert.deepEqual(result.updatedKeys, ["timestamp"]);
+
+    const reloaded = await loadBundle({ id: "t", root });
+    const timestamp = reloaded.concepts.get("x")?.frontmatter.timestamp;
+    assert.ok(Date.parse(timestamp as string) >= before);
+  });
+
+  it("gives a concept without a timestamp one in its spec-order slot", async () => {
+    const original =
+      "---\n# provenance note\ntype: Table\ntags:\n  - sales\nowner: data-team\n---\n\nBody.\n";
+    await fs.writeFile(path.join(root, "orders.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "orders", { frontmatter: { owner: "core" } });
+
+    const source = await fs.readFile(path.join(root, "orders.md"), "utf8");
+    assert.match(source, /# provenance note\ntype: Table\n/);
+    const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
+    assert.deepEqual(keys, ["type", "tags", "timestamp", "owner"]);
+  });
+
+  it("lets an explicit timestamp in the patch win over the refresh", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", {
+      frontmatter: { timestamp: "1999-12-31T23:59:59Z" },
+    });
+    const reloaded = await loadBundle({ id: "t", root });
+    assert.equal(reloaded.concepts.get("x")?.frontmatter.timestamp, "1999-12-31T23:59:59Z");
+  });
+
+  it("deletes the timestamp on explicit null instead of refreshing it", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "x", { frontmatter: { timestamp: null } });
+    assert.deepEqual(result.deletedKeys, ["timestamp"]);
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.doesNotMatch(source, /timestamp/);
+  });
+
+  it("keepTimestamp preserves the existing timestamp byte-for-byte", async () => {
+    const original =
+      "---\ntype: Note\ntimestamp: 2020-01-01 # hand-stamped\n---\n\n# A\n\nOld.\n";
+    await fs.writeFile(path.join(root, "x.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "x", {
+      frontmatter: { owner: "core" },
+      section: { heading: "A", content: "New." },
+      keepTimestamp: true,
+    });
+    assert.deepEqual(result.updatedKeys, ["owner"]);
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /timestamp: 2020-01-01 # hand-stamped\n/);
+    assert.match(source, /owner: core/);
+  });
+
+  it("still applies a section-only update when there is no frontmatter block to stamp", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOld.");
+    const bundle = await loadBundle({ id: "t", root });
+    // A concurrent edit strips the frontmatter block after the bundle loads.
+    await fs.writeFile(path.join(root, "x.md"), "# A\n\nOld.\n");
+
+    const result = await updateConcept(bundle, "x", {
+      section: { heading: "A", content: "New." },
+    });
+    assert.equal(result.replacedSection, "A");
+    assert.deepEqual(result.updatedKeys, []);
+    assert.equal(await fs.readFile(path.join(root, "x.md"), "utf8"), "# A\n\nNew.\n");
   });
 
   it("replaces one body section, leaving the rest of the document byte-for-byte intact", async () => {
@@ -143,6 +248,7 @@ describe("authoring", () => {
 
     const result = await updateConcept(bundle, "orders", {
       section: { heading: "schema", content: "New columns.\n\n## Keys\n\nNew key." },
+      keepTimestamp: true,
     });
     assert.equal(result.replacedSection, "Schema");
     assert.deepEqual(result.updatedKeys, []);
@@ -176,7 +282,7 @@ describe("authoring", () => {
       frontmatter: { title: "X2" },
       section: { heading: "A", content: "New one." },
     });
-    assert.deepEqual(result.updatedKeys, ["title"]);
+    assert.deepEqual(result.updatedKeys, ["title", "timestamp"]);
     assert.equal(result.replacedSection, "A");
     const source = await fs.readFile(path.join(root, "x.md"), "utf8");
     assert.match(source, /title: X2/);
