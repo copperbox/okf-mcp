@@ -43,6 +43,13 @@ export interface ConceptLink {
   path?: string;
   /** Concept ID the link resolves to, when the target exists in the bundle. */
   resolvedId?: string;
+  /**
+   * Set when the link plausibly targets a concept the bundle does not have:
+   * an unresolved `.md` target, or an unresolved extensionless target that
+   * names neither a directory nor a reserved file. Reported as a broken
+   * link — a warning, never an error (spec §5.3).
+   */
+  broken?: boolean;
 }
 
 /** A single unit of knowledge: one markdown document in a bundle (spec §2). */

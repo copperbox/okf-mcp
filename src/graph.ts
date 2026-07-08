@@ -79,7 +79,7 @@ export function buildGraph(
     for (const link of concept.links) {
       if (link.resolvedId !== undefined) {
         edges.push({ from: concept.id, to: link.resolvedId });
-      } else if (link.kind === "concept" && link.path?.toLowerCase().endsWith(".md")) {
+      } else if (link.broken) {
         warnings.push(`${concept.path}: broken link to ${link.target}`);
       } else if (link.kind === "external" && options.includeExternal) {
         if (!externalNodes.has(link.target)) {
@@ -174,7 +174,7 @@ export function buildMultiGraph(
       for (const link of concept.links) {
         if (link.resolvedId !== undefined) {
           edges.push({ from, to: qualifyNodeId(bundle.id, link.resolvedId) });
-        } else if (link.kind === "concept" && link.path?.toLowerCase().endsWith(".md")) {
+        } else if (link.broken) {
           warnings.push(`${bundle.id}/${concept.path}: broken link to ${link.target}`);
         } else if (
           link.kind === "external" &&
