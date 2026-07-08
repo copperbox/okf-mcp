@@ -235,7 +235,7 @@ Write tools (only with `--writable`):
 | Tool | Purpose |
 |---|---|
 | `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
-| `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte; log + reindex |
+| `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte. `timestamp` refreshes to the write time like `write_concept` (a concept without one gains it in its spec-order slot) unless the patch names it or `keepTimestamp: true` pins it; log + reindex |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
 | `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at its canonical location — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |

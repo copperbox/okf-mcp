@@ -717,7 +717,7 @@ describe("authoring tools", () => {
       const payload = JSON.parse(textContent(result)) as Record<string, unknown>;
       assert.equal(payload.id, "tables/orders");
       assert.equal(payload.path, "tables/orders.md");
-      assert.deepEqual(payload.updatedKeys, ["title"]);
+      assert.deepEqual(payload.updatedKeys, ["title", "timestamp"]);
       assert.deepEqual(payload.deletedKeys, ["owner"]);
       assert.equal(payload.replacedSection, "Schema");
       assert.equal(payload.uri, "okf://t/tables/orders.md");
@@ -740,6 +740,38 @@ describe("authoring tools", () => {
       })) as { frontmatter: Record<string, unknown> };
       assert.equal(concept.frontmatter.title, "Order Facts");
       assert.equal(concept.frontmatter.owner, undefined);
+    });
+
+    it("refreshes timestamp by default and pins it with keepTimestamp", async () => {
+      await writeConcept(
+        root,
+        "tables/stamped.md",
+        { type: "Table", timestamp: "2020-01-01T00:00:00Z" },
+        "Body",
+      );
+      const client = await connectLocal({ writable: true });
+
+      const pinned = await callTool(client, "update_concept", {
+        id: "tables/stamped",
+        frontmatter: { owner: "core" },
+        keepTimestamp: true,
+      });
+      assert.notEqual(pinned.isError, true);
+      let concept = (await callJson(client, "get_concept", { id: "tables/stamped" })) as {
+        frontmatter: Record<string, unknown>;
+      };
+      assert.equal(concept.frontmatter.timestamp, "2020-01-01T00:00:00Z");
+
+      const before = Date.now();
+      const refreshed = await callTool(client, "update_concept", {
+        id: "tables/stamped",
+        frontmatter: { owner: "data" },
+      });
+      assert.notEqual(refreshed.isError, true);
+      concept = (await callJson(client, "get_concept", { id: "tables/stamped" })) as {
+        frontmatter: Record<string, unknown>;
+      };
+      assert.ok(Date.parse(concept.frontmatter.timestamp as string) >= before);
     });
 
     it("rejects an unknown section without writing anything", async () => {

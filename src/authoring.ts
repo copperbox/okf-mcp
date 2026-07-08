@@ -146,6 +146,12 @@ export interface UpdateConceptInput {
    * rest of the body stays byte-for-byte intact.
    */
   section?: { heading: string; content: string };
+  /**
+   * Keep the existing `timestamp` byte-for-byte instead of refreshing it to
+   * the current time. An explicit `timestamp` in the frontmatter patch
+   * (including null to delete) also suppresses the refresh and always wins.
+   */
+  keepTimestamp?: boolean;
 }
 
 export interface UpdateConceptResult {
@@ -153,7 +159,7 @@ export interface UpdateConceptResult {
   path: string;
   /** Frontmatter title after the update, when the concept has one. */
   title?: string;
-  /** Frontmatter keys set or overwritten, in patch order. */
+  /** Frontmatter keys set or overwritten, in patch order; includes `timestamp` when the default refresh applied it. */
   updatedKeys: string[];
   /** Frontmatter keys deleted by an explicit null, in patch order. */
   deletedKeys: string[];
@@ -167,8 +173,12 @@ export interface UpdateConceptResult {
  * so everything outside the touched spans survives byte-for-byte — round-trip
  * preservation of unknown keys (spec §4.1) as a server guarantee, and a
  * smaller write surface than a full rewrite when humans edit concurrently.
- * `timestamp` is only changed when the patch includes it. Does not touch the
- * in-memory index — reload the bundle afterwards.
+ * `timestamp` is refreshed to the write time by default (spec §4.1: datetime
+ * of last meaningful change, matching writeConcept), through the same
+ * in-place patch so everything else still survives; a concept without the
+ * key gains one in its spec-order slot. An explicit `timestamp` in the patch
+ * or `keepTimestamp: true` pins it. Does not touch the in-memory index —
+ * reload the bundle afterwards.
  */
 export async function updateConcept(
   bundle: LoadedBundle,
@@ -192,13 +202,29 @@ export async function updateConcept(
   const absolute = path.join(bundle.root, concept.path);
   let source = await fs.readFile(absolute, "utf8");
 
+  // A partial update is a meaningful change (spec §4.1), so refresh
+  // `timestamp` like writeConcept does unless the caller pins it.
+  const refreshTimestamp = input.keepTimestamp !== true && !("timestamp" in patch);
+  const effectivePatch: Record<string, unknown> = refreshTimestamp
+    ? { ...patch, timestamp: new Date().toISOString() }
+    : patch;
+
   let updatedKeys: string[] = [];
   let deletedKeys: string[] = [];
-  if (hasPatch) {
-    const patched = patchFrontmatter(source, patch);
-    source = patched.source;
-    updatedKeys = patched.set;
-    deletedKeys = patched.deleted;
+  if (Object.keys(effectivePatch).length > 0) {
+    try {
+      const patched = patchFrontmatter(source, effectivePatch, {
+        insertAfter: { timestamp: SPEC_KEYS },
+      });
+      source = patched.source;
+      updatedKeys = patched.set;
+      deletedKeys = patched.deleted;
+    } catch (err) {
+      // The caller's own patch must apply, but the implicit timestamp refresh
+      // is best-effort: a section-only update of a document without a
+      // patchable frontmatter block still goes through, just unstamped.
+      if (hasPatch) throw err;
+    }
   }
 
   let replacedSection: string | undefined;
