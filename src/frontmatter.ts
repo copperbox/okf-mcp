@@ -1,4 +1,5 @@
-import { isMap, parse, parseDocument, stringify } from "yaml";
+import { isMap, isScalar, parse, parseDocument, stringify } from "yaml";
+import type { Pair, YAMLMap } from "yaml";
 
 export interface FrontmatterSplit {
   /** Parsed frontmatter mapping, or null when absent or unparseable. */
@@ -60,6 +61,17 @@ export function splitFrontmatter(source: string): FrontmatterSplit {
   }
 }
 
+export interface PatchFrontmatterOptions {
+  /**
+   * Placement anchors for keys the patch creates: when the patch adds a key
+   * that did not exist and `insertAfter[key]` is given, the new key is
+   * inserted after the last of those anchor keys present in the mapping (at
+   * the top when none are) instead of appended at the end. Keys that already
+   * exist are overwritten in place and never move.
+   */
+  insertAfter?: Record<string, readonly string[]>;
+}
+
 export interface FrontmatterPatchResult {
   /** The document with the patch applied; everything outside the YAML block is byte-for-byte intact. */
   source: string;
@@ -80,6 +92,7 @@ export interface FrontmatterPatchResult {
 export function patchFrontmatter(
   source: string,
   patch: Record<string, unknown>,
+  options: PatchFrontmatterOptions = {},
 ): FrontmatterPatchResult {
   if (!OPEN_DELIMITER.test(source)) {
     throw new Error("document has no frontmatter block to patch");
@@ -112,8 +125,12 @@ export function patchFrontmatter(
     if (value === null) {
       if (doc.delete(key)) deleted.push(key);
     } else {
+      const anchors = doc.has(key) ? undefined : options.insertAfter?.[key];
       doc.set(key, value);
       set.push(key);
+      if (anchors !== undefined && isMap(doc.contents)) {
+        moveAfterAnchors(doc.contents, key, anchors);
+      }
     }
   }
   if (set.length === 0 && deleted.length === 0) {
@@ -124,6 +141,36 @@ export function patchFrontmatter(
     set,
     deleted,
   };
+}
+
+/**
+ * Key of a mapping pair when it is scalar-like: a Scalar node when parsed,
+ * a plain string when created by `doc.set` (frontmatter keys always are).
+ */
+function scalarKey(pair: Pair): string | undefined {
+  if (isScalar(pair.key)) return String(pair.key.value);
+  if (typeof pair.key === "string") return pair.key;
+  return undefined;
+}
+
+/**
+ * Move `key`'s pair to sit after the last of `anchors` present in the map,
+ * or first when none are — slotting a newly created key into its canonical
+ * position instead of the end of the mapping.
+ */
+function moveAfterAnchors(map: YAMLMap, key: string, anchors: readonly string[]): void {
+  const items = map.items;
+  const from = items.findIndex((pair) => scalarKey(pair) === key);
+  if (from === -1) return;
+  let to = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (i === from) continue;
+    const itemKey = scalarKey(items[i]!);
+    if (itemKey !== undefined && anchors.includes(itemKey)) to = i + 1;
+  }
+  const [pair] = items.splice(from, 1);
+  if (to > from) to -= 1;
+  items.splice(to, 0, pair!);
 }
 
 /** Serialize frontmatter and body back into a concept document. */

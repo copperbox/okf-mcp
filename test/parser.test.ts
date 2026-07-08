@@ -89,6 +89,37 @@ describe("patchFrontmatter", () => {
     assert.ok(result.source.endsWith("---\n\nBody.\n"));
   });
 
+  it("slots a newly created key after its insertAfter anchors", () => {
+    const result = patchFrontmatter(
+      DOC,
+      { timestamp: "2026-07-08T00:00:00Z" },
+      { insertAfter: { timestamp: ["type"] } },
+    );
+    assert.deepEqual(result.set, ["timestamp"]);
+    assert.match(
+      result.source,
+      /type: Table\ntimestamp: 2026-07-08T00:00:00Z\n# owner comes from CODEOWNERS\nowner: data-team\n/,
+    );
+  });
+
+  it("slots a new key at the top when none of its anchors are present", () => {
+    const result = patchFrontmatter(
+      DOC,
+      { timestamp: "2026-07-08T00:00:00Z" },
+      { insertAfter: { timestamp: ["description", "tags"] } },
+    );
+    assert.match(result.source, /^---\ntimestamp: 2026-07-08T00:00:00Z\ntype: Table\n/);
+  });
+
+  it("overwrites an existing key in place even when insertAfter names it", () => {
+    const result = patchFrontmatter(
+      DOC,
+      { title: "New Title" },
+      { insertAfter: { title: ["type"] } },
+    );
+    assert.match(result.source, /owner: data-team\ntitle: New Title\n---/);
+  });
+
   it("rejects documents without a parseable frontmatter mapping", () => {
     assert.throws(() => patchFrontmatter("# No frontmatter\n", { a: 1 }), /no frontmatter/);
     assert.throws(() => patchFrontmatter("---\ntype: Note\n\nBody.", { a: 1 }), /unterminated/);

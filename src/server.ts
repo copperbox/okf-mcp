@@ -770,7 +770,7 @@ export function createOkfServer(
       {
         title: "Update concept",
         description:
-          "Partially update a concept without rewriting the whole document: shallow-merge a frontmatter patch and/or replace one body section by heading. Everything not named in the update — other frontmatter keys, YAML comments and formatting, the rest of the body — is preserved byte-for-byte. Appends a log.md entry and regenerates index.md files.",
+          "Partially update a concept without rewriting the whole document: shallow-merge a frontmatter patch and/or replace one body section by heading. Everything not named in the update — other frontmatter keys, YAML comments and formatting, the rest of the body — is preserved byte-for-byte, except `timestamp`, which refreshes to the current UTC time (spec §4.1: last meaningful change) unless pinned via the patch or `keepTimestamp`. Appends a log.md entry and regenerates index.md files.",
         inputSchema: {
           bundle: bundleParam,
           id: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
@@ -778,7 +778,7 @@ export function createOkfServer(
             .record(z.unknown())
             .optional()
             .describe(
-              "Frontmatter keys to set/overwrite; an explicit null deletes a key. `timestamp` is only changed when included here",
+              "Frontmatter keys to set/overwrite; an explicit null deletes a key. Including `timestamp` (a value, or null to delete) overrides the default refresh",
             ),
           section: z
             .object({
@@ -794,18 +794,25 @@ export function createOkfServer(
             })
             .optional()
             .describe("Replace one body section, leaving the rest of the body untouched"),
+          keepTimestamp: z
+            .boolean()
+            .optional()
+            .describe(
+              "Preserve the existing `timestamp` byte-for-byte instead of refreshing it to now",
+            ),
           logMessage: z
             .string()
             .optional()
             .describe("Entry for log.md; a default is generated when omitted"),
         },
       },
-      async ({ bundle, id, frontmatter, section, logMessage }) => {
+      async ({ bundle, id, frontmatter, section, keepTimestamp, logMessage }) => {
         const target = store.bundle(bundle);
         assertWritableBundle(target);
         const result = await updateConcept(target, id, {
           ...(frontmatter !== undefined && { frontmatter }),
           ...(section !== undefined && { section }),
+          ...(keepTimestamp !== undefined && { keepTimestamp }),
         });
         await logAndReindex(
           target,
