@@ -116,6 +116,16 @@ describe("reload_bundles tool", () => {
     );
     assert.equal(concept.frontmatter.type, "Table");
   });
+
+  it("derives resource names from the filename when frontmatter has no title", async () => {
+    const store = new OkfStore([{ id: "t", root }]);
+    await store.load();
+    const client = await connect(store);
+
+    const resources = await client.listResources();
+    const orders = resources.resources.find((r) => r.uri === "okf://t/orders.md");
+    assert.equal(orders?.name, "Orders");
+  });
 });
 
 describe("remote bundle tools", () => {
@@ -379,6 +389,18 @@ describe("server tools", () => {
       { tag: "oncall", count: 1 },
       { tag: "orders", count: 1 },
     ]);
+  });
+
+  it("search_concepts looks up a concept by its exact resource URI", async () => {
+    const result = (await callJson(client, "search_concepts", {
+      resource: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+    })) as { hits: Array<{ id: string; resource?: string }>; total: number };
+    assert.equal(result.total, 1);
+    assert.equal(result.hits[0]?.id, "tables/orders");
+    assert.equal(
+      result.hits[0]?.resource,
+      "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+    );
   });
 
   it("get_concept lists body section headings alongside the full body", async () => {
