@@ -332,7 +332,7 @@ describe("remote bundle tools", () => {
     assert.notEqual(rootIndex.isError, true);
     assert.equal((rootIndex as { synthesized?: boolean }).synthesized, true);
     assert.match(textContent(rootIndex), /# Bundle Index/);
-    assert.match(textContent(rootIndex), /\[tables\]\(tables\/\)/);
+    assert.match(textContent(rootIndex), /\[tables\]\(tables\/index\.md\)/);
 
     const tablesIndex = await callTool(client, "read_document", {
       bundle: "shared",
@@ -1147,7 +1147,7 @@ describe("authoring tools", () => {
       const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
       assert.match(rootIndex, /okf_version: "0\.2"/);
       assert.match(rootIndex, /owner: data-team/);
-      assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+      assert.match(rootIndex, /\[tables\]\(tables\/index\.md\)/);
     });
 
     it("regenerate_indexes reports which indexes were skipped and why", async () => {

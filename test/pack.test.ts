@@ -97,7 +97,7 @@ describe("packBundle", () => {
     assert.equal(loaded.okfVersion, "0.2");
     const rootIndex = loaded.sources!.get("index.md")!;
     assert.match(rootIndex, /owner: data-team/);
-    assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    assert.match(rootIndex, /\[tables\]\(tables\/index\.md\)/);
   });
 
   it("keeps hand-curated indexes (generated: false) verbatim", async () => {

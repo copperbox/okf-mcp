@@ -637,7 +637,10 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
     if (dirs.size > 0) {
       lines.push("# Directories", "");
       for (const sub of [...dirs].sort()) {
-        lines.push(`* [${sub}](${sub}/)`);
+        // Target the subdirectory's index file rather than the bare
+        // directory: Obsidian does not resolve trailing-slash links, and
+        // spec §6 only requires a relative URL.
+        lines.push(`* [${sub}](${sub}/index.md)`);
       }
       lines.push("");
     }

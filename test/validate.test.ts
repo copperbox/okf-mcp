@@ -114,6 +114,28 @@ describe("validateBundle reserved-file structure (spec §9.3)", () => {
     assert.equal(frontmatter.length, 1);
   });
 
+  it("accepts both directory-link forms in an index (bare `sub/` and `sub/index.md`)", async () => {
+    // Older bundles link subdirectories as `sub/`; regeneration now emits
+    // `sub/index.md` (resolvable in Obsidian). Both are valid §6 entries.
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "index.md",
+          source:
+            "# Bundle Index\n\n# Directories\n\n* [old](old/)\n* [new](new/index.md)\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const indexProblems = [...result.errors, ...result.warnings].filter(
+      (p) => p.path === "index.md",
+    );
+    assert.deepEqual(indexProblems, []);
+  });
+
   it("reports no reserved-file problems for a well-formed bundle", async () => {
     const result = await report(ACME);
     const reserved = [...result.errors, ...result.warnings].filter(
