@@ -8,6 +8,7 @@ import {
 } from "../src/frontmatter.js";
 import {
   conceptIdFromPath,
+  deriveTitle,
   extractCitations,
   extractLinks,
   extractSection,
@@ -356,5 +357,38 @@ describe("extractCitations", () => {
 describe("conceptIdFromPath", () => {
   it("strips the .md suffix", () => {
     assert.equal(conceptIdFromPath("tables/orders.md"), "tables/orders");
+  });
+});
+
+describe("deriveTitle", () => {
+  const concept = (path: string, frontmatter: { type: string; title?: string }) => ({
+    id: conceptIdFromPath(path),
+    path,
+    frontmatter,
+  });
+
+  it("uses the frontmatter title when present", () => {
+    assert.equal(
+      deriveTitle(concept("tables/orders.md", { type: "Table", title: "Orders" })),
+      "Orders",
+    );
+  });
+
+  it("derives a title-cased name from the filename, not the full path", () => {
+    assert.equal(
+      deriveTitle(concept("tables/customer-order-history.md", { type: "Table" })),
+      "Customer Order History",
+    );
+  });
+
+  it("treats underscores and repeated separators as single spaces", () => {
+    assert.equal(
+      deriveTitle(concept("notes/q3_planning--notes.md", { type: "Note" })),
+      "Q3 Planning Notes",
+    );
+  });
+
+  it("falls back to the concept ID when the filename has no words", () => {
+    assert.equal(deriveTitle(concept("notes/_.md", { type: "Note" })), "notes/_");
   });
 });

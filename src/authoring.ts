@@ -3,7 +3,13 @@ import path from "node:path";
 
 import { declaredOkfVersion } from "./bundle.js";
 import { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
-import { conceptIdFromPath, extractLinks, sectionSpan, splitSections } from "./parser.js";
+import {
+  conceptIdFromPath,
+  deriveTitle,
+  extractLinks,
+  sectionSpan,
+  splitSections,
+} from "./parser.js";
 import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
@@ -610,7 +616,7 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
       for (const file of files.sort()) {
         const concept = bundle.concepts.get(file.replace(/\.md$/i, ""))!;
         const name = path.posix.basename(file);
-        const title = concept.frontmatter.title ?? concept.id;
+        const title = deriveTitle(concept);
         const description = concept.frontmatter.description;
         lines.push(`* [${title}](${name})${description ? ` - ${description}` : ""}`);
       }

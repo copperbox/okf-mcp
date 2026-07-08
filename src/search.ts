@@ -1,11 +1,13 @@
-import { sectionAt } from "./parser.js";
+import { deriveTitle, sectionAt } from "./parser.js";
 import type { Concept, LoadedBundle } from "./types.js";
 
 export interface SearchFilters {
-  /** Case-insensitive text query over title, description, tags, ID, and body. */
+  /** Case-insensitive text query over title, description, resource, tags, ID, and body. */
   query?: string;
   /** Match any of these `type` values (case-insensitive). */
   types?: string[];
+  /** Exact frontmatter `resource` URI, for asset-URI → concept lookup. */
+  resource?: string;
   /** Concept must carry at least one of these tags. */
   tagsAny?: string[];
   /** Concept must carry all of these tags. */
@@ -23,14 +25,19 @@ export interface SearchFilters {
 }
 
 /** Fields the text query is matched against, in scoring order. */
-export type MatchField = "id" | "title" | "description" | "tags" | "body";
+export type MatchField = "id" | "title" | "resource" | "description" | "tags" | "body";
 
 export interface SearchHit {
   bundle: string;
   id: string;
   type: string;
-  title?: string;
+  /** Frontmatter title, or a display title derived from the filename (spec §4.1). */
+  title: string;
+  /** True when `title` was derived — the concept has no authored frontmatter title. */
+  titleDerived?: boolean;
   description?: string;
+  /** Frontmatter `resource` URI: the asset this concept describes (spec §4.1). */
+  resource?: string;
   tags?: string[];
   score: number;
   /** Which fields the query matched. Present only when a query was given. */
@@ -52,7 +59,7 @@ function lower(values: string[] | undefined): Set<string> {
 
 function score(concept: Concept, query: string): { total: number; matchedIn: MatchField[] } {
   const q = query.toLowerCase();
-  const { title, description, tags } = concept.frontmatter;
+  const { title, description, resource, tags } = concept.frontmatter;
   const matchedIn: MatchField[] = [];
   let total = 0;
   const hit = (points: number, field: MatchField) => {
@@ -61,6 +68,7 @@ function score(concept: Concept, query: string): { total: number; matchedIn: Mat
   };
   if (concept.id.toLowerCase().includes(q)) hit(5, "id");
   if (title?.toLowerCase().includes(q)) hit(5, "title");
+  if (resource?.toLowerCase().includes(q)) hit(4, "resource");
   if (description?.toLowerCase().includes(q)) hit(3, "description");
   if ((tags ?? []).some((tag) => tag.toLowerCase().includes(q))) hit(3, "tags");
   if (concept.body.toLowerCase().includes(q)) hit(1, "body");
@@ -135,6 +143,8 @@ export function searchConcepts(
       if (tagsAny.size > 0 && ![...tagsAny].some((t) => tags.has(t))) continue;
       if (tagsAll.size > 0 && ![...tagsAll].every((t) => tags.has(t))) continue;
       if (filters.pathPrefix !== undefined && !concept.id.startsWith(filters.pathPrefix)) continue;
+      if (filters.resource !== undefined && concept.frontmatter.resource !== filters.resource)
+        continue;
       if (
         filters.linkedTo !== undefined &&
         !concept.links.some((l) => l.resolvedId === filters.linkedTo)
@@ -162,9 +172,13 @@ export function searchConcepts(
         bundle: bundle.id,
         id: concept.id,
         type: concept.frontmatter.type,
-        ...(concept.frontmatter.title !== undefined && { title: concept.frontmatter.title }),
+        title: deriveTitle(concept),
+        ...(concept.frontmatter.title === undefined && { titleDerived: true }),
         ...(concept.frontmatter.description !== undefined && {
           description: concept.frontmatter.description,
+        }),
+        ...(concept.frontmatter.resource !== undefined && {
+          resource: concept.frontmatter.resource,
         }),
         ...(concept.frontmatter.tags !== undefined && { tags: concept.frontmatter.tags }),
         score: relevance,

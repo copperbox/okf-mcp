@@ -575,6 +575,16 @@ describe("authoring", () => {
     assert.equal(await fs.readFile(path.join(root, "index.md"), "utf8"), curated);
   });
 
+  it("derives index entry titles from the filename when frontmatter has none", async () => {
+    await writeConcept(root, "tables/customer-order-history.md", { type: "Table" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    const rendered = renderIndexes(bundle);
+    assert.match(
+      rendered.get("tables/index.md")!,
+      /\[Customer Order History\]\(customer-order-history\.md\)/,
+    );
+  });
+
   it("renders index content in memory without writing files", async () => {
     await writeConcept(
       root,

@@ -35,6 +35,9 @@ function checkDeclaredVersion(bundle: LoadedBundle): BundleProblem[] {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** ISO 8601 date, optionally with a time part (offset or Z). */
+const ISO_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 /** A `##` (exactly level-2) ATX heading, capturing its text. */
 const H2 = /^##(?!#)\s+(.*?)\s*$/;
 const HEADING = /^#{1,6}\s/;
@@ -44,6 +47,74 @@ const LINK_BULLET = /^[*+-]\s+\[[^\]]*\]\([^)]*\)/;
 
 function excerpt(line: string): string {
   return line.length > 60 ? `${line.slice(0, 57)}...` : line;
+}
+
+/** Render a frontmatter value for a warning message. */
+function describeValue(value: unknown): string {
+  return excerpt(JSON.stringify(value) ?? String(value));
+}
+
+/**
+ * Soft checks for the recommended §4.1 frontmatter fields, run against the
+ * raw YAML mapping (the parser normalizes `tags` before a concept is
+ * indexed, so the loaded frontmatter no longer shows what was written).
+ * Recommended fields are guidance, so malformed values warn — never error
+ * (spec §9) — giving enrichment agents the feedback to self-correct. A key
+ * with a null value (`title:` with nothing after it) is treated as absent,
+ * matching how the parser treats empty keys.
+ */
+function checkRecommendedFrontmatter(
+  path: string,
+  data: Record<string, unknown>,
+): BundleProblem[] {
+  const problems: BundleProblem[] = [];
+  const warn = (message: string) =>
+    problems.push({ severity: "warning", path, message });
+
+  for (const field of ["title", "description", "resource"] as const) {
+    const value = data[field];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string") {
+      warn(
+        `\`${field}\` should be a string (spec §4.1); found ${describeValue(value)}`,
+      );
+    }
+  }
+
+  const resource = data.resource;
+  if (typeof resource === "string" && !URL.canParse(resource)) {
+    warn(
+      `\`resource\` should be a parseable URI (spec §4.1); found ${describeValue(resource)}`,
+    );
+  }
+
+  const timestamp = data.timestamp;
+  if (
+    timestamp !== undefined &&
+    timestamp !== null &&
+    (typeof timestamp !== "string" ||
+      !ISO_TIMESTAMP.test(timestamp) ||
+      Number.isNaN(Date.parse(timestamp)))
+  ) {
+    warn(
+      `\`timestamp\` should be an ISO 8601 datetime (spec §4.1); found ${describeValue(timestamp)}`,
+    );
+  }
+
+  const tags = data.tags;
+  if (tags !== undefined && tags !== null) {
+    if (!Array.isArray(tags)) {
+      warn(
+        `\`tags\` should be a YAML list of strings (spec §4.1); the scalar ${describeValue(tags)} was normalized to a one-element list`,
+      );
+    } else if (tags.some((tag) => typeof tag !== "string")) {
+      warn(
+        `\`tags\` should be a YAML list of strings (spec §4.1); non-string items in ${describeValue(tags)} were coerced to strings`,
+      );
+    }
+  }
+
+  return problems;
 }
 
 /**
@@ -129,7 +200,8 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
  * collects most problems; this adds reserved-file structure checks
  * of spec §9.3 (every index.md follows §6, every log.md follows §7,
  * and index.md frontmatter is only permitted at the bundle root per
- * §11) and citation hygiene warnings (spec §8).
+ * §11), recommended-frontmatter warnings (spec §4.1), and citation
+ * hygiene warnings (spec §8).
  */
 export async function validateBundle(
   bundle: LoadedBundle,
@@ -139,8 +211,15 @@ export async function validateBundle(
     ...checkDeclaredVersion(bundle),
   ];
 
-  // Citation problems are soft, consistent with §9's broken-link tolerance.
+  // Recommended-field and citation problems are soft, consistent with
+  // §9's tolerance of imperfect documents.
   for (const concept of bundle.concepts.values()) {
+    const raw = splitFrontmatter(
+      await readBundleDocument(bundle, concept.path),
+    ).data;
+    if (raw !== null) {
+      problems.push(...checkRecommendedFrontmatter(concept.path, raw));
+    }
     const { citations, malformed } = extractCitations(
       concept.body,
       concept.path,

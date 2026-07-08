@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { splitFrontmatter } from "./frontmatter.js";
-import type { ConceptFrontmatter, ConceptLink } from "./types.js";
+import type { Concept, ConceptFrontmatter, ConceptLink } from "./types.js";
 
 export interface ParsedConceptDocument {
   frontmatter: ConceptFrontmatter | null;
@@ -15,6 +15,24 @@ export interface ParsedConceptDocument {
 /** Strip the `.md` suffix to turn a bundle-relative path into a concept ID. */
 export function conceptIdFromPath(relPath: string): string {
   return relPath.replace(/\.md$/i, "");
+}
+
+/**
+ * Display title for a concept: the frontmatter `title` when present,
+ * otherwise derived from the filename (spec §4.1 allows this) — `.md`
+ * stripped, `-`/`_` as spaces, title-cased. Falls back to the concept ID
+ * when the filename contains no words.
+ */
+export function deriveTitle(concept: Pick<Concept, "id" | "path" | "frontmatter">): string {
+  if (concept.frontmatter.title !== undefined) return concept.frontmatter.title;
+  const derived = path.posix
+    .basename(concept.path)
+    .replace(/\.md$/i, "")
+    .split(/[-_\s]+/)
+    .filter((word) => word !== "")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+  return derived === "" ? concept.id : derived;
 }
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;

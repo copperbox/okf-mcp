@@ -48,6 +48,7 @@ export type {
 } from "./graph.js";
 export {
   conceptIdFromPath,
+  deriveTitle,
   extractCitations,
   extractLinks,
   extractSection,
