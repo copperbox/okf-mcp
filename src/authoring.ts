@@ -104,6 +104,17 @@ function requireConcept(bundle: LoadedBundle, idOrPath: string, action: string):
   return concept;
 }
 
+/**
+ * Offset where the body begins within `source`, for shifting body-relative
+ * offsets (links, sections) to source offsets. When the body is not a literal
+ * suffix of the source (it always is for LF documents), returns 0 so callers
+ * treat the whole source as the body and offsets stay valid.
+ */
+function bodyStartOffset(source: string): number {
+  const { body } = splitFrontmatter(source);
+  return source.endsWith(body) ? source.length - body.length : 0;
+}
+
 /** Concepts (other than the target itself) with a link resolving to `conceptId`. */
 function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
   return [...bundle.concepts.values()].filter(
@@ -182,11 +193,7 @@ export async function updateConcept(
 
   let replacedSection: string | undefined;
   if (input.section !== undefined) {
-    const split = splitFrontmatter(source);
-    // Section offsets are relative to the body; when the body is a literal
-    // suffix of the source (always true for LF documents), splice at source
-    // offsets. Otherwise treat the whole source as the body.
-    const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+    const bodyStart = bodyStartOffset(source);
     const body = source.slice(bodyStart);
     const span = sectionSpan(body, input.section.heading);
     if (span === undefined) {
@@ -381,11 +388,7 @@ async function rewriteLinksInFile(
 ): Promise<boolean> {
   const absolute = path.join(bundleRoot, fileAt);
   const source = await fs.readFile(absolute, "utf8");
-  const split = splitFrontmatter(source);
-  // Link offsets are relative to the body; when the body is a literal suffix
-  // of the source (always true for LF documents), shift them to source
-  // offsets. Otherwise scan the whole source so offsets stay valid.
-  const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+  const bodyStart = bodyStartOffset(source);
   const fromDir = path.posix.dirname(fileAt);
 
   const edits: Array<{ start: number; end: number; replacement: string }> = [];
