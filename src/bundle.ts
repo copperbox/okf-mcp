@@ -106,7 +106,7 @@ export function buildBundle(
     });
   }
 
-  resolveLinks(concepts, problems);
+  resolveLinks(concepts, reserved, problems);
   return {
     id,
     root,
@@ -185,19 +185,25 @@ export async function readBundleDocument(
 /**
  * Resolve concept-kind links against the loaded concept set. A `.md`
  * suffix is optional in link targets (Obsidian-style extensionless links
- * resolve too). Unresolved links are warnings, never errors (spec §5.3).
+ * resolve too). Unresolved links are warnings, never errors (spec §5.3):
+ * each one that plausibly targets a concept is marked `broken` and
+ * reported as a missing-concept warning.
  */
 function resolveLinks(
   concepts: Map<string, Concept>,
+  reserved: ReservedFile[],
   problems: BundleProblem[],
 ): void {
+  const directories = knownDirectories(concepts, reserved);
+  const reservedPaths = new Set(reserved.map((file) => file.path));
   for (const concept of concepts.values()) {
     for (const link of concept.links) {
       if (link.kind !== "concept" || link.path === undefined) continue;
       const id = conceptIdFromPath(link.path);
       if (concepts.has(id)) {
         link.resolvedId = id;
-      } else if (link.path.toLowerCase().endsWith(".md")) {
+      } else if (targetsMissingConcept(link.path, directories, reservedPaths)) {
+        link.broken = true;
         problems.push({
           severity: "warning",
           path: concept.path,
@@ -206,4 +212,40 @@ function resolveLinks(
       }
     }
   }
+}
+
+/** Every directory (at any depth) holding a concept or reserved file. */
+function knownDirectories(
+  concepts: Map<string, Concept>,
+  reserved: ReservedFile[],
+): Set<string> {
+  const directories = new Set<string>();
+  const paths = [...concepts.values()].map((c) => c.path);
+  paths.push(...reserved.map((file) => file.path));
+  for (const relPath of paths) {
+    let dir = path.posix.dirname(relPath);
+    while (dir !== ".") {
+      directories.add(dir);
+      dir = path.posix.dirname(dir);
+    }
+  }
+  return directories;
+}
+
+/**
+ * Whether an unresolved concept-kind link plausibly targets a concept the
+ * bundle does not have: any `.md` target, and an extensionless target that
+ * names neither an existing directory nor a reserved file. Trailing-slash
+ * directory links and targets with another extension (assets) are exempt.
+ */
+function targetsMissingConcept(
+  linkPath: string,
+  directories: Set<string>,
+  reservedPaths: Set<string>,
+): boolean {
+  if (linkPath.endsWith("/")) return false;
+  if (linkPath.toLowerCase().endsWith(".md")) return true;
+  if (path.posix.basename(linkPath).includes(".")) return false;
+  if (reservedPaths.has(`${linkPath}.md`)) return false;
+  return !directories.has(linkPath);
 }

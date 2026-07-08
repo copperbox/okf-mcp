@@ -33,8 +33,48 @@ describe("loadBundle", () => {
     const resolved = playbook.links.filter((l) => l.resolvedId !== undefined);
     assert.deepEqual(resolved.map((l) => l.resolvedId), ["tables/orders"]);
     const broken = bundle.problems.filter((p) => p.message.includes("missing concept"));
+    // shipments.md (broken .md link) + retired-runbook (broken extensionless link)
+    assert.equal(broken.length, 2);
+    assert.ok(broken.every((p) => p.severity === "warning"));
+  });
+
+  it("warns on broken extensionless concept links (issue #49)", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "note.md", source: "---\ntype: Note\n---\n\nSee [orders](/tables/orders).\n" },
+    ]);
+    const broken = bundle.problems.filter((p) => p.message.includes("missing concept"));
     assert.equal(broken.length, 1);
     assert.equal(broken[0]?.severity, "warning");
+    assert.equal(broken[0]?.path, "note.md");
+    assert.match(broken[0]!.message, /\/tables\/orders/);
+    const link = bundle.concepts.get("note")!.links[0]!;
+    assert.equal(link.broken, true);
+  });
+
+  it("exempts directories, assets, and reserved files from extensionless broken-link warnings", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "# Index\n" },
+      { path: "guides/index.md", source: "# Guides\n" },
+      { path: "guides/log.md", source: "# Update Log\n" },
+      { path: "guides/setup.md", source: "---\ntype: Note\n---\n\nSetup.\n" },
+      {
+        path: "note.md",
+        source: [
+          "---",
+          "type: Note",
+          "---",
+          "",
+          "A [directory](/guides) and a [trailing slash](/guides/), an",
+          "[asset](/assets/diagram.png), the [root index](/index), and the",
+          "[scoped log](/guides/log) are not missing concepts; only",
+          "[gone](/gone) is.",
+        ].join("\n"),
+      },
+    ]);
+    const broken = bundle.problems.filter((p) => p.message.includes("missing concept"));
+    assert.deepEqual(broken.map((p) => p.message), ["link to missing concept: /gone"]);
+    const flagged = bundle.concepts.get("note")!.links.filter((l) => l.broken);
+    assert.deepEqual(flagged.map((l) => l.target), ["/gone"]);
   });
 
   it("parses okf_version from the bundle-root index.md (spec §11)", async () => {

@@ -33,8 +33,10 @@ describe("graph", () => {
     const graph = buildGraph(bundle);
     assert.equal(graph.nodes.length, 5);
     assert.equal(graph.edges.length, 6); // includes both orders→customers links (schema + citation)
-    assert.equal(graph.warnings.length, 1);
-    assert.match(graph.warnings[0]!, /shipments/);
+    // Broken .md and extensionless links both count (issue #49).
+    assert.equal(graph.warnings.length, 2);
+    assert.ok(graph.warnings.some((w) => /shipments/.test(w)));
+    assert.ok(graph.warnings.some((w) => /retired-runbook/.test(w)));
   });
 
   it("includes external targets as opaque nodes when asked", () => {
@@ -48,6 +50,7 @@ describe("graph", () => {
     assert.equal(summary.okfVersion, "0.1");
     assert.equal(summary.concepts, 5);
     assert.equal(summary.types["BigQuery Table"], 2);
+    assert.equal(summary.brokenLinks, 2); // shipments (.md) + retired-runbook (extensionless)
     assert.deepEqual(summary.orphans, ["notes/no-type"]);
   });
 
