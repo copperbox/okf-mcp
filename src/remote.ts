@@ -31,7 +31,8 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${pattern}$`);
 }
 
-function matchesFilters(
+/** Whether a bundle-relative path passes include (when given) and exclude globs. */
+export function matchesFilters(
   relPath: string,
   include: string[] | undefined,
   exclude: string[] | undefined,
@@ -138,10 +139,10 @@ async function listMarkdownFiles(
   return files.sort((a, b) => (a.relPath < b.relPath ? -1 : 1));
 }
 
-type ArchiveKind = "tar.gz" | "zip";
+export type ArchiveKind = "tar.gz" | "zip";
 
 /** Detect an archive source by extension (query strings ignored for URLs). */
-function archiveKind(url: string): ArchiveKind | null {
+export function archiveKind(url: string): ArchiveKind | null {
   let pathname = url;
   if (/^https?:\/\//i.test(url)) {
     try {
