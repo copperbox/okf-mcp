@@ -11,6 +11,7 @@ import {
   generateIndexes,
   renameConcept,
   renderIndexes,
+  updateConcept,
   writeConcept,
 } from "../src/authoring.js";
 import { loadBundle } from "../src/bundle.js";
@@ -108,6 +109,143 @@ describe("authoring", () => {
     const timestamp = bundle.concepts.get("x")?.frontmatter.timestamp;
     assert.equal(typeof timestamp, "string");
     assert.ok(Date.parse(timestamp as string) >= before);
+  });
+
+  it("patches frontmatter keys, preserving untouched keys, comments, and the body byte-for-byte", async () => {
+    const original =
+      "---\n# reviewed 2026-06\ntype: Table\nowner: data-team\ntitle: Orders\n---\n\n# Schema\n\nColumns.\n";
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(path.join(root, "tables/orders.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "tables/orders", {
+      frontmatter: { title: "Order Facts", status: "active", owner: null },
+    });
+    assert.equal(result.id, "tables/orders");
+    assert.equal(result.path, "tables/orders.md");
+    assert.equal(result.title, "Order Facts");
+    assert.deepEqual(result.updatedKeys, ["title", "status"]);
+    assert.deepEqual(result.deletedKeys, ["owner"]);
+
+    const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+    assert.match(source, /# reviewed 2026-06\ntype: Table\n/);
+    assert.doesNotMatch(source, /owner: data-team/);
+    assert.match(source, /title: Order Facts/);
+    assert.ok(source.endsWith("---\n\n# Schema\n\nColumns.\n"));
+  });
+
+  it("replaces one body section, leaving the rest of the document byte-for-byte intact", async () => {
+    const original =
+      "---\ntype: Table\n---\n\nIntro.\n\n# Schema\n\nOld columns.\n\n## Keys\n\nOld key.\n\n# Examples\n\nQuery.\n";
+    await fs.writeFile(path.join(root, "orders.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "orders", {
+      section: { heading: "schema", content: "New columns.\n\n## Keys\n\nNew key." },
+    });
+    assert.equal(result.replacedSection, "Schema");
+    assert.deepEqual(result.updatedKeys, []);
+
+    const source = await fs.readFile(path.join(root, "orders.md"), "utf8");
+    assert.equal(
+      source,
+      "---\ntype: Table\n---\n\nIntro.\n\n# Schema\n\nNew columns.\n\n## Keys\n\nNew key.\n\n# Examples\n\nQuery.\n",
+    );
+  });
+
+  it("replaces the last section without disturbing the trailing newline", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOne.\n\n# B\n\nTwo.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", { section: { heading: "B", content: "New two." } });
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /# A\n\nOne\.\n\n# B\n\nNew two\.\n$/);
+  });
+
+  it("applies a frontmatter patch and a section replacement together", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", title: "X" },
+      "# A\n\nOne.\n\n# B\n\nTwo.",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "x", {
+      frontmatter: { title: "X2" },
+      section: { heading: "A", content: "New one." },
+    });
+    assert.deepEqual(result.updatedKeys, ["title"]);
+    assert.equal(result.replacedSection, "A");
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /title: X2/);
+    assert.match(source, /# A\n\nNew one\.\n\n# B\n\nTwo\.\n$/);
+  });
+
+  it("rejects an unknown section, listing what is available", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOne.\n\n# B\n\nTwo.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "x", { section: { heading: "C", content: "?" } }),
+      /no section "C".*available sections: A, B/,
+    );
+    // Nothing was written.
+    assert.match(await fs.readFile(path.join(root, "x.md"), "utf8"), /# A\n\nOne\./);
+  });
+
+  it("requires at least one of a frontmatter patch or a section replacement", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(updateConcept(bundle, "x", {}), /frontmatter patch|section/);
+    await assert.rejects(updateConcept(bundle, "x", { frontmatter: {} }), /frontmatter patch|section/);
+  });
+
+  it("refuses to delete or blank the required type key", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "x", { frontmatter: { type: null } }),
+      /non-empty `type`/,
+    );
+    await assert.rejects(
+      updateConcept(bundle, "x", { frontmatter: { type: " " } }),
+      /non-empty `type`/,
+    );
+  });
+
+  it("rejects reserved files and unknown concepts", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "log.md", { frontmatter: { a: 1 } }),
+      /reserved/,
+    );
+    await assert.rejects(
+      updateConcept(bundle, "nope", { frontmatter: { a: 1 } }),
+      /unknown concept/,
+    );
+  });
+
+  it("patches the document as it is on disk, not the loaded snapshot", async () => {
+    await writeConcept(root, "bare.md", { type: "Note" }, "# A\n\nOld.");
+    const bundle = await loadBundle({ id: "t", root });
+    // A concurrent editor stripped the frontmatter after the bundle loaded.
+    await fs.writeFile(path.join(root, "bare.md"), "# A\n\nNo frontmatter here.\n");
+
+    await assert.rejects(
+      updateConcept(bundle, "bare", { frontmatter: { owner: "x" } }),
+      /no frontmatter/,
+    );
+    // A section-only update still works against the on-disk state.
+    await updateConcept(bundle, "bare", { section: { heading: "A", content: "Patched." } });
+    assert.equal(
+      await fs.readFile(path.join(root, "bare.md"), "utf8"),
+      "# A\n\nPatched.\n",
+    );
   });
 
   it("prepends log entries newest-first grouped by day", async () => {

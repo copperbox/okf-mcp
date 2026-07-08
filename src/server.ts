@@ -13,6 +13,7 @@ import {
   generateIndexes,
   renameConcept,
   renderIndexes,
+  updateConcept,
   writeConcept,
 } from "./authoring.js";
 import { readBundleDocument } from "./bundle.js";
@@ -36,7 +37,7 @@ import { validateBundle } from "./validate.js";
 
 export interface ServerOptions {
   /**
-   * Allow the authoring tools (write_concept, delete_concept,
+   * Allow the authoring tools (write_concept, update_concept, delete_concept,
    * rename_concept, append_log_entry, regenerate_indexes).
    * Default: read-only.
    */
@@ -68,10 +69,13 @@ Obsidian), call reload_bundles before relying on current state.`;
   return `${shared}
 
 Writing: call suggest_concept_path before creating a concept so placement matches
-where similar concepts live, and reuse existing types/tags. write_concept,
-rename_concept, and delete_concept keep index.md navigation and the log.md history
-current — never edit those reserved files directly. Use append_log_entry for change
-narrative not tied to a single concept write. Remote bundles are always read-only.`;
+where similar concepts live, and reuse existing types/tags. Prefer update_concept
+for partial edits — it patches frontmatter keys and/or one body section, preserving
+the rest of the document — over full write_concept rewrites. write_concept,
+update_concept, rename_concept, and delete_concept keep index.md navigation and the
+log.md history current — never edit those reserved files directly. Use
+append_log_entry for change narrative not tied to a single concept write. Remote
+bundles are always read-only.`;
 }
 
 function json(data: unknown): CallToolResult {
@@ -669,6 +673,56 @@ export function createOkfServer(
         await logAndReindex(
           target,
           logMessage ?? `**${verb}**: ${verb === "Creation" ? "Created" : "Updated"} [${title}](/${result.path}).`,
+        );
+        return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
+      },
+    );
+
+    server.registerTool(
+      "update_concept",
+      {
+        title: "Update concept",
+        description:
+          "Partially update a concept without rewriting the whole document: shallow-merge a frontmatter patch and/or replace one body section by heading. Everything not named in the update — other frontmatter keys, YAML comments and formatting, the rest of the body — is preserved byte-for-byte. Appends a log.md entry and regenerates index.md files.",
+        inputSchema: {
+          bundle: bundleParam,
+          id: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
+          frontmatter: z
+            .record(z.unknown())
+            .optional()
+            .describe(
+              "Frontmatter keys to set/overwrite; an explicit null deletes a key. `timestamp` is only changed when included here",
+            ),
+          section: z
+            .object({
+              heading: z
+                .string()
+                .min(1)
+                .describe(
+                  "Body section heading to replace (case-insensitive, first match, including its subsections)",
+                ),
+              content: z
+                .string()
+                .describe("New markdown content for the section; the heading line is kept"),
+            })
+            .optional()
+            .describe("Replace one body section, leaving the rest of the body untouched"),
+          logMessage: z
+            .string()
+            .optional()
+            .describe("Entry for log.md; a default is generated when omitted"),
+        },
+      },
+      async ({ bundle, id, frontmatter, section, logMessage }) => {
+        const target = store.bundle(bundle);
+        assertWritableBundle(target);
+        const result = await updateConcept(target, id, {
+          ...(frontmatter !== undefined && { frontmatter }),
+          ...(section !== undefined && { section }),
+        });
+        await logAndReindex(
+          target,
+          logMessage ?? `**Update**: Updated [${result.title ?? result.id}](/${result.path}).`,
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
       },

@@ -222,6 +222,17 @@ describe("remote bundle tools", () => {
       /read-only/,
     );
 
+    const update = await client.callTool({
+      name: "update_concept",
+      arguments: {
+        bundle: "shared",
+        id: "tables/orders",
+        frontmatter: { title: "nope" },
+      },
+    });
+    assert.equal(update.isError, true);
+    assert.match((update.content as Array<{ text: string }>)[0]!.text, /read-only/);
+
     const del = await client.callTool({
       name: "delete_concept",
       arguments: { bundle: "shared", id: "tables/orders" },
@@ -652,6 +663,72 @@ describe("authoring tools", () => {
     return connectClient(new OkfStore([{ id: "t", root }]), options);
   }
 
+  describe("update_concept", () => {
+    it("is not registered on a read-only server", async () => {
+      const client = await connectLocal();
+      const tools = await client.listTools();
+      assert.ok(!tools.tools.some((tool) => tool.name === "update_concept"));
+    });
+
+    it("patches frontmatter and one section, logs an Update entry, and reindexes", async () => {
+      const original =
+        "---\n# reviewed 2026-06\ntype: Table\nowner: data-team\ntitle: Orders\n---\n\nIntro.\n\n# Schema\n\nOld columns.\n\n# Notes\n\nKeep.\n";
+      await fs.writeFile(path.join(root, "tables/orders.md"), original);
+      const client = await connectLocal({ writable: true });
+
+      const result = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        frontmatter: { title: "Order Facts", owner: null },
+        section: { heading: "schema", content: "New columns." },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(textContent(result)) as Record<string, unknown>;
+      assert.equal(payload.id, "tables/orders");
+      assert.equal(payload.path, "tables/orders.md");
+      assert.deepEqual(payload.updatedKeys, ["title"]);
+      assert.deepEqual(payload.deletedKeys, ["owner"]);
+      assert.equal(payload.replacedSection, "Schema");
+      assert.equal(payload.uri, "okf://t/tables/orders.md");
+
+      const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+      assert.match(source, /# reviewed 2026-06\ntype: Table\n/);
+      assert.doesNotMatch(source, /owner: data-team/);
+      assert.ok(
+        source.endsWith("---\n\nIntro.\n\n# Schema\n\nNew columns.\n\n# Notes\n\nKeep.\n"),
+      );
+
+      const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+      assert.match(log, /\*\*Update\*\*: Updated \[Order Facts\]\(\/tables\/orders\.md\)\./);
+      // Indexes were regenerated with the patched title.
+      const index = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+      assert.match(index, /\[Order Facts\]\(orders\.md\)/);
+      // The reloaded store serves the updated document.
+      const concept = (await callJson(client, "get_concept", {
+        id: "tables/orders",
+      })) as { frontmatter: Record<string, unknown> };
+      assert.equal(concept.frontmatter.title, "Order Facts");
+      assert.equal(concept.frontmatter.owner, undefined);
+    });
+
+    it("rejects an unknown section without writing anything", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        section: { heading: "Nope", content: "x" },
+      });
+      assert.equal(result.isError, true);
+      assert.match(textContent(result), /no section "Nope"/);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("rejects an empty update", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "update_concept", { id: "tables/orders" });
+      assert.equal(result.isError, true);
+      assert.match(textContent(result), /nothing to update/);
+    });
+  });
+
   describe("delete_concept", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connectLocal();
@@ -895,6 +972,7 @@ describe("server instructions", () => {
       "get_neighbors",
       "suggest_concept_path",
       "write_concept",
+      "update_concept",
       "append_log_entry",
       "reload_bundles",
       "index.md",

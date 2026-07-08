@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { declaredOkfVersion } from "./bundle.js";
-import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
-import { conceptIdFromPath, extractLinks } from "./parser.js";
+import { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
+import { conceptIdFromPath, extractLinks, sectionSpan, splitSections } from "./parser.js";
 import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
@@ -111,6 +111,121 @@ function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
       other.id !== conceptId &&
       other.links.some((link) => link.resolvedId === conceptId),
   );
+}
+
+export interface UpdateConceptInput {
+  /**
+   * Shallow frontmatter patch: set/overwrite the provided keys, delete on an
+   * explicit null. All other keys, YAML comments, and formatting survive.
+   */
+  frontmatter?: Record<string, unknown>;
+  /**
+   * Replace one body section's content by heading name (case-insensitive,
+   * first match, including its subsections). The heading line is kept and the
+   * rest of the body stays byte-for-byte intact.
+   */
+  section?: { heading: string; content: string };
+}
+
+export interface UpdateConceptResult {
+  id: string;
+  path: string;
+  /** Frontmatter title after the update, when the concept has one. */
+  title?: string;
+  /** Frontmatter keys set or overwritten, in patch order. */
+  updatedKeys: string[];
+  /** Frontmatter keys deleted by an explicit null, in patch order. */
+  deletedKeys: string[];
+  /** Heading of the replaced body section, as written in the document. */
+  replacedSection?: string;
+}
+
+/**
+ * Partially update one concept: patch its frontmatter and/or replace one body
+ * section, splicing the document as it is on disk (not the loaded snapshot)
+ * so everything outside the touched spans survives byte-for-byte — round-trip
+ * preservation of unknown keys (spec §4.1) as a server guarantee, and a
+ * smaller write surface than a full rewrite when humans edit concurrently.
+ * `timestamp` is only changed when the patch includes it. Does not touch the
+ * in-memory index — reload the bundle afterwards.
+ */
+export async function updateConcept(
+  bundle: LoadedBundle,
+  idOrPath: string,
+  input: UpdateConceptInput,
+): Promise<UpdateConceptResult> {
+  const concept = requireConcept(bundle, idOrPath, "updated");
+  const patch = input.frontmatter ?? {};
+  const hasPatch = Object.keys(patch).length > 0;
+  if (!hasPatch && input.section === undefined) {
+    throw new Error(
+      "nothing to update: provide a frontmatter patch and/or a section replacement",
+    );
+  }
+  if ("type" in patch && (typeof patch.type !== "string" || patch.type.trim() === "")) {
+    throw new Error(
+      "frontmatter requires a non-empty `type` (spec §4.1); patch it with a non-empty string or leave it out",
+    );
+  }
+
+  const absolute = path.join(bundle.root, concept.path);
+  let source = await fs.readFile(absolute, "utf8");
+
+  let updatedKeys: string[] = [];
+  let deletedKeys: string[] = [];
+  if (hasPatch) {
+    const patched = patchFrontmatter(source, patch);
+    source = patched.source;
+    updatedKeys = patched.set;
+    deletedKeys = patched.deleted;
+  }
+
+  let replacedSection: string | undefined;
+  if (input.section !== undefined) {
+    const split = splitFrontmatter(source);
+    // Section offsets are relative to the body; when the body is a literal
+    // suffix of the source (always true for LF documents), splice at source
+    // offsets. Otherwise treat the whole source as the body.
+    const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+    const body = source.slice(bodyStart);
+    const span = sectionSpan(body, input.section.heading);
+    if (span === undefined) {
+      const available = splitSections(body).map((s) => s.heading);
+      throw new Error(
+        `concept "${concept.id}" has no section "${input.section.heading}"; ` +
+          `available sections: ${available.join(", ") || "(none)"}`,
+      );
+    }
+    const before = body.slice(0, span.contentStart);
+    const after = body.slice(span.end);
+    const content = input.section.content.trim();
+    // Rebuild only the replaced span, blank-line delimited: terminate the
+    // heading line if the body ended without a newline, then the content,
+    // then a separator before the next heading (when there is one).
+    const headTerm = before.endsWith("\n") ? "" : "\n";
+    const block = content === "" ? "" : `\n${content}\n`;
+    const sep = after === "" ? "" : "\n";
+    source = source.slice(0, bodyStart) + before + headTerm + block + sep + after;
+    replacedSection = span.heading;
+  }
+
+  await fs.writeFile(absolute, source, "utf8");
+
+  const result: UpdateConceptResult = {
+    id: concept.id,
+    path: concept.path,
+    updatedKeys,
+    deletedKeys,
+  };
+  const title =
+    "title" in patch
+      ? typeof patch.title === "string"
+        ? patch.title
+        : undefined
+      : concept.frontmatter.title;
+  if (title !== undefined) result.title = title;
+  if (replacedSection !== undefined) result.replacedSection = replacedSection;
+  return result;
 }
 
 export interface DeleteConceptOptions {

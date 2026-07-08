@@ -7,18 +7,21 @@ export {
   isCuratedIndex,
   readDeclaredVersion,
   renderIndexes,
+  updateConcept,
   writeConcept,
 } from "./authoring.js";
 export type {
   AppendLogEntryOptions,
   GenerateIndexesResult,
   SkippedIndex,
+  UpdateConceptInput,
+  UpdateConceptResult,
   WriteConceptOptions,
 } from "./authoring.js";
 export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
-export { serializeDocument, splitFrontmatter } from "./frontmatter.js";
-export type { FrontmatterSplit } from "./frontmatter.js";
+export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
+export type { FrontmatterPatchResult, FrontmatterSplit } from "./frontmatter.js";
 export { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 export type { FileCommit } from "./git.js";
 export {
@@ -49,6 +52,7 @@ export {
   extractSection,
   parseConceptDocument,
   sectionAt,
+  sectionSpan,
   splitSections,
 } from "./parser.js";
 export type {
@@ -56,6 +60,7 @@ export type {
   Citation,
   ExtractedCitations,
   ParsedConceptDocument,
+  SectionSpan,
 } from "./parser.js";
 export {
   loadRemoteBundle,
