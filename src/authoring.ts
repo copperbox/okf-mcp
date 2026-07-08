@@ -651,7 +651,7 @@ export interface GenerateIndexesResult {
  * okf_version included (spec §11) — and `okf_version` is stamped only when
  * absent. Without existing frontmatter the rendered content stands as-is.
  */
-function withPreservedFrontmatter(existing: string, rendered: string): string {
+export function withPreservedFrontmatter(existing: string, rendered: string): string {
   const declared = splitFrontmatter(existing).data;
   if (declared === null || Object.keys(declared).length === 0) return rendered;
   const merged =

@@ -9,6 +9,7 @@ export {
   readDeclaredVersion,
   renderIndexes,
   updateConcept,
+  withPreservedFrontmatter,
   writeConcept,
 } from "./authoring.js";
 export type {
@@ -70,14 +71,17 @@ export type {
   ParsedConceptDocument,
   SectionSpan,
 } from "./parser.js";
+export { packBundle } from "./pack.js";
+export type { PackOptions, PackResult } from "./pack.js";
 export {
+  archiveKind,
   loadRemoteBundle,
   MAX_ARCHIVE_DOWNLOAD_BYTES,
   MAX_REMOTE_BYTES,
   MAX_REMOTE_FILES,
   parseGitHubTreeUrl,
 } from "./remote.js";
-export type { GitHubTreeRef } from "./remote.js";
+export type { ArchiveKind, GitHubTreeRef } from "./remote.js";
 export { searchConcepts } from "./search.js";
 export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
 export { createOkfServer } from "./server.js";

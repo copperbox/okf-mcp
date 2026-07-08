@@ -259,6 +259,13 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url
   concept <id>        Print one concept document as JSON
   graph [format]      Export the link graph (json | dot | mermaid)
   index               Regenerate index.md files (requires --writable)
+  pack [bundle]       Publish a bundle as a distributable archive
+```
+
+`pack` emits a `.tar.gz` (or `.zip`, by `--out` extension) of a mounted bundle for exchange with systems that can't reach its git remote — the counterpart of `--remote-bundle`, which loads such archives back. `index.md` files are regenerated in-memory from the packed concept set so the archive is self-describing, with the bundle root's declared frontmatter (including `okf_version`) preserved and hand-curated indexes (`generated: false`) traveling verbatim; the source bundle is never written, so `pack` needs no `--writable` and read-only remote bundles can be re-exported too. Repeatable `--include`/`--exclude` globs select concepts and logs with the same semantics `load_remote_bundle` uses (regenerated indexes are always emitted and describe only what was packed):
+
+```bash
+okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
 
 `--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
@@ -273,6 +280,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `pack.ts` (the `pack` command's archive writer), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.
