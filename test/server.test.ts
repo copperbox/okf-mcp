@@ -232,6 +232,17 @@ describe("remote bundle tools", () => {
       /read-only/,
     );
 
+    const update = await client.callTool({
+      name: "update_concept",
+      arguments: {
+        bundle: "shared",
+        id: "tables/orders",
+        frontmatter: { title: "nope" },
+      },
+    });
+    assert.equal(update.isError, true);
+    assert.match((update.content as Array<{ text: string }>)[0]!.text, /read-only/);
+
     const del = await client.callTool({
       name: "delete_concept",
       arguments: { bundle: "shared", id: "tables/orders" },
@@ -684,6 +695,72 @@ describe("authoring tools", () => {
     return connectClient(new OkfStore([{ id: "t", root }]), options);
   }
 
+  describe("update_concept", () => {
+    it("is not registered on a read-only server", async () => {
+      const client = await connectLocal();
+      const tools = await client.listTools();
+      assert.ok(!tools.tools.some((tool) => tool.name === "update_concept"));
+    });
+
+    it("patches frontmatter and one section, logs an Update entry, and reindexes", async () => {
+      const original =
+        "---\n# reviewed 2026-06\ntype: Table\nowner: data-team\ntitle: Orders\n---\n\nIntro.\n\n# Schema\n\nOld columns.\n\n# Notes\n\nKeep.\n";
+      await fs.writeFile(path.join(root, "tables/orders.md"), original);
+      const client = await connectLocal({ writable: true });
+
+      const result = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        frontmatter: { title: "Order Facts", owner: null },
+        section: { heading: "schema", content: "New columns." },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(textContent(result)) as Record<string, unknown>;
+      assert.equal(payload.id, "tables/orders");
+      assert.equal(payload.path, "tables/orders.md");
+      assert.deepEqual(payload.updatedKeys, ["title"]);
+      assert.deepEqual(payload.deletedKeys, ["owner"]);
+      assert.equal(payload.replacedSection, "Schema");
+      assert.equal(payload.uri, "okf://t/tables/orders.md");
+
+      const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+      assert.match(source, /# reviewed 2026-06\ntype: Table\n/);
+      assert.doesNotMatch(source, /owner: data-team/);
+      assert.ok(
+        source.endsWith("---\n\nIntro.\n\n# Schema\n\nNew columns.\n\n# Notes\n\nKeep.\n"),
+      );
+
+      const log = await fs.readFile(path.join(root, "log.md"), "utf8");
+      assert.match(log, /\*\*Update\*\*: Updated \[Order Facts\]\(\/tables\/orders\.md\)\./);
+      // Indexes were regenerated with the patched title.
+      const index = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+      assert.match(index, /\[Order Facts\]\(orders\.md\)/);
+      // The reloaded store serves the updated document.
+      const concept = (await callJson(client, "get_concept", {
+        id: "tables/orders",
+      })) as { frontmatter: Record<string, unknown> };
+      assert.equal(concept.frontmatter.title, "Order Facts");
+      assert.equal(concept.frontmatter.owner, undefined);
+    });
+
+    it("rejects an unknown section without writing anything", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        section: { heading: "Nope", content: "x" },
+      });
+      assert.equal(result.isError, true);
+      assert.match(textContent(result), /no section "Nope"/);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("rejects an empty update", async () => {
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "update_concept", { id: "tables/orders" });
+      assert.equal(result.isError, true);
+      assert.match(textContent(result), /nothing to update/);
+    });
+  });
+
   describe("delete_concept", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connectLocal();
@@ -925,6 +1002,139 @@ describe("authoring tools", () => {
     });
   });
 
+  describe("scoped auto-logging (directory log.md)", () => {
+    const scopedLog = (title: string) => `# ${title}\n\n## 2026-01-01\n* **Creation**: seeded.\n`;
+
+    it("write_concept routes its auto entry to the nearest existing directory log", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/customers.md",
+        frontmatter: { type: "Table", title: "Customers" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /\*\*Creation\*\*: Created \[Customers\]\(\/tables\/customers\.md\)\./);
+      // The root log is not written when a scoped log covers the change.
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("finds an ancestor's log across intermediate directories without one", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/facts/orders-daily.md",
+        frontmatter: { type: "Table", title: "Orders Daily" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /Orders Daily/);
+      // No new per-directory log is created by the auto path.
+      await assert.rejects(fs.access(path.join(root, "tables/facts/log.md")));
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("update_concept and delete_concept log to the scoped log", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+
+      const update = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        frontmatter: { owner: "data-team" },
+      });
+      assert.notEqual(update.isError, true);
+      const del = await callTool(client, "delete_concept", { id: "tables/orders" });
+      assert.notEqual(del.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /\*\*Update\*\*: Updated \[Orders\]\(\/tables\/orders\.md\)\./);
+      assert.match(log, /\*\*Deletion\*\*: Deleted \[Orders\]\(\/tables\/orders\.md\)\./);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+      // The directory survives the delete because its log lives there.
+      await fs.access(path.join(root, "tables/log.md"));
+    });
+
+    it("rename_concept logs to both scopes when source and target differ", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "rename_concept", {
+        from: "tables/orders",
+        to: "archive/orders.md",
+      });
+      assert.notEqual(result.isError, true);
+
+      const entry = /\*\*Update\*\*: Renamed \[Orders\]\(\/archive\/orders\.md\) \(was \/tables\/orders\.md\)\./;
+      // Source scope has its own log; target scope falls back to the root.
+      assert.match(await fs.readFile(path.join(root, "tables/log.md"), "utf8"), entry);
+      assert.match(await fs.readFile(path.join(root, "log.md"), "utf8"), entry);
+      await assert.rejects(fs.access(path.join(root, "archive/log.md")));
+    });
+
+    it("rename_concept within one scope writes a single entry", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "rename_concept", {
+        from: "tables/orders",
+        to: "tables/orders-fact.md",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      const matches = log.match(/\*\*Update\*\*: Renamed/g) ?? [];
+      assert.equal(matches.length, 1);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+  });
+
+  describe("hand-curated indexes (generated: false)", () => {
+    const CURATED_ROOT =
+      '---\nokf_version: "0.2"\nowner: data-team\n---\n\n# Home\n';
+
+    it("write_concept keeps a curated directory index and root frontmatter intact", async () => {
+      await fs.writeFile(path.join(root, "index.md"), CURATED_ROOT);
+      const curatedTables =
+        "---\ngenerated: false\n---\n\n# Start Here\n\n* [Orders](orders.md) - first stop\n";
+      await fs.writeFile(path.join(root, "tables/index.md"), curatedTables);
+
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/customers.md",
+        frontmatter: { type: "Table", title: "Customers" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      // The curated directory index survives byte-for-byte.
+      const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+      assert.equal(tablesIndex, curatedTables);
+      // The root index is regenerated but its frontmatter is carried over.
+      const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+      assert.match(rootIndex, /okf_version: "0\.2"/);
+      assert.match(rootIndex, /owner: data-team/);
+      assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    });
+
+    it("regenerate_indexes reports which indexes were skipped and why", async () => {
+      await fs.writeFile(
+        path.join(root, "tables/index.md"),
+        "---\ngenerated: false\n---\n\n# Start Here\n",
+      );
+      const client = await connectLocal({ writable: true });
+      const payload = (await callJson(client, "regenerate_indexes", {})) as {
+        written: string[];
+        skipped: Array<{ path: string; reason: string }>;
+      };
+      assert.deepEqual(payload.written, ["index.md"]);
+      assert.equal(payload.skipped.length, 1);
+      assert.equal(payload.skipped[0]!.path, "tables/index.md");
+      assert.match(payload.skipped[0]!.reason, /generated: false/);
+    });
+  });
+
   describe("append_log_entry", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connectLocal();
@@ -1013,6 +1223,7 @@ describe("server instructions", () => {
       "get_neighbors",
       "suggest_concept_path",
       "write_concept",
+      "update_concept",
       "append_log_entry",
       "reload_bundles",
       "index.md",

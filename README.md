@@ -194,6 +194,8 @@ brain/
 
 Every non-reserved `.md` file is a concept. Frontmatter requires only `type`; `title`, `description`, `resource`, `tags`, and `timestamp` are recommended, and unknown keys are preserved. When `title` is omitted, display names (index entries, MCP resource names, search/list hits) are derived from the filename per spec §4.1 — `customer-order-history.md` becomes "Customer Order History" — and search/list hits carry `titleDerived: true` so agents can tell a derived title from an authored one. The bundle-root `index.md` may declare an `okf_version` in its frontmatter (spec §11): `list_bundles` and `graph_summary` report it, and `validate_bundle` warns — without failing — when it names a newer major version than the server supports. The concept ID is the file path without `.md` (`tables/orders`). Relationships are ordinary markdown links — bundle-absolute (`/tables/orders.md`, recommended) or relative (`./customers.md`) — and become directed edges in the graph. Broken links are warnings, never errors.
 
+Writes regenerate every `index.md` as a generated artifact, with two exceptions for human curation (spec §6 supports hand-curated indexes with meaningful section groupings). An `index.md` whose frontmatter declares `generated: false` is treated as hand-curated and never rewritten — `regenerate_indexes` reports it as skipped, and deletes leave its directory in place. And the bundle-root `index.md`'s frontmatter always survives regeneration: a declared `okf_version` and any extension keys are carried over; `okf_version` is stamped only when absent.
+
 To view the brain in Obsidian, open the bundle directory as a vault (File → Open folder as vault). The generated `index.md` files double as navigation pages, and standard markdown links work as-is.
 
 ## MCP surface
@@ -233,13 +235,16 @@ Write tools (only with `--writable`):
 | Tool | Purpose |
 |---|---|
 | `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
+| `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte; log + reindex |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
 | `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at its canonical location — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
 | `append_log_entry` | Record a change-narrative entry in the bundle-root `log.md` — or a per-directory one via `directory` — without touching any concept |
-| `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter |
+| `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter, reporting hand-curated indexes (`generated: false`) it skipped |
 
 Writes are constrained to safe relative `.md` paths inside the bundle; reserved filenames (`index.md`, `log.md`) and dot-directories are rejected as concept paths.
+
+The automatic log entry from a concept write, update, delete, or rename goes to the nearest existing directory-level `log.md` above the concept (spec §7 scoped logs), falling back to the bundle root's; the auto path never creates per-directory logs — start one with `append_log_entry` and subsequent concept changes under that directory keep it current. A rename that crosses scopes is logged in both the old and new paths' logs so neither history has a gap.
 
 ## CLI
 

@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { declaredOkfVersion } from "./bundle.js";
-import { serializeDocument, splitFrontmatter } from "./frontmatter.js";
-import { conceptIdFromPath, deriveTitle, extractLinks } from "./parser.js";
+import { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
+import {
+  conceptIdFromPath,
+  deriveTitle,
+  extractLinks,
+  sectionSpan,
+  splitSections,
+} from "./parser.js";
 import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 
@@ -108,6 +114,17 @@ export function requireConcept(
   return concept;
 }
 
+/**
+ * Offset where the body begins within `source`, for shifting body-relative
+ * offsets (links, sections) to source offsets. When the body is not a literal
+ * suffix of the source (it always is for LF documents), returns 0 so callers
+ * treat the whole source as the body and offsets stay valid.
+ */
+function bodyStartOffset(source: string): number {
+  const { body } = splitFrontmatter(source);
+  return source.endsWith(body) ? source.length - body.length : 0;
+}
+
 /** Concepts (other than the target itself) with a link resolving to `conceptId`. */
 export function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
   return [...bundle.concepts.values()].filter(
@@ -115,6 +132,117 @@ export function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Conc
       other.id !== conceptId &&
       other.links.some((link) => link.resolvedId === conceptId),
   );
+}
+
+export interface UpdateConceptInput {
+  /**
+   * Shallow frontmatter patch: set/overwrite the provided keys, delete on an
+   * explicit null. All other keys, YAML comments, and formatting survive.
+   */
+  frontmatter?: Record<string, unknown>;
+  /**
+   * Replace one body section's content by heading name (case-insensitive,
+   * first match, including its subsections). The heading line is kept and the
+   * rest of the body stays byte-for-byte intact.
+   */
+  section?: { heading: string; content: string };
+}
+
+export interface UpdateConceptResult {
+  id: string;
+  path: string;
+  /** Frontmatter title after the update, when the concept has one. */
+  title?: string;
+  /** Frontmatter keys set or overwritten, in patch order. */
+  updatedKeys: string[];
+  /** Frontmatter keys deleted by an explicit null, in patch order. */
+  deletedKeys: string[];
+  /** Heading of the replaced body section, as written in the document. */
+  replacedSection?: string;
+}
+
+/**
+ * Partially update one concept: patch its frontmatter and/or replace one body
+ * section, splicing the document as it is on disk (not the loaded snapshot)
+ * so everything outside the touched spans survives byte-for-byte — round-trip
+ * preservation of unknown keys (spec §4.1) as a server guarantee, and a
+ * smaller write surface than a full rewrite when humans edit concurrently.
+ * `timestamp` is only changed when the patch includes it. Does not touch the
+ * in-memory index — reload the bundle afterwards.
+ */
+export async function updateConcept(
+  bundle: LoadedBundle,
+  idOrPath: string,
+  input: UpdateConceptInput,
+): Promise<UpdateConceptResult> {
+  const concept = requireConcept(bundle, idOrPath, "updated");
+  const patch = input.frontmatter ?? {};
+  const hasPatch = Object.keys(patch).length > 0;
+  if (!hasPatch && input.section === undefined) {
+    throw new Error(
+      "nothing to update: provide a frontmatter patch and/or a section replacement",
+    );
+  }
+  if ("type" in patch && (typeof patch.type !== "string" || patch.type.trim() === "")) {
+    throw new Error(
+      "frontmatter requires a non-empty `type` (spec §4.1); patch it with a non-empty string or leave it out",
+    );
+  }
+
+  const absolute = path.join(bundle.root, concept.path);
+  let source = await fs.readFile(absolute, "utf8");
+
+  let updatedKeys: string[] = [];
+  let deletedKeys: string[] = [];
+  if (hasPatch) {
+    const patched = patchFrontmatter(source, patch);
+    source = patched.source;
+    updatedKeys = patched.set;
+    deletedKeys = patched.deleted;
+  }
+
+  let replacedSection: string | undefined;
+  if (input.section !== undefined) {
+    const bodyStart = bodyStartOffset(source);
+    const body = source.slice(bodyStart);
+    const span = sectionSpan(body, input.section.heading);
+    if (span === undefined) {
+      const available = splitSections(body).map((s) => s.heading);
+      throw new Error(
+        `concept "${concept.id}" has no section "${input.section.heading}"; ` +
+          `available sections: ${available.join(", ") || "(none)"}`,
+      );
+    }
+    const before = body.slice(0, span.contentStart);
+    const after = body.slice(span.end);
+    const content = input.section.content.trim();
+    // Rebuild only the replaced span, blank-line delimited: terminate the
+    // heading line if the body ended without a newline, then the content,
+    // then a separator before the next heading (when there is one).
+    const headTerm = before.endsWith("\n") ? "" : "\n";
+    const block = content === "" ? "" : `\n${content}\n`;
+    const sep = after === "" ? "" : "\n";
+    source = source.slice(0, bodyStart) + before + headTerm + block + sep + after;
+    replacedSection = span.heading;
+  }
+
+  await fs.writeFile(absolute, source, "utf8");
+
+  const result: UpdateConceptResult = {
+    id: concept.id,
+    path: concept.path,
+    updatedKeys,
+    deletedKeys,
+  };
+  // The patch wins over the loaded snapshot; a patched non-string title
+  // (deleted or malformed) means the concept no longer has one.
+  let title = concept.frontmatter.title;
+  if ("title" in patch) {
+    title = typeof patch.title === "string" ? patch.title : undefined;
+  }
+  if (title !== undefined) result.title = title;
+  if (replacedSection !== undefined) result.replacedSection = replacedSection;
+  return result;
 }
 
 export interface DeleteConceptOptions {
@@ -270,11 +398,7 @@ async function rewriteLinksInFile(
 ): Promise<boolean> {
   const absolute = path.join(bundleRoot, fileAt);
   const source = await fs.readFile(absolute, "utf8");
-  const split = splitFrontmatter(source);
-  // Link offsets are relative to the body; when the body is a literal suffix
-  // of the source (always true for LF documents), shift them to source
-  // offsets. Otherwise scan the whole source so offsets stay valid.
-  const bodyStart = source.endsWith(split.body) ? source.length - split.body.length : 0;
+  const bodyStart = bodyStartOffset(source);
   const fromDir = path.posix.dirname(fileAt);
 
   const edits: Array<{ start: number; end: number; replacement: string }> = [];
@@ -321,8 +445,9 @@ function renderTarget(rawTarget: string, destPath: string, fromDir: string): str
 
 /**
  * Walk from `dir` up toward the bundle root, removing each directory that
- * holds nothing but its generated `index.md`. Returns the removed
- * bundle-relative directories, deepest first.
+ * holds nothing but its generated `index.md`. A hand-curated index
+ * (`generated: false` frontmatter) keeps its directory alive. Returns the
+ * removed bundle-relative directories, deepest first.
  */
 export async function removeEmptyDirectories(
   bundleRoot: string,
@@ -334,6 +459,13 @@ export async function removeEmptyDirectories(
     const absolute = path.join(bundleRoot, current);
     const entries = await fs.readdir(absolute);
     if (entries.some((name) => name.toLowerCase() !== "index.md")) break;
+    const index = entries[0];
+    if (
+      index !== undefined &&
+      isCuratedIndex(await fs.readFile(path.join(absolute, index), "utf8"))
+    ) {
+      break;
+    }
     await fs.rm(absolute, { recursive: true });
     removed.push(current);
     current = path.posix.dirname(current);
@@ -409,6 +541,36 @@ export async function appendLogEntry(
 }
 
 /**
+ * Bundle-relative directory of the nearest existing `log.md` covering a
+ * concept path, walking from the concept's own directory up toward the bundle
+ * root; "" (the root scope) when no directory log exists along the way. Spec
+ * §7 allows a log at any level; this routes automatic entries to the scope a
+ * human already maintains without ever creating new per-directory logs.
+ */
+export async function nearestLogDirectory(
+  bundleRoot: string,
+  conceptPath: string,
+): Promise<string> {
+  let dir = path.posix.dirname(conceptPath.replaceAll("\\", "/"));
+  while (dir !== "." && dir !== "") {
+    if (await fileExists(path.join(bundleRoot, dir, "log.md"))) return dir;
+    dir = path.posix.dirname(dir);
+  }
+  return "";
+}
+
+/**
+ * Whether an `index.md` source opts out of regeneration: frontmatter
+ * declaring `generated: false` marks the file as hand-curated, so authoring
+ * writes leave it (and, on deletes, its directory) untouched. Spec §6
+ * supports human-curated indexes with meaningful section groupings; this
+ * sentinel lets them coexist with agent writes.
+ */
+export function isCuratedIndex(source: string): boolean {
+  return splitFrontmatter(source).data?.generated === false;
+}
+
+/**
  * Render the `index.md` content for every directory of the bundle from
  * concept frontmatter (spec §6), keyed by bundle-relative index path
  * ("index.md", "tables/index.md", ...). Pure in-memory rendering — spec §6
@@ -470,19 +632,70 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
   return rendered;
 }
 
+/** An index.md left alone by generateIndexes, and the reason it was. */
+export interface SkippedIndex {
+  path: string;
+  reason: string;
+}
+
+export interface GenerateIndexesResult {
+  /** Bundle-relative paths of the index files written, sorted. */
+  written: string[];
+  /** Hand-curated index files left untouched, sorted by path. */
+  skipped: SkippedIndex[];
+}
+
+/**
+ * Merge the frontmatter a producer put on the existing bundle-root index
+ * into freshly rendered content: every declared key survives — a declared
+ * okf_version included (spec §11) — and `okf_version` is stamped only when
+ * absent. Without existing frontmatter the rendered content stands as-is.
+ */
+function withPreservedFrontmatter(existing: string, rendered: string): string {
+  const declared = splitFrontmatter(existing).data;
+  if (declared === null || Object.keys(declared).length === 0) return rendered;
+  const merged =
+    declared.okf_version === undefined
+      ? { okf_version: OKF_VERSION, ...declared }
+      : declared;
+  return serializeDocument(merged, splitFrontmatter(rendered).body);
+}
+
 /**
  * Regenerate `index.md` in every directory of the bundle for progressive
- * disclosure (spec §6). Existing index files are overwritten — they are
- * generated artifacts here. Entries use frontmatter titles/descriptions,
- * so the same files double as navigation pages in Obsidian.
+ * disclosure (spec §6). Existing index files are overwritten as generated
+ * artifacts — except hand-curated ones opting out via `generated: false`
+ * frontmatter, which are reported as skipped, and the bundle root's
+ * frontmatter, which is carried over rather than restamped. Entries use
+ * frontmatter titles/descriptions, so the same files double as navigation
+ * pages in Obsidian.
  */
-export async function generateIndexes(bundle: LoadedBundle): Promise<string[]> {
+export async function generateIndexes(
+  bundle: LoadedBundle,
+): Promise<GenerateIndexesResult> {
   const written: string[] = [];
+  const skipped: SkippedIndex[] = [];
   for (const [indexPath, content] of renderIndexes(bundle)) {
-    await fs.writeFile(path.join(bundle.root, indexPath), content, "utf8");
+    const absolute = path.join(bundle.root, indexPath);
+    const existing = (await fileExists(absolute))
+      ? await fs.readFile(absolute, "utf8")
+      : undefined;
+    if (existing !== undefined && isCuratedIndex(existing)) {
+      skipped.push({
+        path: indexPath,
+        reason: "hand-curated: frontmatter declares `generated: false`",
+      });
+      continue;
+    }
+    const finalContent =
+      indexPath === "index.md" && existing !== undefined
+        ? withPreservedFrontmatter(existing, content)
+        : content;
+    await fs.writeFile(absolute, finalContent, "utf8");
     written.push(indexPath);
   }
-  return written.sort();
+  const byPath = (a: SkippedIndex, b: SkippedIndex) => (a.path < b.path ? -1 : 1);
+  return { written: written.sort(), skipped: skipped.sort(byPath) };
 }
 
 /** The okf_version a bundle root's index.md declares on disk, if any (spec §11). */
