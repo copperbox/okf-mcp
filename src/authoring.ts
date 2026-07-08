@@ -217,12 +217,12 @@ export async function updateConcept(
     updatedKeys,
     deletedKeys,
   };
-  const title =
-    "title" in patch
-      ? typeof patch.title === "string"
-        ? patch.title
-        : undefined
-      : concept.frontmatter.title;
+  // The patch wins over the loaded snapshot; a patched non-string title
+  // (deleted or malformed) means the concept no longer has one.
+  let title = concept.frontmatter.title;
+  if ("title" in patch) {
+    title = typeof patch.title === "string" ? patch.title : undefined;
+  }
   if (title !== undefined) result.title = title;
   if (replacedSection !== undefined) result.replacedSection = replacedSection;
   return result;
