@@ -55,6 +55,15 @@ export function canonicalUrlPrefixes(url: string): string[] {
 }
 
 /**
+ * The prefix a concept file should be cited under: the blob form for GitHub
+ * canonicals (canonicalUrlPrefixes puts it second — files are cited by their
+ * blob URL, not their tree URL), otherwise the sole literal prefix.
+ */
+export function citationPrefix(prefixes: string[]): string {
+  return prefixes.length > 1 ? prefixes[1]! : prefixes[0]!;
+}
+
+/**
  * Concept ID a URL points at inside a bundle whose canonical location has
  * the given prefixes, or undefined. Fragments, query strings, and a `.md`
  * suffix are tolerated, like body link targets.

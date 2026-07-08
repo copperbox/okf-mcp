@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { canonicalUrlPrefixes, resolveUrlToConcept } from "../src/canonical.js";
+import {
+  canonicalUrlPrefixes,
+  citationPrefix,
+  resolveUrlToConcept,
+} from "../src/canonical.js";
 
 describe("canonicalUrlPrefixes", () => {
   it("expands a GitHub tree URL into tree, blob, and raw prefixes", () => {
@@ -27,6 +31,19 @@ describe("canonicalUrlPrefixes", () => {
     assert.deepEqual(canonicalUrlPrefixes("https://kb.example.com/brain/"), [
       "https://kb.example.com/brain",
     ]);
+  });
+});
+
+describe("citationPrefix", () => {
+  it("picks the blob form for GitHub canonicals and the sole prefix otherwise", () => {
+    assert.equal(
+      citationPrefix(canonicalUrlPrefixes("https://github.com/acme/kb/tree/main/okf")),
+      "https://github.com/acme/kb/blob/main/okf",
+    );
+    assert.equal(
+      citationPrefix(canonicalUrlPrefixes("https://kb.example.com/brain")),
+      "https://kb.example.com/brain",
+    );
   });
 });
 

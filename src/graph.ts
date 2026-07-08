@@ -118,6 +118,8 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
   const seen = new Set<string>();
   const matched = new Set<string>();
   for (const source of bundles) {
+    const candidates = targets.filter((target) => target.id !== source.id);
+    if (candidates.length === 0) continue;
     for (const concept of source.concepts.values()) {
       const from = qualifyNodeId(source.id, concept.id);
       const urls = concept.links
@@ -127,8 +129,7 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
         urls.push(concept.frontmatter.resource);
       }
       for (const url of urls) {
-        for (const target of targets) {
-          if (target.id === source.id) continue;
+        for (const target of candidates) {
           const id = resolveUrlToConcept(url, target.canonicalUrls!, (cid) =>
             target.concepts.has(cid),
           );
@@ -395,7 +396,7 @@ export function pathInGraph(
 function dedupeEdges(edges: GraphEdge[]): GraphEdge[] {
   const seen = new Set<string>();
   return edges.filter((edge) => {
-    const key = `${edge.from}\x00${edge.to}`;
+    const key = `${edge.from}\0${edge.to}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

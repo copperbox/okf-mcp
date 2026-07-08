@@ -18,6 +18,7 @@ import {
   requireConcept,
   writeConcept,
 } from "./authoring.js";
+import { citationPrefix } from "./canonical.js";
 import { conceptIdFromPath } from "./parser.js";
 import { suggestConceptPath } from "./suggest.js";
 import type { Concept, LoadedBundle } from "./types.js";
@@ -63,15 +64,14 @@ export interface PromoteConceptResult {
 
 /**
  * Canonical location of a concept file inside a bundle: under the bundle's
- * canonical URL when it has one (GitHub tree canonicals expand to
- * [tree, blob, raw] prefixes — files are cited by their blob URL), otherwise
- * the okf:// resource URI, which still names the bundle and path.
+ * canonical URL when it has one (the citationPrefix — GitHub canonicals cite
+ * files by their blob URL), otherwise the okf:// resource URI, which still
+ * names the bundle and path.
  */
 export function canonicalConceptUrl(bundle: LoadedBundle, relPath: string): string {
   const prefixes = bundle.canonicalUrls;
   if (prefixes !== undefined && prefixes.length > 0) {
-    const prefix = prefixes.length > 1 ? prefixes[1]! : prefixes[0]!;
-    return `${prefix}/${relPath}`;
+    return `${citationPrefix(prefixes)}/${relPath}`;
   }
   return okfUri(bundle.id, relPath);
 }
