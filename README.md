@@ -189,6 +189,8 @@ Write tools (only with `--writable`):
 
 Writes are constrained to safe relative `.md` paths inside the bundle; reserved filenames (`index.md`, `log.md`) and dot-directories are rejected as concept paths.
 
+The automatic log entry from a concept write, update, delete, or rename goes to the nearest existing directory-level `log.md` above the concept (spec §7 scoped logs), falling back to the bundle root's; the auto path never creates per-directory logs — start one with `append_log_entry` and subsequent concept changes under that directory keep it current. A rename that crosses scopes is logged in both the old and new paths' logs so neither history has a gap.
+
 ## CLI
 
 ```

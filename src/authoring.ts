@@ -528,6 +528,25 @@ export async function appendLogEntry(
 }
 
 /**
+ * Bundle-relative directory of the nearest existing `log.md` covering a
+ * concept path, walking from the concept's own directory up toward the bundle
+ * root; "" (the root scope) when no directory log exists along the way. Spec
+ * §7 allows a log at any level; this routes automatic entries to the scope a
+ * human already maintains without ever creating new per-directory logs.
+ */
+export async function nearestLogDirectory(
+  bundleRoot: string,
+  conceptPath: string,
+): Promise<string> {
+  let dir = path.posix.dirname(conceptPath.replaceAll("\\", "/"));
+  while (dir !== "." && dir !== "") {
+    if (await fileExists(path.join(bundleRoot, dir, "log.md"))) return dir;
+    dir = path.posix.dirname(dir);
+  }
+  return "";
+}
+
+/**
  * Whether an `index.md` source opts out of regeneration: frontmatter
  * declaring `generated: false` marks the file as hand-curated, so authoring
  * writes leave it (and, on deletes, its directory) untouched. Spec §6

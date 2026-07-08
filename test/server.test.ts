@@ -839,6 +839,94 @@ describe("authoring tools", () => {
     });
   });
 
+  describe("scoped auto-logging (directory log.md)", () => {
+    const scopedLog = (title: string) => `# ${title}\n\n## 2026-01-01\n* **Creation**: seeded.\n`;
+
+    it("write_concept routes its auto entry to the nearest existing directory log", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/customers.md",
+        frontmatter: { type: "Table", title: "Customers" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /\*\*Creation\*\*: Created \[Customers\]\(\/tables\/customers\.md\)\./);
+      // The root log is not written when a scoped log covers the change.
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("finds an ancestor's log across intermediate directories without one", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "write_concept", {
+        path: "tables/facts/orders-daily.md",
+        frontmatter: { type: "Table", title: "Orders Daily" },
+        body: "Body",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /Orders Daily/);
+      // No new per-directory log is created by the auto path.
+      await assert.rejects(fs.access(path.join(root, "tables/facts/log.md")));
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+
+    it("update_concept and delete_concept log to the scoped log", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+
+      const update = await callTool(client, "update_concept", {
+        id: "tables/orders",
+        frontmatter: { owner: "data-team" },
+      });
+      assert.notEqual(update.isError, true);
+      const del = await callTool(client, "delete_concept", { id: "tables/orders" });
+      assert.notEqual(del.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      assert.match(log, /\*\*Update\*\*: Updated \[Orders\]\(\/tables\/orders\.md\)\./);
+      assert.match(log, /\*\*Deletion\*\*: Deleted \[Orders\]\(\/tables\/orders\.md\)\./);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+      // The directory survives the delete because its log lives there.
+      await fs.access(path.join(root, "tables/log.md"));
+    });
+
+    it("rename_concept logs to both scopes when source and target differ", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "rename_concept", {
+        from: "tables/orders",
+        to: "archive/orders.md",
+      });
+      assert.notEqual(result.isError, true);
+
+      const entry = /\*\*Update\*\*: Renamed \[Orders\]\(\/archive\/orders\.md\) \(was \/tables\/orders\.md\)\./;
+      // Source scope has its own log; target scope falls back to the root.
+      assert.match(await fs.readFile(path.join(root, "tables/log.md"), "utf8"), entry);
+      assert.match(await fs.readFile(path.join(root, "log.md"), "utf8"), entry);
+      await assert.rejects(fs.access(path.join(root, "archive/log.md")));
+    });
+
+    it("rename_concept within one scope writes a single entry", async () => {
+      await fs.writeFile(path.join(root, "tables/log.md"), scopedLog("Tables Log"));
+      const client = await connectLocal({ writable: true });
+      const result = await callTool(client, "rename_concept", {
+        from: "tables/orders",
+        to: "tables/orders-fact.md",
+      });
+      assert.notEqual(result.isError, true);
+
+      const log = await fs.readFile(path.join(root, "tables/log.md"), "utf8");
+      const matches = log.match(/\*\*Update\*\*: Renamed/g) ?? [];
+      assert.equal(matches.length, 1);
+      await assert.rejects(fs.access(path.join(root, "log.md")));
+    });
+  });
+
   describe("hand-curated indexes (generated: false)", () => {
     const CURATED_ROOT =
       '---\nokf_version: "0.2"\nowner: data-team\n---\n\n# Home\n';

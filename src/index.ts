@@ -5,6 +5,7 @@ export {
   assertSafeConceptPath,
   generateIndexes,
   isCuratedIndex,
+  nearestLogDirectory,
   readDeclaredVersion,
   renderIndexes,
   updateConcept,

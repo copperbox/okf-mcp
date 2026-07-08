@@ -11,6 +11,7 @@ import {
   appendLogEntry,
   deleteConcept,
   generateIndexes,
+  nearestLogDirectory,
   renameConcept,
   renderIndexes,
   updateConcept,
@@ -73,9 +74,10 @@ where similar concepts live, and reuse existing types/tags. Prefer update_concep
 for partial edits — it patches frontmatter keys and/or one body section, preserving
 the rest of the document — over full write_concept rewrites. write_concept,
 update_concept, rename_concept, and delete_concept keep index.md navigation and the
-log.md history current — never edit those reserved files directly. Use
-append_log_entry for change narrative not tied to a single concept write. Remote
-bundles are always read-only.`;
+log.md history current — never edit those reserved files directly. Their auto entries
+go to the nearest existing directory log.md above the concept, falling back to the
+bundle root's. Use append_log_entry for change narrative not tied to a single concept
+write. Remote bundles are always read-only.`;
 }
 
 function json(data: unknown): CallToolResult {
@@ -625,12 +627,27 @@ export function createOkfServer(
 
   if (options.writable) {
     /**
-     * After a concept write/delete: log the change, then regenerate indexes
-     * from a reloaded bundle so they reflect the change, then reload again so
-     * the store sees the freshly written index files.
+     * After a concept write/delete/rename: log the change, then regenerate
+     * indexes from a reloaded bundle so they reflect the change, then reload
+     * again so the store sees the freshly written index files.
+     *
+     * Each entry goes to the nearest existing directory log.md above the
+     * touched path, falling back to the bundle root (spec §7 scoped logs) —
+     * the auto path uses scoped logs but never creates them. A rename spanning
+     * two scopes logs to both so neither history has a gap.
      */
-    async function logAndReindex(target: LoadedBundle, message: string): Promise<void> {
-      await appendLogEntry(target.root, message);
+    async function logAndReindex(
+      target: LoadedBundle,
+      message: string,
+      touchedPaths: string[],
+    ): Promise<void> {
+      const scopes = new Set<string>();
+      for (const touched of touchedPaths) {
+        scopes.add(await nearestLogDirectory(target.root, touched));
+      }
+      for (const directory of scopes) {
+        await appendLogEntry(target.root, message, { directory });
+      }
       const reloaded = await store.reloadBundle(target.id);
       await generateIndexes(reloaded);
       await store.reloadBundle(target.id);
@@ -641,7 +658,7 @@ export function createOkfServer(
       {
         title: "Write concept",
         description:
-          "Create or update a concept markdown document, append a log.md entry, and regenerate index.md files",
+          "Create or update a concept markdown document, append a log.md entry (to the nearest existing directory log, falling back to the bundle root's), and regenerate index.md files",
         inputSchema: {
           bundle: bundleParam,
           path: z.string().describe("Bundle-relative path ending in .md"),
@@ -673,6 +690,7 @@ export function createOkfServer(
         await logAndReindex(
           target,
           logMessage ?? `**${verb}**: ${verb === "Creation" ? "Created" : "Updated"} [${title}](/${result.path}).`,
+          [result.path],
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
       },
@@ -723,6 +741,7 @@ export function createOkfServer(
         await logAndReindex(
           target,
           logMessage ?? `**Update**: Updated [${result.title ?? result.id}](/${result.path}).`,
+          [result.path],
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.path) });
       },
@@ -759,6 +778,7 @@ export function createOkfServer(
           target,
           logMessage ??
             `**Deletion**: Deleted [${result.title ?? result.id}](/${result.path}).`,
+          [result.path],
         );
         return json({ ...result, bundle: target.id });
       },
@@ -769,7 +789,7 @@ export function createOkfServer(
       {
         title: "Rename concept",
         description:
-          "Move a concept to a new path, rewriting links that pointed at it across the bundle (and the moved file's own relative links), then log the change and regenerate index.md files",
+          "Move a concept to a new path, rewriting links that pointed at it across the bundle (and the moved file's own relative links), then log the change (in both the old and new paths' nearest log.md scopes when they differ) and regenerate index.md files",
         inputSchema: {
           bundle: bundleParam,
           from: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
@@ -788,6 +808,7 @@ export function createOkfServer(
           target,
           logMessage ??
             `**Update**: Renamed [${result.title ?? result.id}](/${result.to}) (was /${result.from}).`,
+          [result.from, result.to],
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.to) });
       },

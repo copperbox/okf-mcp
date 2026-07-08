@@ -9,6 +9,7 @@ import {
   assertSafeConceptPath,
   deleteConcept,
   generateIndexes,
+  nearestLogDirectory,
   renameConcept,
   renderIndexes,
   updateConcept,
@@ -292,6 +293,20 @@ describe("authoring", () => {
     assert.equal(rootLog.path, "log.md");
     const scoped = await appendLogEntry(root, "**Update**: scoped", { directory: "tables/" });
     assert.equal(scoped.path, "tables/log.md");
+  });
+
+  it("resolves the nearest existing directory log for a concept path", async () => {
+    await writeConcept(root, "tables/facts/orders.md", { type: "Table" }, "Body");
+    // No directory log anywhere: fall back to the bundle root.
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "");
+    // An ancestor log is found across intermediate levels without one.
+    await appendLogEntry(root, "**Creation**: tables scope", { directory: "tables" });
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "tables");
+    // The concept's own directory wins over an ancestor's.
+    await appendLogEntry(root, "**Creation**: facts scope", { directory: "tables/facts" });
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "tables/facts");
+    // A root-level concept always resolves to the root.
+    assert.equal(await nearestLogDirectory(root, "readme-ish.md"), "");
   });
 
   it("rejects log directories that escape the bundle or hide in dot-directories", async () => {
