@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -6,6 +7,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { generateIndexes } from "./authoring.js";
 import { buildGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
+import { packBundle } from "./pack.js";
+import { archiveKind } from "./remote.js";
 import { searchConcepts } from "./search.js";
 import { createOkfServer } from "./server.js";
 import { OkfStore } from "./store.js";
@@ -27,6 +30,8 @@ Commands:
   concept <id>        Print one concept document as JSON
   graph [format]      Export the link graph (json | dot | mermaid)
   index               Regenerate index.md files (requires --writable)
+  pack [bundle]       Publish a bundle as a distributable archive; indexes are
+                      regenerated in-memory, so the source stays untouched
 
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
@@ -38,6 +43,12 @@ Options:
                           GitHub tree URL); repeatable. Citations and external
                           links under it resolve to that bundle's concepts as
                           derived cross-bundle graph edges.
+  --out <file>            pack only: output archive path ending in .tar.gz,
+                          .tgz, or .zip; defaults to <bundle>.tar.gz
+  --include <glob>        pack only: pack matching bundle-relative paths only;
+                          repeatable, same semantics as load_remote_bundle
+  --exclude <glob>        pack only: skip matching bundle-relative paths;
+                          repeatable
   --writable              Enable authoring: write_concept tool and index command
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
@@ -100,6 +111,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       bundle: { type: "string", multiple: true },
       "remote-bundle": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
+      out: { type: "string" },
+      include: { type: "string", multiple: true },
+      exclude: { type: "string", multiple: true },
       writable: { type: "boolean" },
       watch: { type: "boolean" },
       help: { type: "boolean" },
@@ -217,6 +231,23 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           skipped.length > 0 ? `, skipped ${skipped.length} hand-curated` : "";
         console.log(`${bundle.id}: wrote ${written.length} index files${skippedNote}`);
       }
+      return 0;
+    }
+    case "pack": {
+      const bundle = store.bundle(rest[0]);
+      const out = values.out ?? `${bundle.id}.tar.gz`;
+      const format = archiveKind(out);
+      if (format === null) {
+        console.error(`error: --out must end in .tar.gz, .tgz, or .zip: ${out}`);
+        return 2;
+      }
+      const result = await packBundle(bundle, {
+        include: values.include,
+        exclude: values.exclude,
+        format,
+      });
+      await fs.writeFile(out, result.bytes);
+      console.log(`${bundle.id}: packed ${result.files.length} files to ${out}`);
       return 0;
     }
     default:
