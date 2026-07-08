@@ -211,7 +211,7 @@ export async function updateConcept(
 
   let updatedKeys: string[] = [];
   let deletedKeys: string[] = [];
-  if (Object.keys(effectivePatch).length > 0) {
+  if (hasPatch || refreshTimestamp) {
     try {
       const patched = patchFrontmatter(source, effectivePatch, {
         insertAfter: { timestamp: SPEC_KEYS },

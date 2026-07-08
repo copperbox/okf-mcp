@@ -226,6 +226,20 @@ describe("authoring", () => {
     assert.match(source, /owner: core/);
   });
 
+  it("still applies a section-only update when there is no frontmatter block to stamp", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOld.");
+    const bundle = await loadBundle({ id: "t", root });
+    // A concurrent edit strips the frontmatter block after the bundle loads.
+    await fs.writeFile(path.join(root, "x.md"), "# A\n\nOld.\n");
+
+    const result = await updateConcept(bundle, "x", {
+      section: { heading: "A", content: "New." },
+    });
+    assert.equal(result.replacedSection, "A");
+    assert.deepEqual(result.updatedKeys, []);
+    assert.equal(await fs.readFile(path.join(root, "x.md"), "utf8"), "# A\n\nNew.\n");
+  });
+
   it("replaces one body section, leaving the rest of the document byte-for-byte intact", async () => {
     const original =
       "---\ntype: Table\n---\n\nIntro.\n\n# Schema\n\nOld columns.\n\n## Keys\n\nOld key.\n\n# Examples\n\nQuery.\n";
