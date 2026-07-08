@@ -68,6 +68,21 @@ describe("loadBundle", () => {
       "tables/customers", // the schema link and citation [2] both point here
     ]);
   });
+
+  it("expands a configured canonicalUrl into canonical prefixes", async () => {
+    const bundle = await loadBundle({
+      id: "acme",
+      root: FIXTURE,
+      canonicalUrl: "https://github.com/acme/kb/tree/main/okf",
+    });
+    assert.deepEqual(bundle.canonicalUrls, [
+      "https://github.com/acme/kb/tree/main/okf",
+      "https://github.com/acme/kb/blob/main/okf",
+      "https://raw.githubusercontent.com/acme/kb/main/okf",
+    ]);
+    const plain = await loadBundle({ id: "acme", root: FIXTURE });
+    assert.equal(plain.canonicalUrls, undefined);
+  });
 });
 
 describe("validateBundle", () => {

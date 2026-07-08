@@ -74,6 +74,12 @@ export interface BundleConfig {
   id: string;
   /** Absolute or cwd-relative path to the bundle root directory. */
   root: string;
+  /**
+   * Published canonical URL of the bundle root (e.g. its GitHub tree URL).
+   * Citations and external links whose URL points under it resolve to this
+   * bundle's concepts as derived cross-bundle edges.
+   */
+  canonicalUrl?: string;
 }
 
 /** A read-only bundle fetched from a remote source (issue: exchange goal). */
@@ -89,6 +95,12 @@ export interface RemoteBundleConfig {
   include?: string[];
   /** Glob patterns over bundle-relative paths to skip. */
   exclude?: string[];
+  /**
+   * Extra canonical URL for the bundle root, matched in addition to the
+   * location derived from `url` (GitHub tree mounts derive one automatically;
+   * archives have no per-file URLs, so this is their only canonical location).
+   */
+  canonicalUrl?: string;
 }
 
 export interface LoadedBundle {
@@ -104,6 +116,12 @@ export interface LoadedBundle {
   okfVersion?: string;
   /** Raw document sources, present only for bundles with no local files. */
   sources?: Map<string, string>;
+  /**
+   * URL prefixes of the bundle's canonical location(s), expanded at load
+   * time (see canonicalUrlPrefixes). Citations/external links under one of
+   * these prefixes resolve to this bundle's concepts across bundles.
+   */
+  canonicalUrls?: string[];
 }
 
 /** Canonical URI for a concept or reserved file, used for MCP resources. */

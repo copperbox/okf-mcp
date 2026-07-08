@@ -263,6 +263,16 @@ describe("remote bundle tools", () => {
     });
     assert.equal(log.isError, true);
     assert.match((log.content as Array<{ text: string }>)[0]!.text, /read-only/);
+
+    const promote = await client.callTool({
+      name: "promote_concept",
+      arguments: { id: "local", fromBundle: "t", toBundle: "shared" },
+    });
+    assert.equal(promote.isError, true);
+    assert.match(
+      (promote.content as Array<{ text: string }>)[0]!.text,
+      /read-only/,
+    );
   });
 
   it("load_remote_bundle indexes a tar.gz archive URL and reports it as the source", async () => {
@@ -861,6 +871,137 @@ describe("authoring tools", () => {
     });
   });
 
+  describe("promote_concept", () => {
+    let orgRoot: string;
+    beforeEach(async () => {
+      orgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-org-"));
+      await writeConcept(
+        orgRoot,
+        "standards/reviews.md",
+        { type: "Table", title: "Reviews" },
+        "Review rules.",
+      );
+    });
+    afterEach(async () => {
+      await fs.rm(orgRoot, { recursive: true, force: true });
+    });
+
+    async function connectTwo(options: ServerOptions = {}): Promise<Client> {
+      return connectClient(
+        new OkfStore([
+          { id: "proj", root },
+          { id: "org", root: orgRoot },
+        ]),
+        options,
+      );
+    }
+
+    it("is not registered on a read-only server", async () => {
+      const client = await connectTwo();
+      const tools = await client.listTools();
+      assert.ok(!tools.tools.some((tool) => tool.name === "promote_concept"));
+    });
+
+    it("moves the concept, leaves a stub, and logs and reindexes both bundles", async () => {
+      await writeConcept(
+        root,
+        "metrics/revenue.md",
+        { type: "Metric", title: "Revenue" },
+        "From [Orders](/tables/orders.md).",
+      );
+      const client = await connectTwo({ writable: true });
+      const result = await client.callTool({
+        name: "promote_concept",
+        arguments: { id: "tables/orders", fromBundle: "proj", toBundle: "org" },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(
+        (result.content as Array<{ text: string }>)[0]!.text,
+      );
+      // Default placement: org's only Table lives in standards/.
+      assert.equal(payload.to, "standards/orders.md");
+      assert.equal(payload.id, "standards/orders");
+      assert.equal(payload.citation, "okf://org/standards/orders.md");
+      assert.equal(payload.stubPath, "tables/orders.md");
+      assert.deepEqual(payload.inboundLinks, ["metrics/revenue"]);
+      assert.equal(payload.uri, "okf://org/standards/orders.md");
+
+      await fs.access(path.join(orgRoot, "standards/orders.md"));
+      const stub = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+      assert.match(stub, /resource: okf:\/\/org\/standards\/orders\.md/);
+      assert.match(stub, /# Citations/);
+
+      const projLog = await fs.readFile(path.join(root, "log.md"), "utf8");
+      assert.match(
+        projLog,
+        /\*\*Update\*\*: Promoted \[Orders\]\(\/tables\/orders\.md\) to bundle "org" \(okf:\/\/org\/standards\/orders\.md\)\./,
+      );
+      const orgLog = await fs.readFile(path.join(orgRoot, "log.md"), "utf8");
+      assert.match(
+        orgLog,
+        /\*\*Creation\*\*: Promoted \[Orders\]\(\/standards\/orders\.md\) from bundle "proj"\./,
+      );
+      const orgIndex = await fs.readFile(path.join(orgRoot, "index.md"), "utf8");
+      assert.match(orgIndex, /standards/);
+      // The stub keeps the source index entry alive, with the redirect description.
+      const projIndex = await fs.readFile(
+        path.join(root, "tables", "index.md"),
+        "utf8",
+      );
+      assert.match(projIndex, /Promoted to bundle "org"/);
+
+      // Both in-memory bundles reflect the promotion.
+      const promoted = await client.callTool({
+        name: "get_concept",
+        arguments: { bundle: "org", id: "standards/orders" },
+      });
+      assert.notEqual(promoted.isError, true);
+    });
+
+    it("with stub: false deletes the source copy and reports dangling links", async () => {
+      await writeConcept(
+        root,
+        "metrics/revenue.md",
+        { type: "Metric", title: "Revenue" },
+        "From [Orders](/tables/orders.md).",
+      );
+      const client = await connectTwo({ writable: true });
+      const result = await client.callTool({
+        name: "promote_concept",
+        arguments: {
+          id: "tables/orders",
+          fromBundle: "proj",
+          toBundle: "org",
+          toPath: "tables/orders.md",
+          stub: false,
+        },
+      });
+      assert.notEqual(result.isError, true);
+      const payload = JSON.parse(
+        (result.content as Array<{ text: string }>)[0]!.text,
+      );
+      assert.equal(payload.to, "tables/orders.md");
+      assert.equal(payload.stubPath, undefined);
+      assert.deepEqual(payload.inboundLinks, ["metrics/revenue"]);
+      assert.deepEqual(payload.removedDirs, ["tables"]);
+      await assert.rejects(fs.access(path.join(root, "tables")));
+    });
+
+    it("rejects promoting a concept onto itself or across identical bundles", async () => {
+      const client = await connectTwo({ writable: true });
+      const result = await client.callTool({
+        name: "promote_concept",
+        arguments: { id: "tables/orders", fromBundle: "proj", toBundle: "proj" },
+      });
+      assert.equal(result.isError, true);
+      assert.match(
+        (result.content as Array<{ text: string }>)[0]!.text,
+        /source and target bundle are the same/,
+      );
+      await fs.access(path.join(root, "tables/orders.md"));
+    });
+  });
+
   describe("scoped auto-logging (directory log.md)", () => {
     const scopedLog = (title: string) => `# ${title}\n\n## 2026-01-01\n* **Creation**: seeded.\n`;
 
@@ -1108,6 +1249,100 @@ describe("server instructions", () => {
     assert.ok(instructions.includes("read-only"));
     assert.ok(instructions.includes("reload_bundles"));
     await client.close();
+  });
+});
+
+describe("cross-bundle graph tools", () => {
+  const ORG_URL = "https://github.com/acme/kb/tree/main/kb";
+  const NAMING_BLOB = "https://github.com/acme/kb/blob/main/kb/standards/naming.md";
+  const ORG_DOC =
+    "---\ntype: Standard\ntitle: Naming\n---\n\nSee [reviews](/standards/reviews.md).\n";
+  const REVIEWS_DOC = "---\ntype: Standard\ntitle: Reviews\n---\n\nReview rules.\n";
+
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cross-bundle-test-"));
+    await fs.writeFile(
+      path.join(root, "setup.md"),
+      `---\ntype: Guide\ntitle: Setup\n---\n\n# Citations\n\n[1] [Naming standard](${NAMING_BLOB})\n`,
+    );
+    const store = new OkfStore([{ id: "proj", root }], {
+      remotes: [{ id: "org", url: ORG_URL }],
+      fetchImpl: fakeGitHub({
+        "kb/standards/naming.md": ORG_DOC,
+        "kb/standards/reviews.md": REVIEWS_DOC,
+      }),
+    });
+    client = await connectClient(store);
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("graph_summary reports derived cross-bundle edge counts", async () => {
+    const summaries = (await callJson(client, "graph_summary", {})) as Array<{
+      bundle: string;
+      crossBundleEdges: number;
+    }>;
+    for (const summary of summaries) {
+      assert.equal(summary.crossBundleEdges, 1, summary.bundle);
+    }
+  });
+
+  it("get_neighbors traverses derived edges only when crossBundle is set", async () => {
+    const plain = (await callJson(client, "get_neighbors", {
+      bundle: "proj",
+      id: "setup",
+    })) as { nodes: Array<{ id: string }> };
+    assert.deepEqual(plain.nodes.map((n) => n.id), ["setup"]);
+
+    const cross = (await callJson(client, "get_neighbors", {
+      bundle: "proj",
+      id: "setup",
+      crossBundle: true,
+    })) as { nodes: Array<{ id: string; bundle: string }> };
+    const naming = cross.nodes.find((n) => n.id === "org:standards/naming");
+    assert.equal(naming?.bundle, "org");
+  });
+
+  it("find_path crosses bundles with qualified IDs", async () => {
+    const { path: found } = (await callJson(client, "find_path", {
+      bundle: "proj",
+      from: "setup",
+      to: "org:standards/reviews",
+      crossBundle: true,
+    })) as { path: string[] };
+    assert.deepEqual(found, [
+      "proj:setup",
+      "org:standards/naming",
+      "org:standards/reviews",
+    ]);
+  });
+
+  it("export_graph renders a namespaced multi-bundle graph with dashed derived edges", async () => {
+    const dot = textContent(
+      await callTool(client, "export_graph", { format: "dot", crossBundle: true }),
+    );
+    assert.match(dot, /"proj:setup" -> "org:standards\/naming" \[style=dashed\];/);
+    assert.match(dot, /"org:standards\/naming" -> "org:standards\/reviews";/);
+  });
+
+  it("load_remote_bundle accepts and list_remote_bundles echoes a canonicalUrl", async () => {
+    await callTool(client, "load_remote_bundle", {
+      id: "org2",
+      url: "https://github.com/acme/kb/tree/main/kb",
+      canonicalUrl: "https://kb.example.com/org",
+    });
+    const listed = (await callJson(client, "list_remote_bundles", {})) as Array<{
+      id: string;
+      canonicalUrl?: string;
+    }>;
+    assert.equal(
+      listed.find((b) => b.id === "org2")?.canonicalUrl,
+      "https://kb.example.com/org",
+    );
   });
 });
 

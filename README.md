@@ -103,6 +103,52 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
 
 This works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, navigation indexes, and log.
 
+## Multi-bundle setups (org brain + project brain)
+
+`--bundle` and `--remote-bundle` are repeatable, so one server can mount a shared org-wide brain next to the project's own bundle. Mount the org brain from a local clone when agents should write to it:
+
+```json
+{
+  "mcpServers": {
+    "okf": {
+      "command": "npx",
+      "args": [
+        "-y", "@copperbox/okf-mcp",
+        "--bundle", "org=/absolute/path/to/org-brain-clone",
+        "--bundle", "project=/absolute/path/to/this-repo/brain",
+        "--writable"
+      ]
+    }
+  }
+}
+```
+
+If consuming the org brain is enough, swap its mount for a read-only GitHub tree — no clone to keep fresh, and `reload_bundles` refetches it: `"--remote-bundle", "org=https://github.com/your-org/brain/tree/main/bundle"`. Note that `--writable` is server-wide — every local `--bundle` it mounts becomes writable — so `--remote-bundle` is also the way to keep the org brain read-only for agents while the project bundle stays writable.
+
+Two routing behaviors make this workable:
+
+- Aggregate read tools — `search_concepts`, `list_concepts`, `list_types`, `list_tags`, `graph_summary`, `validate_bundle` — cover **all** bundles when the `bundle` parameter is omitted, so one search spans both brains.
+- Per-concept and write tools (`get_concept`, `get_neighbors`, `write_concept`, …) require an explicit `bundle` once more than one is mounted, so a write always names its destination.
+
+Split knowledge by scope: standards, environment architecture, and cross-repo system maps belong in the org bundle; decisions and gotchas specific to one repo belong in that repo's project bundle. Cross-bundle markdown links are not part of OKF (§5 links resolve within a single bundle, so a link into another bundle just indexes as broken) — to reference an org concept from a project concept, cite it in a `# Citations` section (spec §8) using the org bundle's canonical URL; when a real graph edge matters, add a small stub concept under `references/` in the project bundle that mirrors the org concept, link to the stub, and let the stub's citation point at the source. When project knowledge turns out to be org-wide, `promote_concept` moves it into the org bundle and leaves exactly such a citation stub behind at the old path, so the project bundle's inbound links keep resolving.
+
+Append routing guidance to the CLAUDE.md snippet above:
+
+```markdown
+- Two brains are mounted: `org` (cross-project standards, environment architecture,
+  system maps) and `project` (this repo's decisions, gotchas, conventions). Before
+  starting work, search both — omit the `bundle` parameter so `search_concepts` and
+  `graph_summary` cover all bundles, or query each in turn.
+- Route writes by scope: knowledge specific to this repo goes to the `project`
+  bundle. Knowledge that holds across projects — standards, shared infrastructure,
+  org-wide architecture — goes to the `org` bundle; if the org brain is mounted
+  read-only, record it in the project bundle and flag it for promotion.
+- Never write markdown links from one bundle into another — they index as broken.
+  Reference org concepts from project concepts via a `# Citations` entry using the
+  org bundle's canonical URL, or through a `references/` stub concept when a graph
+  edge is needed.
+```
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
@@ -113,7 +159,7 @@ npm run dev -- \
   inspect
 ```
 
-`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
+`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude?, canonicalUrl? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
 
 Remote bundles are strictly read-only and sandboxed:
 
@@ -122,6 +168,14 @@ Remote bundles are strictly read-only and sandboxed:
 - Remote content is parsed as markdown, never executed, and never written to disk.
 - All authoring tools reject read-only bundles, and `regenerate_indexes` / the `index` command skip them.
 - `reload_bundles` refetches them, reporting the same added/removed/changed delta as local bundles.
+
+### Cross-bundle awareness
+
+OKF §5 deliberately has no cross-bundle link syntax, but the server knows every mounted bundle's canonical location and can *derive* cross-bundle relationships from spec-clean data. When a concept's §8 citation target, external link, or frontmatter `resource` URL points under another mounted bundle's canonical location, the graph tools record a derived `kind: "cross-bundle"` edge to that concept — read-only, no new syntax in documents.
+
+- GitHub tree mounts get their canonical location automatically (the `tree`, `blob`, and `raw.githubusercontent.com` forms of the tree URL all match).
+- Local clones and archives have no inherent URL: give them one with `--canonical-url id=<url>` (or `canonicalUrl` on `load_remote_bundle`), e.g. the GitHub tree URL of the shared bundle's published location, so citations to it resolve even when it is mounted from a local checkout.
+- `graph_summary` reports `crossBundleEdges`; `get_neighbors` and `find_path` traverse derived edges when called with `crossBundle: true` (node IDs become `bundle:concept` and carry the target's bundle); `export_graph` with `crossBundle: true` emits one namespaced multi-bundle graph with derived edges rendered dashed in `dot`/`mermaid`.
 
 ## The bundle (your "OKF brain")
 
@@ -166,10 +220,10 @@ Read tools:
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |
 | `suggest_concept_path` | Where a new concept should live, ranked by where same-type (and same-tag) concepts already are |
-| `graph_summary` | Compact overview: counts, types, tags, orphans |
-| `get_neighbors` | Bounded expansion around a concept (`in`/`out`/`both`, depth) |
-| `find_path` | Shortest directed link path between two concepts |
-| `export_graph` | Graph as `json`, `dot`, or `mermaid` |
+| `graph_summary` | Compact overview: counts, types, tags, orphans, derived `crossBundleEdges` |
+| `get_neighbors` | Bounded expansion around a concept (`in`/`out`/`both`, depth); `crossBundle: true` follows derived edges into other mounted bundles |
+| `find_path` | Shortest directed link path between two concepts; `crossBundle: true` accepts `bundle:concept` IDs and crosses bundles |
+| `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
 | `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
@@ -184,6 +238,7 @@ Write tools (only with `--writable`):
 | `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte; log + reindex |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
+| `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at its canonical location — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
 | `append_log_entry` | Record a change-narrative entry in the bundle-root `log.md` — or a per-directory one via `directory` — without touching any concept |
 | `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter, reporting hand-curated indexes (`generated: false`) it skipped |
 
@@ -194,7 +249,8 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [command]
+okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
+        [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -204,6 +260,8 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [
   graph [format]      Export the link graph (json | dot | mermaid)
   index               Regenerate index.md files (requires --writable)
 ```
+
+`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
 
 `--watch` (mcp only) auto-reloads local bundles when `.md` files change on disk, debounced so an editor save burst triggers one reload; `.obsidian/` and other dot directories are ignored. Remote bundles still reload only via the `reload_bundles` tool. Where recursive `fs.watch` is unsupported, the server logs a note to stderr and continues without watching.
 
@@ -215,6 +273,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

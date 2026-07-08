@@ -21,18 +21,24 @@ export type {
 } from "./authoring.js";
 export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
+export { canonicalUrlPrefixes, resolveUrlToConcept } from "./canonical.js";
 export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type { FrontmatterPatchResult, FrontmatterSplit } from "./frontmatter.js";
 export { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 export type { FileCommit } from "./git.js";
 export {
   buildGraph,
+  buildMultiGraph,
+  deriveCrossBundleEdges,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
   listTags,
   listTypes,
+  neighborsInGraph,
+  pathInGraph,
+  qualifyNodeId,
 } from "./graph.js";
 export type {
   ConceptGraph,

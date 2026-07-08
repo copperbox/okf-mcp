@@ -21,14 +21,19 @@ import { readBundleDocument } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
+  buildMultiGraph,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
   listTags,
   listTypes,
+  neighborsInGraph,
+  pathInGraph,
+  qualifyNodeId,
 } from "./graph.js";
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
+import { promoteConcept } from "./promote.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
@@ -77,7 +82,8 @@ update_concept, rename_concept, and delete_concept keep index.md navigation and 
 log.md history current — never edit those reserved files directly. Their auto entries
 go to the nearest existing directory log.md above the concept, falling back to the
 bundle root's. Use append_log_entry for change narrative not tied to a single concept
-write. Remote bundles are always read-only.`;
+write. When knowledge outgrows its bundle (e.g. project → org), promote_concept moves
+it and leaves a citation stub behind. Remote bundles are always read-only.`;
 }
 
 function json(data: unknown): CallToolResult {
@@ -281,14 +287,21 @@ export function createOkfServer(
           .array(z.string())
           .optional()
           .describe("Glob patterns over bundle-relative paths to skip"),
+        canonicalUrl: z
+          .string()
+          .optional()
+          .describe(
+            "Extra canonical URL of the bundle root; citations/external links under it resolve to this bundle's concepts as derived cross-bundle edges (GitHub tree mounts derive one from the tree URL automatically)",
+          ),
       },
     },
-    async ({ id, url, include, exclude }) => {
+    async ({ id, url, include, exclude, canonicalUrl }) => {
       await store.addRemoteBundle({
         id,
         url,
         ...(include !== undefined && { include }),
         ...(exclude !== undefined && { exclude }),
+        ...(canonicalUrl !== undefined && { canonicalUrl }),
       });
       return json(remoteBundleSummary(id, url));
     },
@@ -310,6 +323,9 @@ export function createOkfServer(
             ...remoteBundleSummary(config.id, config.url),
             ...(config.include !== undefined && { include: config.include }),
             ...(config.exclude !== undefined && { exclude: config.exclude }),
+            ...(config.canonicalUrl !== undefined && {
+              canonicalUrl: config.canonicalUrl,
+            }),
           })),
       ),
   );
@@ -497,53 +513,95 @@ export function createOkfServer(
     {
       title: "Graph summary",
       description:
-        "Compact overview of a bundle's link graph: counts, types, tags, orphans. Call this before broader graph exploration.",
+        "Compact overview of a bundle's link graph: counts, types, tags, orphans, derived cross-bundle edge count. Call this before broader graph exploration.",
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
       json(
         bundle !== undefined
-          ? graphSummary(store.bundle(bundle))
-          : store.bundles().map(graphSummary),
+          ? graphSummary(store.bundle(bundle), store.bundles())
+          : store.bundles().map((b) => graphSummary(b, store.bundles())),
       ),
   );
+
+  /**
+   * Node ID for cross-bundle traversal: `bundle:concept` IDs pass through
+   * when the prefix names a mounted bundle; plain concept IDs are qualified
+   * with the tool's `bundle` argument (or the only configured bundle).
+   */
+  const qualifyForCrossBundle = (bundleId: string | undefined, id: string): string => {
+    const colon = id.indexOf(":");
+    if (colon > 0 && store.bundles().some((b) => b.id === id.slice(0, colon))) {
+      return id;
+    }
+    return qualifyNodeId(store.bundle(bundleId).id, id);
+  };
+
+  const crossBundleParam = z
+    .boolean()
+    .optional()
+    .describe(
+      "Traverse the multi-bundle graph: node IDs become bundle:concept and derived cross-bundle edges (citation/resource URLs matching another mounted bundle's canonical location) are followed",
+    );
 
   server.registerTool(
     "get_neighbors",
     {
       title: "Get neighbors",
-      description: "Concepts linked to/from a concept, expanded to a bounded depth",
+      description:
+        "Concepts linked to/from a concept, expanded to a bounded depth. With crossBundle, derived edges into other mounted bundles are traversed too and each node carries its bundle ID.",
       inputSchema: {
         bundle: bundleParam,
         id: z.string(),
         direction: z.enum(["in", "out", "both"]).optional(),
         depth: z.number().int().positive().max(5).optional(),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, id, direction, depth }) =>
-      json(getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1)),
+    async ({ bundle, id, direction, depth, crossBundle }) =>
+      json(
+        crossBundle
+          ? neighborsInGraph(
+              buildMultiGraph(store.bundles()),
+              qualifyForCrossBundle(bundle, id),
+              direction ?? "both",
+              depth ?? 1,
+            )
+          : getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+      ),
   );
 
   server.registerTool(
     "find_path",
     {
       title: "Find path",
-      description: "Shortest directed link path between two concepts, if any",
+      description:
+        "Shortest directed link path between two concepts, if any. With crossBundle, `from`/`to` may be bundle:concept IDs and the path may traverse derived cross-bundle edges.",
       inputSchema: {
         bundle: bundleParam,
         from: z.string(),
         to: z.string(),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, from, to }) =>
-      json({ path: findPath(store.bundle(bundle), from, to) }),
+    async ({ bundle, from, to, crossBundle }) =>
+      json({
+        path: crossBundle
+          ? pathInGraph(
+              buildMultiGraph(store.bundles()),
+              qualifyForCrossBundle(bundle, from),
+              qualifyForCrossBundle(bundle, to),
+            )
+          : findPath(store.bundle(bundle), from, to),
+      }),
   );
 
   server.registerTool(
     "export_graph",
     {
       title: "Export graph",
-      description: "Export a bundle's link graph as json, dot, or mermaid",
+      description:
+        "Export a bundle's link graph as json, dot, or mermaid. With crossBundle, all mounted bundles export as one graph with bundle:concept node IDs and visually distinct derived edges.",
       inputSchema: {
         bundle: bundleParam,
         format: z.enum(["json", "dot", "mermaid"]).optional(),
@@ -551,15 +609,20 @@ export function createOkfServer(
           .boolean()
           .optional()
           .describe("Include external link targets as opaque nodes"),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, format, includeExternal }) =>
-      markdown(
+    async ({ bundle, format, includeExternal, crossBundle }) => {
+      const options = { includeExternal: includeExternal ?? false };
+      return markdown(
         exportGraph(
-          buildGraph(store.bundle(bundle), { includeExternal: includeExternal ?? false }),
+          crossBundle
+            ? buildMultiGraph(store.bundles(), options)
+            : buildGraph(store.bundle(bundle), options),
           format ?? "json",
         ),
-      ),
+      );
+    },
   );
 
   /**
@@ -817,6 +880,58 @@ export function createOkfServer(
           [result.from, result.to],
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.to) });
+      },
+    );
+
+    server.registerTool(
+      "promote_concept",
+      {
+        title: "Promote concept",
+        description:
+          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at its canonical location so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
+        inputSchema: {
+          id: z
+            .string()
+            .describe("Concept ID or source-bundle-relative path, e.g. standards/naming"),
+          fromBundle: z.string().describe("Source bundle ID; must be writable"),
+          toBundle: z
+            .string()
+            .describe("Target bundle ID; must be writable and differ from fromBundle"),
+          toPath: z
+            .string()
+            .optional()
+            .describe(
+              "Target-bundle-relative path ending in .md; defaults to suggest_concept_path-style placement with the original filename",
+            ),
+          stub: z
+            .boolean()
+            .optional()
+            .describe(
+              "Leave a citation stub at the old path (default true); false deletes the source copy and just reports the inbound links left dangling",
+            ),
+        },
+      },
+      async ({ id, fromBundle, toBundle, toPath, stub }) => {
+        const source = store.bundle(fromBundle);
+        const target = store.bundle(toBundle);
+        assertWritableBundle(source);
+        assertWritableBundle(target);
+        const result = await promoteConcept(source, target, id, {
+          ...(toPath !== undefined && { toPath }),
+          ...(stub !== undefined && { stub }),
+        });
+        const label = result.title ?? result.id;
+        await logAndReindex(
+          source,
+          `**Update**: Promoted [${label}](/${result.from}) to bundle "${target.id}" (${result.citation}).`,
+          [result.from],
+        );
+        await logAndReindex(
+          target,
+          `**Creation**: Promoted [${label}](/${result.to}) from bundle "${source.id}".`,
+          [result.to],
+        );
+        return json({ ...result, uri: okfUri(target.id, result.to) });
       },
     );
 

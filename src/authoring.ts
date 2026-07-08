@@ -99,7 +99,11 @@ export async function writeConcept(
  * reserved index/log files up front (their IDs never appear in the concept
  * map, but the message should say "reserved", not "unknown").
  */
-function requireConcept(bundle: LoadedBundle, idOrPath: string, action: string): Concept {
+export function requireConcept(
+  bundle: LoadedBundle,
+  idOrPath: string,
+  action: string,
+): Concept {
   if (/(^|\/)(index|log)(\.md)?$/i.test(idOrPath)) {
     throw new Error(`${idOrPath} is a reserved file and cannot be ${action} as a concept`);
   }
@@ -122,7 +126,7 @@ function bodyStartOffset(source: string): number {
 }
 
 /** Concepts (other than the target itself) with a link resolving to `conceptId`. */
-function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
+export function conceptsLinkingTo(bundle: LoadedBundle, conceptId: string): Concept[] {
   return [...bundle.concepts.values()].filter(
     (other) =>
       other.id !== conceptId &&
@@ -445,7 +449,7 @@ function renderTarget(rawTarget: string, destPath: string, fromDir: string): str
  * (`generated: false` frontmatter) keeps its directory alive. Returns the
  * removed bundle-relative directories, deepest first.
  */
-async function removeEmptyDirectories(
+export async function removeEmptyDirectories(
   bundleRoot: string,
   dir: string,
 ): Promise<string[]> {

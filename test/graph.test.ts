@@ -2,15 +2,21 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 
-import { loadBundle } from "../src/bundle.js";
+import { buildBundle, loadBundle } from "../src/bundle.js";
+import { canonicalUrlPrefixes } from "../src/canonical.js";
 import {
   buildGraph,
+  buildMultiGraph,
+  deriveCrossBundleEdges,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
   listTags,
   listTypes,
+  neighborsInGraph,
+  pathInGraph,
+  qualifyNodeId,
 } from "../src/graph.js";
 import type { LoadedBundle } from "../src/types.js";
 import { makeBundle } from "./helpers.js";
@@ -110,5 +116,135 @@ describe("graph", () => {
     const graph = buildGraph(bundle);
     assert.match(exportGraph(graph, "dot"), /digraph okf \{/);
     assert.match(exportGraph(graph, "mermaid"), /^graph TD/);
+  });
+});
+
+describe("cross-bundle graph", () => {
+  const ORG_URL = "https://github.com/acme/org-brain/tree/main";
+  const NAMING_URL = "https://github.com/acme/org-brain/blob/main/standards/naming.md";
+
+  const org = () =>
+    buildBundle(
+      "org",
+      ORG_URL,
+      [
+        {
+          path: "standards/naming.md",
+          source:
+            "---\ntype: Standard\ntitle: Naming\n---\n\nSee [reviews](/standards/reviews.md).\n",
+        },
+        {
+          path: "standards/reviews.md",
+          source:
+            // Self-citation via the org bundle's own canonical URL: stays in-bundle.
+            `---\ntype: Standard\n---\n\n# Citations\n\n[1] [Naming](${NAMING_URL})\n`,
+        },
+      ],
+      { readOnly: true, canonicalUrls: canonicalUrlPrefixes(ORG_URL) },
+    );
+
+  const proj = () =>
+    buildBundle("proj", "/proj", [
+      {
+        path: "guides/setup.md",
+        source: `---
+type: Guide
+title: Setup
+resource: ${ORG_URL}/standards/reviews.md
+---
+
+Also see [the docs](https://example.com/docs).
+
+# Citations
+
+[1] [Naming standard](${NAMING_URL})
+[2] [Naming standard again](${NAMING_URL}#conventions)
+`,
+      },
+    ]);
+
+  it("derives edges from citation and resource URLs matching another bundle's canonical location", () => {
+    const edges = deriveCrossBundleEdges([proj(), org()]);
+    assert.deepEqual(edges, [
+      { from: "proj:guides/setup", to: "org:standards/naming", kind: "cross-bundle" },
+      { from: "proj:guides/setup", to: "org:standards/reviews", kind: "cross-bundle" },
+    ]);
+  });
+
+  it("never derives an edge into the concept's own bundle", () => {
+    assert.deepEqual(deriveCrossBundleEdges([org()]), []);
+  });
+
+  it("builds a multi-bundle graph with namespaced nodes and distinct derived edges", () => {
+    const graph = buildMultiGraph([proj(), org()]);
+    const ids = graph.nodes.map((n) => n.id).sort();
+    assert.deepEqual(ids, [
+      "org:standards/naming",
+      "org:standards/reviews",
+      "proj:guides/setup",
+    ]);
+    const setup = graph.nodes.find((n) => n.id === "proj:guides/setup")!;
+    assert.equal(setup.bundle, "proj");
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.from === "org:standards/naming" &&
+          e.to === "org:standards/reviews" &&
+          e.kind === undefined,
+      ),
+    );
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.from === "proj:guides/setup" &&
+          e.to === "org:standards/naming" &&
+          e.kind === "cross-bundle",
+      ),
+    );
+  });
+
+  it("does not duplicate a matched URL as an external node", () => {
+    const graph = buildMultiGraph([proj(), org()], { includeExternal: true });
+    const external = graph.nodes.filter((n) => n.external).map((n) => n.id);
+    // proj's matched citations are suppressed; org's self-bundle citation is
+    // not a cross-bundle match, so it stays an ordinary external link.
+    assert.deepEqual(external, ["https://example.com/docs", NAMING_URL]);
+  });
+
+  it("expands neighbors across bundles, carrying the target's bundle ID", () => {
+    const graph = buildMultiGraph([proj(), org()]);
+    const result = neighborsInGraph(
+      graph,
+      qualifyNodeId("proj", "guides/setup"),
+      "both",
+      1,
+    );
+    const naming = result.nodes.find((n) => n.id === "org:standards/naming");
+    assert.equal(naming?.bundle, "org");
+  });
+
+  it("finds paths that traverse derived edges", () => {
+    const graph = buildMultiGraph([proj(), org()]);
+    assert.deepEqual(
+      pathInGraph(graph, "proj:guides/setup", "org:standards/reviews"),
+      ["proj:guides/setup", "org:standards/reviews"],
+    );
+    assert.equal(pathInGraph(graph, "org:standards/naming", "proj:guides/setup"), null);
+  });
+
+  it("reports derived cross-bundle edge counts in the summary", () => {
+    const bundles = [proj(), org()];
+    assert.equal(graphSummary(bundles[0]!, bundles).crossBundleEdges, 2);
+    assert.equal(graphSummary(bundles[1]!, bundles).crossBundleEdges, 2);
+    assert.equal(graphSummary(bundles[0]!).crossBundleEdges, 0);
+  });
+
+  it("renders derived edges visually distinct in dot and mermaid exports", () => {
+    const graph = buildMultiGraph([proj(), org()]);
+    assert.match(
+      exportGraph(graph, "dot"),
+      /"proj:guides\/setup" -> "org:standards\/naming" \[style=dashed\];/,
+    );
+    assert.match(exportGraph(graph, "mermaid"), /n\d+ -\.-> n\d+/);
   });
 });
