@@ -154,12 +154,27 @@ export function splitSections(body: string): BodySection[] {
   }));
 }
 
+/** Offsets of one section's subtree within a body, for in-place rewrites. */
+export interface SectionSpan {
+  /** Heading text without the leading #s or an ATX closing sequence. */
+  heading: string;
+  /** Heading level, 1–6. */
+  level: number;
+  /** Offset of the heading line's first character within the body. */
+  start: number;
+  /** Offset just past the heading line, where the section's content begins. */
+  contentStart: number;
+  /** Offset where the subtree ends: the next same-or-shallower heading, or body.length. */
+  end: number;
+}
+
 /**
- * Find a section by heading name (case-insensitive, first match wins). The
- * returned content spans the section's whole subtree: everything up to the
- * next heading of the same or a shallower level.
+ * Locate a section by heading name (case-insensitive, first match wins),
+ * returning the raw offsets of its whole subtree — everything up to the next
+ * heading of the same or a shallower level — so callers can splice the body
+ * without regenerating it.
  */
-export function extractSection(body: string, name: string): BodySection | undefined {
+export function sectionSpan(body: string, name: string): SectionSpan | undefined {
   const bounds = sectionBounds(body);
   const wanted = name.trim().toLowerCase();
   const index = bounds.findIndex((b) => b.heading.toLowerCase() === wanted);
@@ -169,7 +184,24 @@ export function extractSection(body: string, name: string): BodySection | undefi
   return {
     heading: target.heading,
     level: target.level,
-    content: body.slice(target.contentStart, next?.start ?? body.length).trim(),
+    start: target.start,
+    contentStart: target.contentStart,
+    end: next?.start ?? body.length,
+  };
+}
+
+/**
+ * Find a section by heading name (case-insensitive, first match wins). The
+ * returned content spans the section's whole subtree: everything up to the
+ * next heading of the same or a shallower level.
+ */
+export function extractSection(body: string, name: string): BodySection | undefined {
+  const span = sectionSpan(body, name);
+  if (span === undefined) return undefined;
+  return {
+    heading: span.heading,
+    level: span.level,
+    content: body.slice(span.contentStart, span.end).trim(),
   };
 }
 

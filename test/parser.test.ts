@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { splitFrontmatter, serializeDocument } from "../src/frontmatter.js";
+import {
+  patchFrontmatter,
+  splitFrontmatter,
+  serializeDocument,
+} from "../src/frontmatter.js";
 import {
   conceptIdFromPath,
   deriveTitle,
@@ -10,6 +14,7 @@ import {
   extractSection,
   parseConceptDocument,
   sectionAt,
+  sectionSpan,
   splitSections,
 } from "../src/parser.js";
 
@@ -40,6 +45,61 @@ describe("splitFrontmatter", () => {
     const back = splitFrontmatter(doc);
     assert.deepEqual(back.data, { type: "Metric", custom_key: 42 });
     assert.equal(back.body.trim(), "Body.");
+  });
+});
+
+describe("patchFrontmatter", () => {
+  const DOC =
+    "---\ntype: Table\n# owner comes from CODEOWNERS\nowner: data-team\ntitle: Old Title\n---\n\n# Schema\n\nBody.\n";
+
+  it("sets and overwrites only the patched keys, preserving comments and body bytes", () => {
+    const result = patchFrontmatter(DOC, { title: "New Title", status: "active" });
+    assert.deepEqual(result.set, ["title", "status"]);
+    assert.deepEqual(result.deleted, []);
+    assert.match(result.source, /# owner comes from CODEOWNERS\nowner: data-team\n/);
+    assert.match(result.source, /title: New Title/);
+    assert.match(result.source, /status: active/);
+    assert.ok(result.source.endsWith("---\n\n# Schema\n\nBody.\n"));
+    assert.deepEqual(splitFrontmatter(result.source).data, {
+      type: "Table",
+      owner: "data-team",
+      title: "New Title",
+      status: "active",
+    });
+  });
+
+  it("deletes a key on explicit null, reporting only keys that existed", () => {
+    const result = patchFrontmatter(DOC, { owner: null, nope: null });
+    assert.deepEqual(result.set, []);
+    assert.deepEqual(result.deleted, ["owner"]);
+    assert.deepEqual(splitFrontmatter(result.source).data, {
+      type: "Table",
+      title: "Old Title",
+    });
+  });
+
+  it("returns the source untouched for an empty patch", () => {
+    assert.equal(patchFrontmatter(DOC, {}).source, DOC);
+  });
+
+  it("patches an empty frontmatter block", () => {
+    const result = patchFrontmatter("---\n---\n\nBody.\n", { type: "Note" });
+    assert.deepEqual(result.set, ["type"]);
+    assert.deepEqual(splitFrontmatter(result.source).data, { type: "Note" });
+    assert.ok(result.source.endsWith("---\n\nBody.\n"));
+  });
+
+  it("rejects documents without a parseable frontmatter mapping", () => {
+    assert.throws(() => patchFrontmatter("# No frontmatter\n", { a: 1 }), /no frontmatter/);
+    assert.throws(() => patchFrontmatter("---\ntype: Note\n\nBody.", { a: 1 }), /unterminated/);
+    assert.throws(
+      () => patchFrontmatter("---\n- just\n- a list\n---\n\nBody.\n", { a: 1 }),
+      /not a YAML mapping/,
+    );
+    assert.throws(
+      () => patchFrontmatter("---\ntype: [broken\n---\n\nBody.\n", { a: 1 }),
+      /invalid YAML/,
+    );
   });
 });
 
@@ -163,6 +223,32 @@ describe("extractSection", () => {
 
   it("returns undefined for an unknown heading", () => {
     assert.equal(extractSection(body, "Citations"), undefined);
+  });
+});
+
+describe("sectionSpan", () => {
+  const body =
+    "Intro.\n\n# Schema\n\nColumns.\n\n## Keys\n\nPrimary key.\n\n# Examples\n\nQuery.\n";
+
+  it("records offsets that slice back to the heading line and subtree", () => {
+    const span = sectionSpan(body, "schema");
+    assert.equal(span?.heading, "Schema");
+    assert.equal(span?.level, 1);
+    assert.equal(body.slice(span!.start, span!.contentStart), "# Schema\n");
+    assert.equal(
+      body.slice(span!.contentStart, span!.end),
+      "\nColumns.\n\n## Keys\n\nPrimary key.\n\n",
+    );
+  });
+
+  it("runs to the end of the body for the last section", () => {
+    const span = sectionSpan(body, "Examples");
+    assert.equal(span?.end, body.length);
+    assert.equal(body.slice(span!.contentStart, span!.end), "\nQuery.\n");
+  });
+
+  it("returns undefined for an unknown heading", () => {
+    assert.equal(sectionSpan(body, "Citations"), undefined);
   });
 });
 

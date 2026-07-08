@@ -9,8 +9,10 @@ import {
   assertSafeConceptPath,
   deleteConcept,
   generateIndexes,
+  nearestLogDirectory,
   renameConcept,
   renderIndexes,
+  updateConcept,
   writeConcept,
 } from "../src/authoring.js";
 import { loadBundle } from "../src/bundle.js";
@@ -110,6 +112,143 @@ describe("authoring", () => {
     assert.ok(Date.parse(timestamp as string) >= before);
   });
 
+  it("patches frontmatter keys, preserving untouched keys, comments, and the body byte-for-byte", async () => {
+    const original =
+      "---\n# reviewed 2026-06\ntype: Table\nowner: data-team\ntitle: Orders\n---\n\n# Schema\n\nColumns.\n";
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(path.join(root, "tables/orders.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "tables/orders", {
+      frontmatter: { title: "Order Facts", status: "active", owner: null },
+    });
+    assert.equal(result.id, "tables/orders");
+    assert.equal(result.path, "tables/orders.md");
+    assert.equal(result.title, "Order Facts");
+    assert.deepEqual(result.updatedKeys, ["title", "status"]);
+    assert.deepEqual(result.deletedKeys, ["owner"]);
+
+    const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+    assert.match(source, /# reviewed 2026-06\ntype: Table\n/);
+    assert.doesNotMatch(source, /owner: data-team/);
+    assert.match(source, /title: Order Facts/);
+    assert.ok(source.endsWith("---\n\n# Schema\n\nColumns.\n"));
+  });
+
+  it("replaces one body section, leaving the rest of the document byte-for-byte intact", async () => {
+    const original =
+      "---\ntype: Table\n---\n\nIntro.\n\n# Schema\n\nOld columns.\n\n## Keys\n\nOld key.\n\n# Examples\n\nQuery.\n";
+    await fs.writeFile(path.join(root, "orders.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "orders", {
+      section: { heading: "schema", content: "New columns.\n\n## Keys\n\nNew key." },
+    });
+    assert.equal(result.replacedSection, "Schema");
+    assert.deepEqual(result.updatedKeys, []);
+
+    const source = await fs.readFile(path.join(root, "orders.md"), "utf8");
+    assert.equal(
+      source,
+      "---\ntype: Table\n---\n\nIntro.\n\n# Schema\n\nNew columns.\n\n## Keys\n\nNew key.\n\n# Examples\n\nQuery.\n",
+    );
+  });
+
+  it("replaces the last section without disturbing the trailing newline", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOne.\n\n# B\n\nTwo.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", { section: { heading: "B", content: "New two." } });
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /# A\n\nOne\.\n\n# B\n\nNew two\.\n$/);
+  });
+
+  it("applies a frontmatter patch and a section replacement together", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", title: "X" },
+      "# A\n\nOne.\n\n# B\n\nTwo.",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "x", {
+      frontmatter: { title: "X2" },
+      section: { heading: "A", content: "New one." },
+    });
+    assert.deepEqual(result.updatedKeys, ["title"]);
+    assert.equal(result.replacedSection, "A");
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /title: X2/);
+    assert.match(source, /# A\n\nNew one\.\n\n# B\n\nTwo\.\n$/);
+  });
+
+  it("rejects an unknown section, listing what is available", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# A\n\nOne.\n\n# B\n\nTwo.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "x", { section: { heading: "C", content: "?" } }),
+      /no section "C".*available sections: A, B/,
+    );
+    // Nothing was written.
+    assert.match(await fs.readFile(path.join(root, "x.md"), "utf8"), /# A\n\nOne\./);
+  });
+
+  it("requires at least one of a frontmatter patch or a section replacement", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(updateConcept(bundle, "x", {}), /frontmatter patch|section/);
+    await assert.rejects(updateConcept(bundle, "x", { frontmatter: {} }), /frontmatter patch|section/);
+  });
+
+  it("refuses to delete or blank the required type key", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "x", { frontmatter: { type: null } }),
+      /non-empty `type`/,
+    );
+    await assert.rejects(
+      updateConcept(bundle, "x", { frontmatter: { type: " " } }),
+      /non-empty `type`/,
+    );
+  });
+
+  it("rejects reserved files and unknown concepts", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await assert.rejects(
+      updateConcept(bundle, "log.md", { frontmatter: { a: 1 } }),
+      /reserved/,
+    );
+    await assert.rejects(
+      updateConcept(bundle, "nope", { frontmatter: { a: 1 } }),
+      /unknown concept/,
+    );
+  });
+
+  it("patches the document as it is on disk, not the loaded snapshot", async () => {
+    await writeConcept(root, "bare.md", { type: "Note" }, "# A\n\nOld.");
+    const bundle = await loadBundle({ id: "t", root });
+    // A concurrent editor stripped the frontmatter after the bundle loaded.
+    await fs.writeFile(path.join(root, "bare.md"), "# A\n\nNo frontmatter here.\n");
+
+    await assert.rejects(
+      updateConcept(bundle, "bare", { frontmatter: { owner: "x" } }),
+      /no frontmatter/,
+    );
+    // A section-only update still works against the on-disk state.
+    await updateConcept(bundle, "bare", { section: { heading: "A", content: "Patched." } });
+    assert.equal(
+      await fs.readFile(path.join(root, "bare.md"), "utf8"),
+      "# A\n\nPatched.\n",
+    );
+  });
+
   it("prepends log entries newest-first grouped by day", async () => {
     await appendLogEntry(root, "**Creation**: first", { date: new Date("2026-07-01T10:00:00Z") });
     await appendLogEntry(root, "**Update**: second", { date: new Date("2026-07-06T10:00:00Z") });
@@ -154,6 +293,20 @@ describe("authoring", () => {
     assert.equal(rootLog.path, "log.md");
     const scoped = await appendLogEntry(root, "**Update**: scoped", { directory: "tables/" });
     assert.equal(scoped.path, "tables/log.md");
+  });
+
+  it("resolves the nearest existing directory log for a concept path", async () => {
+    await writeConcept(root, "tables/facts/orders.md", { type: "Table" }, "Body");
+    // No directory log anywhere: fall back to the bundle root.
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "");
+    // An ancestor log is found across intermediate levels without one.
+    await appendLogEntry(root, "**Creation**: tables scope", { directory: "tables" });
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "tables");
+    // The concept's own directory wins over an ancestor's.
+    await appendLogEntry(root, "**Creation**: facts scope", { directory: "tables/facts" });
+    assert.equal(await nearestLogDirectory(root, "tables/facts/orders.md"), "tables/facts");
+    // A root-level concept always resolves to the root.
+    assert.equal(await nearestLogDirectory(root, "readme-ish.md"), "");
   });
 
   it("rejects log directories that escape the bundle or hide in dot-directories", async () => {
@@ -226,6 +379,18 @@ describe("authoring", () => {
     await assert.rejects(fs.access(path.join(root, "tables")));
     // Unrelated directories stay put.
     await fs.access(path.join(root, "metrics/revenue.md"));
+  });
+
+  it("keeps a directory whose index.md is hand-curated when the last concept leaves", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    await writeConcept(root, "metrics/revenue.md", { type: "Metric" }, "Body");
+    const curated = "---\ngenerated: false\n---\n\n# Tables, by hand\n";
+    await fs.writeFile(path.join(root, "tables/index.md"), curated);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await deleteConcept(bundle, "tables/orders");
+    assert.deepEqual(result.removedDirs, []);
+    assert.equal(await fs.readFile(path.join(root, "tables/index.md"), "utf8"), curated);
   });
 
   it("keeps a directory that still contains other concepts", async () => {
@@ -334,8 +499,9 @@ describe("authoring", () => {
       "Body",
     );
     const bundle = await loadBundle({ id: "t", root });
-    const written = await generateIndexes(bundle);
+    const { written, skipped } = await generateIndexes(bundle);
     assert.deepEqual(written, ["index.md", "tables/index.md"]);
+    assert.deepEqual(skipped, []);
 
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
     assert.match(rootIndex, /okf_version: "0.1"/);
@@ -343,6 +509,70 @@ describe("authoring", () => {
 
     const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
     assert.match(tablesIndex, /\[Orders\]\(orders\.md\) - Order rows\./);
+  });
+
+  it("preserves root-index frontmatter and a declared okf_version on regeneration", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\nokf_version: "0.2"\nowner: data-team\n---\n\n# Old Index\n',
+    );
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+    assert.match(rootIndex, /okf_version: "0\.2"/);
+    assert.match(rootIndex, /owner: data-team/);
+    // The body is still regenerated; only the frontmatter is carried over.
+    assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    assert.doesNotMatch(rootIndex, /Old Index/);
+    const reloaded = await loadBundle({ id: "t", root });
+    assert.equal(reloaded.okfVersion, "0.2");
+  });
+
+  it("stamps okf_version only when the existing root frontmatter lacks it", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      "---\nowner: data-team\n---\n\n# Old Index\n",
+    );
+    await writeConcept(root, "x.md", { type: "Note" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+    assert.match(rootIndex, /okf_version: "0.1"/);
+    assert.match(rootIndex, /owner: data-team/);
+  });
+
+  it("skips hand-curated indexes marked generated: false and reports why", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    const curated =
+      "---\ngenerated: false\n---\n\n# Getting Started\n\n* [Orders](orders.md) - start here\n";
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(path.join(root, "tables/index.md"), curated);
+
+    const bundle = await loadBundle({ id: "t", root });
+    const { written, skipped } = await generateIndexes(bundle);
+    assert.deepEqual(written, ["index.md"]);
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0]!.path, "tables/index.md");
+    assert.match(skipped[0]!.reason, /generated: false/);
+
+    const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
+    assert.equal(tablesIndex, curated);
+  });
+
+  it("skips a hand-curated bundle-root index entirely", async () => {
+    await writeConcept(root, "tables/orders.md", { type: "Table" }, "Body");
+    const curated =
+      '---\nokf_version: "0.1"\ngenerated: false\n---\n\n# Curated Home\n\n* [Tables](tables/) - by hand\n';
+    await fs.writeFile(path.join(root, "index.md"), curated);
+
+    const bundle = await loadBundle({ id: "t", root });
+    const { written, skipped } = await generateIndexes(bundle);
+    assert.deepEqual(written, ["tables/index.md"]);
+    assert.deepEqual(skipped.map((s) => s.path), ["index.md"]);
+    assert.equal(await fs.readFile(path.join(root, "index.md"), "utf8"), curated);
   });
 
   it("derives index entry titles from the filename when frontmatter has none", async () => {
