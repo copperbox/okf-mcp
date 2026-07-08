@@ -130,7 +130,7 @@ Two routing behaviors make this workable:
 - Aggregate read tools — `search_concepts`, `list_concepts`, `list_types`, `list_tags`, `graph_summary`, `validate_bundle` — cover **all** bundles when the `bundle` parameter is omitted, so one search spans both brains.
 - Per-concept and write tools (`get_concept`, `get_neighbors`, `write_concept`, …) require an explicit `bundle` once more than one is mounted, so a write always names its destination.
 
-Split knowledge by scope: standards, environment architecture, and cross-repo system maps belong in the org bundle; decisions and gotchas specific to one repo belong in that repo's project bundle. Cross-bundle markdown links are not part of OKF (§5 links resolve within a single bundle, so a link into another bundle just indexes as broken) — to reference an org concept from a project concept, cite it in a `# Citations` section (spec §8) using the org bundle's canonical URL; when a real graph edge matters, add a small stub concept under `references/` in the project bundle that mirrors the org concept, link to the stub, and let the stub's citation point at the source.
+Split knowledge by scope: standards, environment architecture, and cross-repo system maps belong in the org bundle; decisions and gotchas specific to one repo belong in that repo's project bundle. Cross-bundle markdown links are not part of OKF (§5 links resolve within a single bundle, so a link into another bundle just indexes as broken) — to reference an org concept from a project concept, cite it in a `# Citations` section (spec §8) using the org bundle's canonical URL; when a real graph edge matters, add a small stub concept under `references/` in the project bundle that mirrors the org concept, link to the stub, and let the stub's citation point at the source. When project knowledge turns out to be org-wide, `promote_concept` moves it into the org bundle and leaves exactly such a citation stub behind at the old path, so the project bundle's inbound links keep resolving.
 
 Append routing guidance to the CLAUDE.md snippet above:
 
@@ -235,6 +235,7 @@ Write tools (only with `--writable`):
 | `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
+| `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at its canonical location — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
 | `append_log_entry` | Record a change-narrative entry in the bundle-root `log.md` — or a per-directory one via `directory` — without touching any concept |
 | `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter |
 

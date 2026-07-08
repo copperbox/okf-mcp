@@ -31,6 +31,7 @@ import {
   qualifyNodeId,
 } from "./graph.js";
 import { extractCitations, extractSection, splitSections } from "./parser.js";
+import { promoteConcept } from "./promote.js";
 import { searchConcepts } from "./search.js";
 import type { OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
@@ -75,7 +76,9 @@ Writing: call suggest_concept_path before creating a concept so placement matche
 where similar concepts live, and reuse existing types/tags. write_concept,
 rename_concept, and delete_concept keep index.md navigation and the log.md history
 current — never edit those reserved files directly. Use append_log_entry for change
-narrative not tied to a single concept write. Remote bundles are always read-only.`;
+narrative not tied to a single concept write. When knowledge outgrows its bundle
+(e.g. project → org), promote_concept moves it and leaves a citation stub behind.
+Remote bundles are always read-only.`;
 }
 
 function json(data: unknown): CallToolResult {
@@ -797,6 +800,56 @@ export function createOkfServer(
             `**Update**: Renamed [${result.title ?? result.id}](/${result.to}) (was /${result.from}).`,
         );
         return json({ ...result, bundle: target.id, uri: okfUri(target.id, result.to) });
+      },
+    );
+
+    server.registerTool(
+      "promote_concept",
+      {
+        title: "Promote concept",
+        description:
+          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at its canonical location so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
+        inputSchema: {
+          id: z
+            .string()
+            .describe("Concept ID or source-bundle-relative path, e.g. standards/naming"),
+          fromBundle: z.string().describe("Source bundle ID; must be writable"),
+          toBundle: z
+            .string()
+            .describe("Target bundle ID; must be writable and differ from fromBundle"),
+          toPath: z
+            .string()
+            .optional()
+            .describe(
+              "Target-bundle-relative path ending in .md; defaults to suggest_concept_path-style placement with the original filename",
+            ),
+          stub: z
+            .boolean()
+            .optional()
+            .describe(
+              "Leave a citation stub at the old path (default true); false deletes the source copy and just reports the inbound links left dangling",
+            ),
+        },
+      },
+      async ({ id, fromBundle, toBundle, toPath, stub }) => {
+        const source = store.bundle(fromBundle);
+        const target = store.bundle(toBundle);
+        assertWritableBundle(source);
+        assertWritableBundle(target);
+        const result = await promoteConcept(source, target, id, {
+          ...(toPath !== undefined && { toPath }),
+          ...(stub !== undefined && { stub }),
+        });
+        const label = result.title ?? result.id;
+        await logAndReindex(
+          source,
+          `**Update**: Promoted [${label}](/${result.from}) to bundle "${target.id}" (${result.citation}).`,
+        );
+        await logAndReindex(
+          target,
+          `**Creation**: Promoted [${label}](/${result.to}) from bundle "${source.id}".`,
+        );
+        return json({ ...result, uri: okfUri(target.id, result.to) });
       },
     );
 
