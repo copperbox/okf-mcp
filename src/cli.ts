@@ -16,7 +16,8 @@ import { watchBundles } from "./watch.js";
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [command]
+  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
+          [--writable] [--watch] [command]
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -33,6 +34,10 @@ Options:
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
                           repeatable, indexed in memory at startup.
+  --canonical-url id=url  Canonical published URL of a bundle's root (e.g. its
+                          GitHub tree URL); repeatable. Citations and external
+                          links under it resolve to that bundle's concepts as
+                          derived cross-bundle graph edges.
   --writable              Enable authoring: write_concept tool and index command
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
@@ -61,12 +66,39 @@ function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
   });
 }
 
+/**
+ * Attach `--canonical-url id=url` values to the matching local or remote
+ * bundle config (mutating in place). Unknown IDs are an error — a typo would
+ * otherwise silently disable cross-bundle matching.
+ */
+function applyCanonicalUrlFlags(
+  values: string[],
+  configs: BundleConfig[],
+  remotes: RemoteBundleConfig[],
+): void {
+  for (const value of values) {
+    const eq = value.indexOf("=");
+    if (eq <= 0 || value.slice(eq + 1) === "") {
+      throw new Error(`--canonical-url requires id=<url>, got: ${value}`);
+    }
+    const id = value.slice(0, eq);
+    const url = value.slice(eq + 1);
+    const config =
+      configs.find((c) => c.id === id) ?? remotes.find((r) => r.id === id);
+    if (config === undefined) {
+      throw new Error(`--canonical-url names an unknown bundle: ${id}`);
+    }
+    config.canonicalUrl = url;
+  }
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
       bundle: { type: "string", multiple: true },
       "remote-bundle": { type: "string", multiple: true },
+      "canonical-url": { type: "string", multiple: true },
       writable: { type: "boolean" },
       watch: { type: "boolean" },
       help: { type: "boolean" },
@@ -80,6 +112,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   const configs = parseBundleFlags(values.bundle ?? []);
   const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
+  applyCanonicalUrlFlags(values["canonical-url"] ?? [], configs, remotes);
   if (configs.length === 0 && remotes.length === 0) {
     console.error("error: at least one --bundle or --remote-bundle is required\n");
     console.error(USAGE);
@@ -123,7 +156,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     case "inspect": {
       for (const bundle of store.bundles()) {
-        console.log(JSON.stringify(graphSummary(bundle), null, 2));
+        console.log(JSON.stringify(graphSummary(bundle, store.bundles()), null, 2));
       }
       return 0;
     }

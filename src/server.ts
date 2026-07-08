@@ -19,12 +19,16 @@ import { readBundleDocument } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
+  buildMultiGraph,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
   listTags,
   listTypes,
+  neighborsInGraph,
+  pathInGraph,
+  qualifyNodeId,
 } from "./graph.js";
 import { extractCitations, extractSection, splitSections } from "./parser.js";
 import { searchConcepts } from "./search.js";
@@ -275,14 +279,21 @@ export function createOkfServer(
           .array(z.string())
           .optional()
           .describe("Glob patterns over bundle-relative paths to skip"),
+        canonicalUrl: z
+          .string()
+          .optional()
+          .describe(
+            "Extra canonical URL of the bundle root; citations/external links under it resolve to this bundle's concepts as derived cross-bundle edges (GitHub tree mounts derive one from the tree URL automatically)",
+          ),
       },
     },
-    async ({ id, url, include, exclude }) => {
+    async ({ id, url, include, exclude, canonicalUrl }) => {
       await store.addRemoteBundle({
         id,
         url,
         ...(include !== undefined && { include }),
         ...(exclude !== undefined && { exclude }),
+        ...(canonicalUrl !== undefined && { canonicalUrl }),
       });
       return json(remoteBundleSummary(id, url));
     },
@@ -304,6 +315,9 @@ export function createOkfServer(
             ...remoteBundleSummary(config.id, config.url),
             ...(config.include !== undefined && { include: config.include }),
             ...(config.exclude !== undefined && { exclude: config.exclude }),
+            ...(config.canonicalUrl !== undefined && {
+              canonicalUrl: config.canonicalUrl,
+            }),
           })),
       ),
   );
@@ -491,47 +505,89 @@ export function createOkfServer(
     async ({ bundle }) =>
       json(
         bundle !== undefined
-          ? graphSummary(store.bundle(bundle))
-          : store.bundles().map(graphSummary),
+          ? graphSummary(store.bundle(bundle), store.bundles())
+          : store.bundles().map((b) => graphSummary(b, store.bundles())),
       ),
   );
+
+  /**
+   * Node ID for cross-bundle traversal: `bundle:concept` IDs pass through
+   * when the prefix names a mounted bundle; plain concept IDs are qualified
+   * with the tool's `bundle` argument (or the only configured bundle).
+   */
+  const qualifyForCrossBundle = (bundleId: string | undefined, id: string): string => {
+    const colon = id.indexOf(":");
+    if (colon > 0 && store.bundles().some((b) => b.id === id.slice(0, colon))) {
+      return id;
+    }
+    return qualifyNodeId(store.bundle(bundleId).id, id);
+  };
+
+  const crossBundleParam = z
+    .boolean()
+    .optional()
+    .describe(
+      "Traverse the multi-bundle graph: node IDs become bundle:concept and derived cross-bundle edges (citation/resource URLs matching another mounted bundle's canonical location) are followed",
+    );
 
   server.registerTool(
     "get_neighbors",
     {
       title: "Get neighbors",
-      description: "Concepts linked to/from a concept, expanded to a bounded depth",
+      description:
+        "Concepts linked to/from a concept, expanded to a bounded depth. With crossBundle, derived edges into other mounted bundles are traversed too and each node carries its bundle ID.",
       inputSchema: {
         bundle: bundleParam,
         id: z.string(),
         direction: z.enum(["in", "out", "both"]).optional(),
         depth: z.number().int().positive().max(5).optional(),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, id, direction, depth }) =>
-      json(getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1)),
+    async ({ bundle, id, direction, depth, crossBundle }) =>
+      json(
+        crossBundle
+          ? neighborsInGraph(
+              buildMultiGraph(store.bundles()),
+              qualifyForCrossBundle(bundle, id),
+              direction ?? "both",
+              depth ?? 1,
+            )
+          : getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+      ),
   );
 
   server.registerTool(
     "find_path",
     {
       title: "Find path",
-      description: "Shortest directed link path between two concepts, if any",
+      description:
+        "Shortest directed link path between two concepts, if any. With crossBundle, `from`/`to` may be bundle:concept IDs and the path may traverse derived cross-bundle edges.",
       inputSchema: {
         bundle: bundleParam,
         from: z.string(),
         to: z.string(),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, from, to }) =>
-      json({ path: findPath(store.bundle(bundle), from, to) }),
+    async ({ bundle, from, to, crossBundle }) =>
+      json({
+        path: crossBundle
+          ? pathInGraph(
+              buildMultiGraph(store.bundles()),
+              qualifyForCrossBundle(bundle, from),
+              qualifyForCrossBundle(bundle, to),
+            )
+          : findPath(store.bundle(bundle), from, to),
+      }),
   );
 
   server.registerTool(
     "export_graph",
     {
       title: "Export graph",
-      description: "Export a bundle's link graph as json, dot, or mermaid",
+      description:
+        "Export a bundle's link graph as json, dot, or mermaid. With crossBundle, all mounted bundles export as one graph with bundle:concept node IDs and visually distinct derived edges.",
       inputSchema: {
         bundle: bundleParam,
         format: z.enum(["json", "dot", "mermaid"]).optional(),
@@ -539,12 +595,19 @@ export function createOkfServer(
           .boolean()
           .optional()
           .describe("Include external link targets as opaque nodes"),
+        crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, format, includeExternal }) =>
+    async ({ bundle, format, includeExternal, crossBundle }) =>
       markdown(
         exportGraph(
-          buildGraph(store.bundle(bundle), { includeExternal: includeExternal ?? false }),
+          crossBundle
+            ? buildMultiGraph(store.bundles(), {
+                includeExternal: includeExternal ?? false,
+              })
+            : buildGraph(store.bundle(bundle), {
+                includeExternal: includeExternal ?? false,
+              }),
           format ?? "json",
         ),
       ),

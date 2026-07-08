@@ -73,6 +73,27 @@ describe("loadRemoteBundle", () => {
     assert.equal(customers.links[0]?.resolvedId, "tables/orders");
     // Raw sources are kept in memory so resources can be served.
     assert.equal(bundle.sources?.get("tables/orders.md"), DOC);
+    // The tree URL becomes the bundle's canonical location (tree/blob/raw).
+    assert.deepEqual(bundle.canonicalUrls, [
+      "https://github.com/acme/kb/tree/main/kb",
+      "https://github.com/acme/kb/blob/main/kb",
+      "https://raw.githubusercontent.com/acme/kb/main/kb",
+    ]);
+  });
+
+  it("appends a configured canonicalUrl to the derived prefixes", async () => {
+    const bundle = await loadRemoteBundle(
+      {
+        id: "r",
+        url: "https://github.com/acme/kb/tree/main/kb",
+        canonicalUrl: "https://kb.example.com/brain",
+      },
+      fakeGitHub({ "kb/tables/orders.md": DOC }),
+    );
+    assert.ok(bundle.canonicalUrls?.includes("https://kb.example.com/brain"));
+    assert.ok(
+      bundle.canonicalUrls?.includes("https://github.com/acme/kb/blob/main/kb"),
+    );
   });
 
   it("applies include and exclude globs to bundle-relative paths", async () => {
@@ -147,6 +168,8 @@ describe("loadRemoteBundle from archives", () => {
 
     assert.equal(bundle.id, "r");
     assert.equal(bundle.readOnly, true);
+    // Archives have no per-file URLs, so no canonical location is derived.
+    assert.equal(bundle.canonicalUrls, undefined);
     assert.equal(bundle.root, URL);
     assert.deepEqual([...bundle.concepts.keys()].sort(), [
       "tables/customers",

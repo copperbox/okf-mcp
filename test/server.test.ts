@@ -878,6 +878,100 @@ describe("server instructions", () => {
   });
 });
 
+describe("cross-bundle graph tools", () => {
+  const ORG_URL = "https://github.com/acme/kb/tree/main/kb";
+  const NAMING_BLOB = "https://github.com/acme/kb/blob/main/kb/standards/naming.md";
+  const ORG_DOC =
+    "---\ntype: Standard\ntitle: Naming\n---\n\nSee [reviews](/standards/reviews.md).\n";
+  const REVIEWS_DOC = "---\ntype: Standard\ntitle: Reviews\n---\n\nReview rules.\n";
+
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cross-bundle-test-"));
+    await fs.writeFile(
+      path.join(root, "setup.md"),
+      `---\ntype: Guide\ntitle: Setup\n---\n\n# Citations\n\n[1] [Naming standard](${NAMING_BLOB})\n`,
+    );
+    const store = new OkfStore([{ id: "proj", root }], {
+      remotes: [{ id: "org", url: ORG_URL }],
+      fetchImpl: fakeGitHub({
+        "kb/standards/naming.md": ORG_DOC,
+        "kb/standards/reviews.md": REVIEWS_DOC,
+      }),
+    });
+    client = await connectClient(store);
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("graph_summary reports derived cross-bundle edge counts", async () => {
+    const summaries = (await callJson(client, "graph_summary", {})) as Array<{
+      bundle: string;
+      crossBundleEdges: number;
+    }>;
+    for (const summary of summaries) {
+      assert.equal(summary.crossBundleEdges, 1, summary.bundle);
+    }
+  });
+
+  it("get_neighbors traverses derived edges only when crossBundle is set", async () => {
+    const plain = (await callJson(client, "get_neighbors", {
+      bundle: "proj",
+      id: "setup",
+    })) as { nodes: Array<{ id: string }> };
+    assert.deepEqual(plain.nodes.map((n) => n.id), ["setup"]);
+
+    const cross = (await callJson(client, "get_neighbors", {
+      bundle: "proj",
+      id: "setup",
+      crossBundle: true,
+    })) as { nodes: Array<{ id: string; bundle: string }> };
+    const naming = cross.nodes.find((n) => n.id === "org:standards/naming");
+    assert.equal(naming?.bundle, "org");
+  });
+
+  it("find_path crosses bundles with qualified IDs", async () => {
+    const { path: found } = (await callJson(client, "find_path", {
+      bundle: "proj",
+      from: "setup",
+      to: "org:standards/reviews",
+      crossBundle: true,
+    })) as { path: string[] };
+    assert.deepEqual(found, [
+      "proj:setup",
+      "org:standards/naming",
+      "org:standards/reviews",
+    ]);
+  });
+
+  it("export_graph renders a namespaced multi-bundle graph with dashed derived edges", async () => {
+    const dot = textContent(
+      await callTool(client, "export_graph", { format: "dot", crossBundle: true }),
+    );
+    assert.match(dot, /"proj:setup" -> "org:standards\/naming" \[style=dashed\];/);
+    assert.match(dot, /"org:standards\/naming" -> "org:standards\/reviews";/);
+  });
+
+  it("load_remote_bundle accepts and list_remote_bundles echoes a canonicalUrl", async () => {
+    await callTool(client, "load_remote_bundle", {
+      id: "org2",
+      url: "https://github.com/acme/kb/tree/main/kb",
+      canonicalUrl: "https://kb.example.com/org",
+    });
+    const listed = (await callJson(client, "list_remote_bundles", {})) as Array<{
+      id: string;
+      canonicalUrl?: string;
+    }>;
+    assert.equal(
+      listed.find((b) => b.id === "org2")?.canonicalUrl,
+      "https://kb.example.com/org",
+    );
+  });
+});
+
 describe("README tool documentation", () => {
   it("documents every registered tool in a table row", async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);

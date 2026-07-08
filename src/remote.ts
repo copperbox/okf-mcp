@@ -3,7 +3,12 @@ import zlib from "node:zlib";
 
 import { buildBundle } from "./bundle.js";
 import type { BundleDocument } from "./bundle.js";
+import { canonicalUrlPrefixes, parseGitHubTreeUrl } from "./canonical.js";
+import type { GitHubTreeRef } from "./canonical.js";
 import type { LoadedBundle, RemoteBundleConfig } from "./types.js";
+
+export { parseGitHubTreeUrl } from "./canonical.js";
+export type { GitHubTreeRef } from "./canonical.js";
 
 /** Hard cap on markdown files fetched from one remote tree. */
 export const MAX_REMOTE_FILES = 500;
@@ -13,32 +18,6 @@ export const MAX_REMOTE_BYTES = 10 * 1024 * 1024;
 export const MAX_ARCHIVE_DOWNLOAD_BYTES = MAX_REMOTE_BYTES;
 /** Decompression-bomb guard: cap on a gunzipped tar stream. */
 const MAX_ARCHIVE_UNPACKED_BYTES = 8 * MAX_REMOTE_BYTES;
-
-export interface GitHubTreeRef {
-  owner: string;
-  repo: string;
-  ref: string;
-  /** Repo-relative directory the bundle root maps to ("" for the repo root). */
-  path: string;
-}
-
-const TREE_URL =
-  /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/tree\/([^/\s]+)(?:\/(.+?))?\/?$/;
-
-/**
- * Parse a public GitHub tree URL. Refs containing `/` (e.g. `feature/x`
- * branches) are not supported — the first path segment after `/tree/` is
- * taken as the ref.
- */
-export function parseGitHubTreeUrl(url: string): GitHubTreeRef {
-  const match = TREE_URL.exec(url.trim());
-  if (!match) {
-    throw new Error(
-      `not a public GitHub tree URL (expected https://github.com/<owner>/<repo>/tree/<ref>[/<path>]): ${url}`,
-    );
-  }
-  return { owner: match[1]!, repo: match[2]!, ref: match[3]!, path: match[4] ?? "" };
-}
 
 /** Convert a glob (`*`, `**`, `?`) into a regex over POSIX relative paths. */
 function globToRegExp(glob: string): RegExp {
@@ -408,6 +387,20 @@ function archiveDocuments(
   }));
 }
 
+/**
+ * Canonical URL prefixes of a remote bundle: derived from its GitHub tree
+ * URL when it has one (archives have no per-file URLs), plus any configured
+ * canonicalUrl.
+ */
+function remoteCanonicalUrls(config: RemoteBundleConfig): string[] {
+  const urls =
+    archiveKind(config.url) === null ? canonicalUrlPrefixes(config.url) : [];
+  if (config.canonicalUrl !== undefined) {
+    urls.push(...canonicalUrlPrefixes(config.canonicalUrl));
+  }
+  return [...new Set(urls)];
+}
+
 /** Load a read-only bundle from a tar.gz/tgz/zip archive (URL or local path). */
 async function loadArchiveBundle(
   kind: ArchiveKind,
@@ -432,6 +425,7 @@ async function loadArchiveBundle(
   return buildBundle(config.id, config.url, archiveDocuments(entries, config), {
     readOnly: true,
     keepSources: true,
+    canonicalUrls: remoteCanonicalUrls(config),
   });
 }
 
@@ -465,5 +459,6 @@ export async function loadRemoteBundle(
   return buildBundle(config.id, config.url, documents, {
     readOnly: true,
     keepSources: true,
+    canonicalUrls: remoteCanonicalUrls(config),
   });
 }

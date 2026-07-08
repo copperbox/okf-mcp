@@ -113,7 +113,7 @@ npm run dev -- \
   inspect
 ```
 
-`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
+`--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude?, canonicalUrl? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
 
 Remote bundles are strictly read-only and sandboxed:
 
@@ -122,6 +122,14 @@ Remote bundles are strictly read-only and sandboxed:
 - Remote content is parsed as markdown, never executed, and never written to disk.
 - All authoring tools reject read-only bundles, and `regenerate_indexes` / the `index` command skip them.
 - `reload_bundles` refetches them, reporting the same added/removed/changed delta as local bundles.
+
+### Cross-bundle awareness
+
+OKF §5 deliberately has no cross-bundle link syntax, but the server knows every mounted bundle's canonical location and can *derive* cross-bundle relationships from spec-clean data. When a concept's §8 citation target, external link, or frontmatter `resource` URL points under another mounted bundle's canonical location, the graph tools record a derived `kind: "cross-bundle"` edge to that concept — read-only, no new syntax in documents.
+
+- GitHub tree mounts get their canonical location automatically (the `tree`, `blob`, and `raw.githubusercontent.com` forms of the tree URL all match).
+- Local clones and archives have no inherent URL: give them one with `--canonical-url id=<url>` (or `canonicalUrl` on `load_remote_bundle`), e.g. the GitHub tree URL of the shared bundle's published location, so citations to it resolve even when it is mounted from a local checkout.
+- `graph_summary` reports `crossBundleEdges`; `get_neighbors` and `find_path` traverse derived edges when called with `crossBundle: true` (node IDs become `bundle:concept` and carry the target's bundle); `export_graph` with `crossBundle: true` emits one namespaced multi-bundle graph with derived edges rendered dashed in `dot`/`mermaid`.
 
 ## The bundle (your "OKF brain")
 
@@ -164,10 +172,10 @@ Read tools:
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |
 | `suggest_concept_path` | Where a new concept should live, ranked by where same-type (and same-tag) concepts already are |
-| `graph_summary` | Compact overview: counts, types, tags, orphans |
-| `get_neighbors` | Bounded expansion around a concept (`in`/`out`/`both`, depth) |
-| `find_path` | Shortest directed link path between two concepts |
-| `export_graph` | Graph as `json`, `dot`, or `mermaid` |
+| `graph_summary` | Compact overview: counts, types, tags, orphans, derived `crossBundleEdges` |
+| `get_neighbors` | Bounded expansion around a concept (`in`/`out`/`both`, depth); `crossBundle: true` follows derived edges into other mounted bundles |
+| `find_path` | Shortest directed link path between two concepts; `crossBundle: true` accepts `bundle:concept` IDs and crosses bundles |
+| `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
 | `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
@@ -189,7 +197,8 @@ Writes are constrained to safe relative `.md` paths inside the bundle; reserved 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [command]
+okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
+        [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -199,6 +208,8 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--writable] [--watch] [
   graph [format]      Export the link graph (json | dot | mermaid)
   index               Regenerate index.md files (requires --writable)
 ```
+
+`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
 
 `--watch` (mcp only) auto-reloads local bundles when `.md` files change on disk, debounced so an editor save burst triggers one reload; `.obsidian/` and other dot directories are ignored. Remote bundles still reload only via the `reload_bundles` tool. Where recursive `fs.watch` is unsupported, the server logs a note to stderr and continues without watching.
 
@@ -210,6 +221,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

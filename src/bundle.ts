@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalUrlPrefixes } from "./canonical.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import { conceptIdFromPath, parseConceptDocument } from "./parser.js";
 import type {
@@ -58,6 +59,8 @@ export interface BuildBundleOptions {
   readOnly?: boolean;
   /** Keep raw sources in memory so documents can be served without files. */
   keepSources?: boolean;
+  /** Expanded canonical URL prefixes of the bundle root (canonicalUrlPrefixes). */
+  canonicalUrls?: string[];
 }
 
 /**
@@ -115,6 +118,8 @@ export function buildBundle(
     ...(options.keepSources && {
       sources: new Map(documents.map((d) => [d.path, d.source])),
     }),
+    ...(options.canonicalUrls !== undefined &&
+      options.canonicalUrls.length > 0 && { canonicalUrls: options.canonicalUrls }),
   };
 }
 
@@ -152,7 +157,11 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
       source: await fs.readFile(path.join(root, relPath), "utf8"),
     });
   }
-  return buildBundle(config.id, root, documents);
+  return buildBundle(config.id, root, documents, {
+    ...(config.canonicalUrl !== undefined && {
+      canonicalUrls: canonicalUrlPrefixes(config.canonicalUrl),
+    }),
+  });
 }
 
 /**
