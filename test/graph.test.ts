@@ -121,7 +121,7 @@ describe("graph", () => {
 
 describe("cross-bundle graph", () => {
   const ORG_URL = "https://github.com/acme/org-brain/tree/main";
-  const NAMING_URL = `https://github.com/acme/org-brain/blob/main/standards/naming.md`;
+  const NAMING_URL = "https://github.com/acme/org-brain/blob/main/standards/naming.md";
 
   const org = () =>
     buildBundle(

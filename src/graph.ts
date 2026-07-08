@@ -38,6 +38,16 @@ export interface GraphOptions {
   includeExternal?: boolean;
 }
 
+function externalNode(bundleId: string, target: string): GraphNode {
+  return {
+    id: target,
+    bundle: bundleId,
+    path: target,
+    type: "External",
+    external: true,
+  };
+}
+
 function nodeFromConcept(concept: Concept): GraphNode {
   const { type, title, description, tags } = concept.frontmatter;
   return {
@@ -73,13 +83,7 @@ export function buildGraph(
         warnings.push(`${concept.path}: broken link to ${link.target}`);
       } else if (link.kind === "external" && options.includeExternal) {
         if (!externalNodes.has(link.target)) {
-          externalNodes.set(link.target, {
-            id: link.target,
-            bundle: bundle.id,
-            path: link.target,
-            type: "External",
-            external: true,
-          });
+          externalNodes.set(link.target, externalNode(bundle.id, link.target));
         }
         edges.push({ from: concept.id, to: link.target });
       }
@@ -173,17 +177,11 @@ export function buildMultiGraph(
           warnings.push(`${bundle.id}/${concept.path}: broken link to ${link.target}`);
         } else if (
           link.kind === "external" &&
-          options.includeExternal === true &&
+          options.includeExternal &&
           !derived.matched.has(`${from}\0${link.target}`)
         ) {
           if (!externalNodes.has(link.target)) {
-            externalNodes.set(link.target, {
-              id: link.target,
-              bundle: bundle.id,
-              path: link.target,
-              type: "External",
-              external: true,
-            });
+            externalNodes.set(link.target, externalNode(bundle.id, link.target));
           }
           edges.push({ from, to: link.target });
         }

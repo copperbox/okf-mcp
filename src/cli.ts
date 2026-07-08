@@ -56,13 +56,19 @@ function parseBundleFlags(values: string[]): BundleConfig[] {
   });
 }
 
+/** Split an `id=<value>` flag argument, rejecting a missing id or value. */
+function splitIdFlag(flag: string, expected: string, value: string): [string, string] {
+  const eq = value.indexOf("=");
+  if (eq <= 0 || value.slice(eq + 1) === "") {
+    throw new Error(`${flag} requires ${expected}, got: ${value}`);
+  }
+  return [value.slice(0, eq), value.slice(eq + 1)];
+}
+
 function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
   return values.map((value) => {
-    const eq = value.indexOf("=");
-    if (eq <= 0 || value.slice(eq + 1) === "") {
-      throw new Error(`--remote-bundle requires id=<tree url or archive>, got: ${value}`);
-    }
-    return { id: value.slice(0, eq), url: value.slice(eq + 1) };
+    const [id, url] = splitIdFlag("--remote-bundle", "id=<tree url or archive>", value);
+    return { id, url };
   });
 }
 
@@ -77,12 +83,7 @@ function applyCanonicalUrlFlags(
   remotes: RemoteBundleConfig[],
 ): void {
   for (const value of values) {
-    const eq = value.indexOf("=");
-    if (eq <= 0 || value.slice(eq + 1) === "") {
-      throw new Error(`--canonical-url requires id=<url>, got: ${value}`);
-    }
-    const id = value.slice(0, eq);
-    const url = value.slice(eq + 1);
+    const [id, url] = splitIdFlag("--canonical-url", "id=<url>", value);
     const config =
       configs.find((c) => c.id === id) ?? remotes.find((r) => r.id === id);
     if (config === undefined) {

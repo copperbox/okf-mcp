@@ -499,7 +499,7 @@ export function createOkfServer(
     {
       title: "Graph summary",
       description:
-        "Compact overview of a bundle's link graph: counts, types, tags, orphans. Call this before broader graph exploration.",
+        "Compact overview of a bundle's link graph: counts, types, tags, orphans, derived cross-bundle edge count. Call this before broader graph exploration.",
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
@@ -598,19 +598,17 @@ export function createOkfServer(
         crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, format, includeExternal, crossBundle }) =>
-      markdown(
+    async ({ bundle, format, includeExternal, crossBundle }) => {
+      const options = { includeExternal: includeExternal ?? false };
+      return markdown(
         exportGraph(
           crossBundle
-            ? buildMultiGraph(store.bundles(), {
-                includeExternal: includeExternal ?? false,
-              })
-            : buildGraph(store.bundle(bundle), {
-                includeExternal: includeExternal ?? false,
-              }),
+            ? buildMultiGraph(store.bundles(), options)
+            : buildGraph(store.bundle(bundle), options),
           format ?? "json",
         ),
-      ),
+      );
+    },
   );
 
   /**
