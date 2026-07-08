@@ -54,13 +54,12 @@ describe("npm packaging", () => {
 });
 
 describe("README agent guidance", () => {
-  it("covers keeping a shared bundle fresh (git pull + reload_bundles)", async () => {
+  // Slice a README section: from its `## ` heading to the next `## ` heading
+  // outside fenced code (embedded CLAUDE.md snippets contain `##` headings).
+  async function readmeSection(heading: string): Promise<string> {
     const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
-    const heading = "## Teaching your agent to maintain the brain";
     const start = readme.indexOf(heading);
-    assert.ok(start >= 0, "agent guidance section must exist");
-    // Slice to the next `## ` heading outside fenced code (the CLAUDE.md
-    // snippet itself contains a `##` heading).
+    assert.ok(start >= 0, `README section "${heading}" must exist`);
     const lines = readme.slice(start + heading.length).split("\n");
     let inFence = false;
     const sectionLines: string[] = [heading];
@@ -69,7 +68,11 @@ describe("README agent guidance", () => {
       else if (!inFence && line.startsWith("## ")) break;
       sectionLines.push(line);
     }
-    const section = sectionLines.join("\n");
+    return sectionLines.join("\n");
+  }
+
+  it("covers keeping a shared bundle fresh (git pull + reload_bundles)", async () => {
+    const section = await readmeSection("## Teaching your agent to maintain the brain");
 
     // The server does no git sync — the guidance must say so and put
     // pull/reload (and publish-back) into the standing instructions.
@@ -77,5 +80,28 @@ describe("README agent guidance", () => {
     assert.match(section, /reload_bundles/);
     assert.match(section, /--remote-bundle/);
     assert.match(section, /push/);
+  });
+
+  it("covers the multi-bundle (org + project) workflow", async () => {
+    const section = await readmeSection("## Multi-bundle setups");
+
+    // Example config mounts two bundles, with a read-only remote alternative
+    // for the org brain.
+    assert.ok(
+      (section.match(/"--bundle"/g) ?? []).length >= 2,
+      "config example must mount at least two bundles",
+    );
+    assert.match(section, /--remote-bundle/);
+
+    // Routing guidance: search everything (omit `bundle`), write by scope.
+    assert.match(section, /omit/i);
+    assert.match(section, /search_concepts/);
+    assert.match(section, /org/i);
+    assert.match(section, /project/i);
+
+    // Cross-bundle references go through spec §8 citations (optionally a
+    // references/ mirror stub), never §5 links.
+    assert.match(section, /Citations/);
+    assert.match(section, /references\//);
   });
 });
