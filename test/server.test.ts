@@ -391,6 +391,18 @@ describe("server tools", () => {
     ]);
   });
 
+  it("search_concepts looks up a concept by its exact resource URI", async () => {
+    const result = (await callJson(client, "search_concepts", {
+      resource: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+    })) as { hits: Array<{ id: string; resource?: string }>; total: number };
+    assert.equal(result.total, 1);
+    assert.equal(result.hits[0]?.id, "tables/orders");
+    assert.equal(
+      result.hits[0]?.resource,
+      "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+    );
+  });
+
   it("get_concept lists body section headings alongside the full body", async () => {
     const concept = (await callJson(client, "get_concept", { id: "tables/orders" })) as {
       body: string;

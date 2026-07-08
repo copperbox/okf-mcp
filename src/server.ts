@@ -313,7 +313,7 @@ export function createOkfServer(
     {
       title: "List concepts",
       description:
-        "List concepts (ID, type, title, description, tags) with optional filtering. Use get_concept for full documents.",
+        "List concepts (ID, type, title, description, resource, tags) with optional filtering. Use get_concept for full documents.",
       inputSchema: {
         bundle: bundleParam,
         pathPrefix: z.string().optional().describe("Concept ID prefix, e.g. tables/"),
@@ -411,11 +411,17 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        "Structured search over concepts: text query plus type/tag/path/link filters",
+        "Structured search over concepts: text query plus type/tag/path/link/resource filters",
       inputSchema: {
         query: z.string().optional(),
         bundle: bundleParam,
         types: z.array(z.string()).optional(),
+        resource: z
+          .string()
+          .optional()
+          .describe(
+            "Exact frontmatter `resource` URI — find the concept describing this asset",
+          ),
         tagsAny: z.array(z.string()).optional(),
         tagsAll: z.array(z.string()).optional(),
         pathPrefix: z.string().optional(),

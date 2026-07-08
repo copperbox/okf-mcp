@@ -63,6 +63,37 @@ describe("searchConcepts", () => {
     assert.equal(orders?.titleDerived, undefined);
   });
 
+  it("includes the resource URI in hits when present, omitting it otherwise", () => {
+    const { hits } = searchConcepts(bundles, {});
+    const orders = hits.find((h) => h.id === "tables/orders");
+    assert.equal(
+      orders?.resource,
+      "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
+    );
+    const freshness = hits.find((h) => h.id === "playbooks/freshness");
+    assert.ok(freshness);
+    assert.equal("resource" in freshness, false);
+  });
+
+  it("matches the text query against the resource URI", () => {
+    const { hits } = searchConcepts(bundles, { query: "t=customers" });
+    assert.deepEqual(hits.map((h) => h.id), ["tables/customers"]);
+    assert.deepEqual(hits[0]?.matchedIn, ["resource"]);
+  });
+
+  it("filters by exact resource URI", () => {
+    const { hits, total } = searchConcepts(bundles, {
+      resource: "https://console.cloud.google.com/bigquery?p=acme&d=sales",
+    });
+    assert.equal(total, 1);
+    assert.deepEqual(hits.map((h) => h.id), ["datasets/sales"]);
+  });
+
+  it("finds nothing for a resource URI no concept carries", () => {
+    const { total } = searchConcepts(bundles, { resource: "bq://acme/sales/refunds" });
+    assert.equal(total, 0);
+  });
+
   it("applies limit and reports the pre-pagination total", () => {
     const result = searchConcepts(bundles, { pathPrefix: "tables/", limit: 1 });
     assert.equal(result.hits.length, 1);
@@ -108,7 +139,7 @@ describe("searchConcepts", () => {
   it("lists every matched field in matchedIn", () => {
     const { hits } = searchConcepts(bundles, { query: "orders" });
     const hit = hits.find((h) => h.id === "tables/orders");
-    assert.deepEqual(hit?.matchedIn, ["id", "title", "tags", "body"]);
+    assert.deepEqual(hit?.matchedIn, ["id", "title", "resource", "tags", "body"]);
     assert.ok(hit?.snippet?.includes("orders"));
   });
 
