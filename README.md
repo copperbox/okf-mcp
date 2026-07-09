@@ -168,6 +168,14 @@ okf-mcp --colocated-bundles /path/to/knowledge
 
 Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles. Relative `../sibling/...` links between colocated bundles derive [cross-bundle graph edges](#cross-bundle-awareness), resolve citations, and are checked by `validate`.
 
+When the root holds many bundles but the current project only needs a few, `--only <folder,folder,...>` is the escape hatch for scoped mounting:
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge --only acme,ops
+```
+
+Only the named subfolders are mounted; everything else in the root is ignored entirely — not discovered, not listed — which keeps startup light and stops irrelevant bundles from diluting search results, type/tag vocabularies, and `graph_summary` sweeps. A name that doesn't exist as a subdirectory of the root (or exists but contains no markdown) is a startup error rather than a silent skip, and passing `--only` without `--colocated-bundles` is an error too.
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
@@ -270,7 +278,7 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--colocated-bundles <root>]
+okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
         [--remote-bundle id=<url>] [--canonical-url id=<url>]
         [--writable] [--watch] [command]
 
@@ -290,7 +298,7 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root>]
 okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
 
-`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
+`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
 
 `--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
 

@@ -41,8 +41,36 @@ async function walkMarkdownFiles(root: string, dir = ""): Promise<string[]> {
  * bundle config with `id` = the directory basename and `colocatedRoot` = the
  * shared root. Dot directories are skipped (same rule as walkMarkdownFiles),
  * and loose files at the root (README.md, AGENTS.md, ...) belong to no bundle.
+ *
+ * `only` (`--only`) restricts the mount to the named subfolders: the rest of
+ * the root is not read at all, and a name that is not a bundle subdirectory
+ * (missing, a dot directory, a nested path, or holding no markdown) is an
+ * error — a silent no-op would read as "loaded" when it wasn't.
  */
-export async function discoverColocatedBundles(root: string): Promise<BundleConfig[]> {
+export async function discoverColocatedBundles(
+  root: string,
+  options: { only?: string[] } = {},
+): Promise<BundleConfig[]> {
+  if (options.only !== undefined) {
+    const configs: BundleConfig[] = [];
+    // Deduped and codepoint-sorted, matching full discovery's output order.
+    for (const name of [...new Set(options.only)].sort()) {
+      const bundleRoot = path.join(root, name);
+      const plainSubdir =
+        !name.startsWith(".") &&
+        !name.includes("/") &&
+        !name.includes(path.sep) &&
+        (await fs.stat(bundleRoot).then((s) => s.isDirectory(), () => false));
+      if (!plainSubdir) {
+        throw new Error(`--only: no bundle subdirectory named "${name}" under ${root}`);
+      }
+      if ((await walkMarkdownFiles(bundleRoot)).length === 0) {
+        throw new Error(`--only: "${name}" under ${root} contains no markdown`);
+      }
+      configs.push({ id: name, root: bundleRoot, colocatedRoot: root });
+    }
+    return configs;
+  }
   const entries = await fs.readdir(root, { withFileTypes: true });
   const configs: BundleConfig[] = [];
   // Codepoint order, matching walkMarkdownFiles' sorted output.

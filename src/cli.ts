@@ -20,7 +20,7 @@ import { watchBundles } from "./watch.js";
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--colocated-bundles <root>]
+  okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
           [--remote-bundle id=<url>] [--canonical-url id=<url>]
           [--writable] [--watch] [command]
 
@@ -42,6 +42,10 @@ Options:
                           contains markdown as its own bundle (id = folder
                           name); repeatable. Dot directories and loose files
                           at the root are skipped.
+  --only a,b,c            With --colocated-bundles: mount only the named
+                          subfolders (comma-separated); the rest of the root
+                          is ignored entirely. A name that is not a bundle
+                          subdirectory of the root is an error.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
@@ -117,6 +121,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     options: {
       bundle: { type: "string", multiple: true },
       "colocated-bundles": { type: "string", multiple: true },
+      only: { type: "string" },
       "remote-bundle": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
       out: { type: "string" },
@@ -134,8 +139,28 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
   const configs = parseBundleFlags(values.bundle ?? []);
+  const only = values.only
+    ?.split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  if (only !== undefined) {
+    if ((values["colocated-bundles"] ?? []).length === 0) {
+      console.error("error: --only requires --colocated-bundles");
+      return 2;
+    }
+    if (only.length === 0) {
+      console.error("error: --only requires at least one folder name");
+      return 2;
+    }
+  }
   for (const root of values["colocated-bundles"] ?? []) {
-    const discovered = await discoverColocatedBundles(root);
+    let discovered: BundleConfig[];
+    try {
+      discovered = await discoverColocatedBundles(root, { only });
+    } catch (err) {
+      console.error(`error: ${(err as Error).message}`);
+      return 2;
+    }
     if (discovered.length === 0) {
       console.error(
         `error: --colocated-bundles found no bundle subdirectories under: ${root}`,

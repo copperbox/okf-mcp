@@ -212,6 +212,47 @@ describe("discoverColocatedBundles", () => {
     const independent = await loadBundle({ id: "solo", root: path.join(root, "solo") });
     assert.equal(independent.colocatedRoot, undefined);
   });
+
+  it("mounts only the subfolders named by `only`, ignoring the rest", async () => {
+    await write("acme/note.md");
+    await write("legal/policy.md");
+    await write("ops/runbook.md");
+    const configs = await discoverColocatedBundles(root, { only: ["ops", "acme"] });
+    assert.deepEqual(configs, [
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+  });
+
+  it("errors when `only` names a missing subdirectory instead of silently skipping it", async () => {
+    await write("acme/note.md");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["acme", "nope"] }),
+      /--only: no bundle subdirectory named "nope"/,
+    );
+  });
+
+  it("errors when `only` names a subdirectory holding no markdown", async () => {
+    await write("acme/note.md");
+    await write("assets/logo.png");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["assets"] }),
+      /--only: "assets" .*contains no markdown/,
+    );
+  });
+
+  it("rejects `only` names that are not immediate plain subdirectories (dot dirs, nested paths)", async () => {
+    await write(".obsidian/plugins/readme.md");
+    await write("acme/deep/note.md");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: [".obsidian"] }),
+      /--only: no bundle subdirectory named "\.obsidian"/,
+    );
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["acme/deep"] }),
+      /--only: no bundle subdirectory named "acme\/deep"/,
+    );
+  });
 });
 
 describe("validateBundle", () => {
