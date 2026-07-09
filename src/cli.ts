@@ -203,12 +203,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
   const configs = parseBundleFlags(values.bundle ?? []);
+  const colocatedRoots = values["colocated-bundles"] ?? [];
   const only = values.only
     ?.split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
   if (only !== undefined) {
-    if ((values["colocated-bundles"] ?? []).length === 0) {
+    if (colocatedRoots.length === 0) {
       console.error("error: --only requires --colocated-bundles");
       return 2;
     }
@@ -217,7 +218,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 2;
     }
   }
-  for (const root of values["colocated-bundles"] ?? []) {
+  for (const root of colocatedRoots) {
     let discovered: BundleConfig[];
     try {
       discovered = await discoverColocatedBundles(root, { only });
@@ -261,7 +262,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     case "mcp": {
       const server = createOkfServer(store, {
         writable: values.writable ?? false,
-        bundleGuides: await collectBundleGuides(values["colocated-bundles"] ?? []),
+        bundleGuides: await collectBundleGuides(colocatedRoots),
       });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
