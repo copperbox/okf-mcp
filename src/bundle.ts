@@ -35,6 +35,27 @@ async function walkMarkdownFiles(root: string, dir = ""): Promise<string[]> {
   return files.sort();
 }
 
+/**
+ * Discover the bundles colocated under a shared root (`--colocated-bundles`):
+ * each immediate subdirectory containing at least one markdown file becomes a
+ * bundle config with `id` = the directory basename and `colocatedRoot` = the
+ * shared root. Dot directories are skipped (same rule as walkMarkdownFiles),
+ * and loose files at the root (README.md, AGENTS.md, ...) belong to no bundle.
+ */
+export async function discoverColocatedBundles(root: string): Promise<BundleConfig[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const configs: BundleConfig[] = [];
+  // Codepoint order, matching walkMarkdownFiles' sorted output.
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const bundleRoot = path.join(root, entry.name);
+    const markdown = await walkMarkdownFiles(bundleRoot);
+    if (markdown.length === 0) continue;
+    configs.push({ id: entry.name, root: bundleRoot, colocatedRoot: root });
+  }
+  return configs;
+}
+
 function isReserved(relPath: string): ReservedFile | null {
   const base = path.posix.basename(relPath).toLowerCase();
   if (!(RESERVED_FILENAMES as readonly string[]).includes(base)) return null;

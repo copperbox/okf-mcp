@@ -87,6 +87,13 @@ export interface BundleConfig {
    * bundle's concepts as derived cross-bundle edges.
    */
   canonicalUrl?: string;
+  /**
+   * Set when the bundle was discovered as a subdirectory of a shared
+   * `--colocated-bundles` root: the absolute/cwd-relative path of that root.
+   * Marks the bundle as a sibling of every other bundle sharing the value,
+   * so downstream features can rely on the layout.
+   */
+  colocatedRoot?: string;
 }
 
 /** A read-only bundle fetched from a remote source (issue: exchange goal). */

@@ -149,6 +149,25 @@ Append routing guidance to the CLAUDE.md snippet above:
   edge is needed.
 ```
 
+### Colocated bundles (vault as monorepo)
+
+A common layout keeps several bundles as sibling subdirectories of one root — for example a repo opened as a single Obsidian vault:
+
+```
+knowledge/          ← repo root, opened as an Obsidian vault
+├── AGENTS.md       ← belongs to no bundle
+├── acme/           ← bundle "acme"
+└── ops/            ← bundle "ops"
+```
+
+Instead of repeating `--bundle` for each subdirectory, mount them all with one flag:
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge
+```
+
+Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles.
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
@@ -249,7 +268,8 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
+okf-mcp --bundle [id=]<path> [--colocated-bundles <root>]
+        [--remote-bundle id=<url>] [--canonical-url id=<url>]
         [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
@@ -267,6 +287,8 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url
 ```bash
 okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
+
+`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
 
 `--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
 

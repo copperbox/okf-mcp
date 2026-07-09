@@ -39,6 +39,25 @@ function diffConcepts(
   return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
 }
 
+/**
+ * Error for two mounts claiming the same bundle id. When either side was
+ * discovered under a `--colocated-bundles` root, name that root — the
+ * colliding id was derived from a folder name the user never typed.
+ */
+function duplicateBundleIdError(
+  id: string,
+  ...configs: (BundleConfig | RemoteBundleConfig | undefined)[]
+): Error {
+  let message = `duplicate bundle id: ${id}`;
+  for (const config of configs) {
+    if (config !== undefined && "colocatedRoot" in config && config.colocatedRoot !== undefined) {
+      message += ` (discovered under --colocated-bundles ${config.colocatedRoot})`;
+      break;
+    }
+  }
+  return new Error(message);
+}
+
 export interface OkfStoreOptions {
   /** Read-only remote bundles (GitHub trees or archives) fetched on load(). */
   remotes?: RemoteBundleConfig[];
@@ -62,12 +81,13 @@ export class OkfStore {
     options: OkfStoreOptions = {},
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    const ids = new Set<string>();
+    const byId = new Map<string, BundleConfig | RemoteBundleConfig>();
     for (const config of [...configs, ...(options.remotes ?? [])]) {
-      if (ids.has(config.id)) {
-        throw new Error(`duplicate bundle id: ${config.id}`);
+      const existing = byId.get(config.id);
+      if (existing !== undefined) {
+        throw duplicateBundleIdError(config.id, config, existing);
       }
-      ids.add(config.id);
+      byId.set(config.id, config);
     }
     for (const remote of options.remotes ?? []) {
       this.remotes.set(remote.id, remote);
@@ -108,7 +128,10 @@ export class OkfStore {
       this.remotes.has(config.id) ||
       this.configs.some((c) => c.id === config.id)
     ) {
-      throw new Error(`duplicate bundle id: ${config.id}`);
+      throw duplicateBundleIdError(
+        config.id,
+        this.configs.find((c) => c.id === config.id),
+      );
     }
     const bundle = await loadRemoteBundle(config, this.fetchImpl);
     this.remotes.set(config.id, config);

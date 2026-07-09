@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { buildBundle, loadBundle } from "../src/bundle.js";
+import { buildBundle, discoverColocatedBundles, loadBundle } from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
@@ -122,6 +124,58 @@ describe("loadBundle", () => {
     ]);
     const plain = await loadBundle({ id: "acme", root: FIXTURE });
     assert.equal(plain.canonicalUrls, undefined);
+  });
+});
+
+describe("discoverColocatedBundles", () => {
+  let root: string;
+
+  async function write(relPath: string, content = ""): Promise<void> {
+    const absolute = path.join(root, relPath);
+    await fs.mkdir(path.dirname(absolute), { recursive: true });
+    await fs.writeFile(absolute, content);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-colocated-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("mounts each immediate subdirectory holding markdown as a bundle named after it", async () => {
+    await write("acme/tables/orders.md", "---\ntype: Table\n---\n\nRows.\n");
+    await write("ops/runbook.md", "---\ntype: Note\n---\n\nSteps.\n");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs, [
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+  });
+
+  it("skips dot directories such as .obsidian and .git", async () => {
+    await write(".obsidian/plugins/readme.md");
+    await write(".git/COMMIT_EDITMSG.md");
+    await write("acme/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
+  });
+
+  it("ignores loose files at the root and subdirectories without markdown", async () => {
+    await write("README.md", "# Vault\n");
+    await write("AGENTS.md", "Instructions.\n");
+    await write("assets/logo.png");
+    await fs.mkdir(path.join(root, "empty"));
+    await write("acme/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
+  });
+
+  it("does not count markdown hidden inside a subdirectory's dot directories", async () => {
+    await write("drafts/.obsidian/note.md");
+    await write("acme/deep/nested/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
   });
 });
 

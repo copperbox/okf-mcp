@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { generateIndexes } from "./authoring.js";
+import { discoverColocatedBundles } from "./bundle.js";
 import { buildGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
@@ -19,7 +20,8 @@ import { watchBundles } from "./watch.js";
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
+  okf-mcp --bundle [id=]<path> [--colocated-bundles <root>]
+          [--remote-bundle id=<url>] [--canonical-url id=<url>]
           [--writable] [--watch] [command]
 
 Commands:
@@ -35,6 +37,11 @@ Commands:
 
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
+  --colocated-bundles root
+                          Mount every immediate subdirectory of <root> that
+                          contains markdown as its own bundle (id = folder
+                          name); repeatable. Dot directories and loose files
+                          at the root are skipped.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
@@ -109,6 +116,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     args: argv,
     options: {
       bundle: { type: "string", multiple: true },
+      "colocated-bundles": { type: "string", multiple: true },
       "remote-bundle": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
       out: { type: "string" },
@@ -126,10 +134,22 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
   const configs = parseBundleFlags(values.bundle ?? []);
+  for (const root of values["colocated-bundles"] ?? []) {
+    const discovered = await discoverColocatedBundles(root);
+    if (discovered.length === 0) {
+      console.error(
+        `error: --colocated-bundles found no bundle subdirectories under: ${root}`,
+      );
+      return 2;
+    }
+    configs.push(...discovered);
+  }
   const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
   applyCanonicalUrlFlags(values["canonical-url"] ?? [], configs, remotes);
   if (configs.length === 0 && remotes.length === 0) {
-    console.error("error: at least one --bundle or --remote-bundle is required\n");
+    console.error(
+      "error: at least one --bundle, --colocated-bundles, or --remote-bundle is required\n",
+    );
     console.error(USAGE);
     return 2;
   }

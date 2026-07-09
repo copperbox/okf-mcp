@@ -144,6 +144,30 @@ describe("OkfStore remote bundles", () => {
     ]);
   });
 
+  it("names the colocated root when a colocated bundle id collides", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    try {
+      assert.throws(
+        () =>
+          new OkfStore([
+            { id: "acme", root },
+            { id: "acme", root: "/vault/acme", colocatedRoot: "/vault" },
+          ]),
+        /duplicate bundle id: acme.*--colocated-bundles \/vault/,
+      );
+      assert.throws(
+        () =>
+          new OkfStore(
+            [{ id: "acme", root: "/vault/acme", colocatedRoot: "/vault" }],
+            { remotes: [{ id: "acme", url: URL }] },
+          ),
+        /duplicate bundle id: acme.*--colocated-bundles \/vault/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a remote id colliding with a local bundle id at construction", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
     try {
