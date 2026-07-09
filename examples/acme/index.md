@@ -6,6 +6,6 @@ okf_version: "0.1"
 
 # Directories
 
-* [datasets](datasets/)
-* [playbooks](playbooks/)
-* [tables](tables/)
+* [datasets](datasets/index.md)
+* [playbooks](playbooks/index.md)
+* [tables](tables/index.md)

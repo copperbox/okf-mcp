@@ -611,7 +611,9 @@ describe("authoring", () => {
 
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
     assert.match(rootIndex, /okf_version: "0.1"/);
-    assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    // Directory entries link to the subdirectory's index file, not the bare
+    // directory — trailing-slash links do not resolve in Obsidian.
+    assert.match(rootIndex, /\[tables\]\(tables\/index\.md\)/);
 
     const tablesIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf8");
     assert.match(tablesIndex, /\[Orders\]\(orders\.md\) - Order rows\./);
@@ -630,7 +632,7 @@ describe("authoring", () => {
     assert.match(rootIndex, /okf_version: "0\.2"/);
     assert.match(rootIndex, /owner: data-team/);
     // The body is still regenerated; only the frontmatter is carried over.
-    assert.match(rootIndex, /\[tables\]\(tables\/\)/);
+    assert.match(rootIndex, /\[tables\]\(tables\/index\.md\)/);
     assert.doesNotMatch(rootIndex, /Old Index/);
     const reloaded = await loadBundle({ id: "t", root });
     assert.equal(reloaded.okfVersion, "0.2");
@@ -703,7 +705,7 @@ describe("authoring", () => {
 
     assert.deepEqual([...rendered.keys()].sort(), ["index.md", "tables/index.md"]);
     assert.match(rendered.get("index.md")!, /okf_version: "0.1"/);
-    assert.match(rendered.get("index.md")!, /\[tables\]\(tables\/\)/);
+    assert.match(rendered.get("index.md")!, /\[tables\]\(tables\/index\.md\)/);
     assert.match(
       rendered.get("tables/index.md")!,
       /\[Orders\]\(orders\.md\) - Order rows\./,
