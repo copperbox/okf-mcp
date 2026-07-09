@@ -68,6 +68,16 @@ export function declaredOkfVersion(source: string): string | undefined {
   return typeof version === "string" ? version : undefined;
 }
 
+/**
+ * The one-line purpose a bundle-root index.md declares in its frontmatter
+ * `description`, letting agents judge a bundle's relevance without reading
+ * into it.
+ */
+export function declaredDescription(source: string): string | undefined {
+  const description = splitFrontmatter(source).data?.description;
+  return typeof description === "string" ? description : undefined;
+}
+
 /** One markdown document as raw text, addressed by its bundle-relative path. */
 export interface BundleDocument {
   /** Bundle-relative POSIX path ending in `.md`. */
@@ -100,15 +110,18 @@ export function buildBundle(
   const reserved: ReservedFile[] = [];
   const problems: BundleProblem[] = [];
   let okfVersion: string | undefined;
+  let description: string | undefined;
 
   for (const document of [...documents].sort((a, b) => (a.path < b.path ? -1 : 1))) {
     const relPath = document.path;
     const reservedFile = isReserved(relPath);
     if (reservedFile) {
       reserved.push(reservedFile);
-      // Only the bundle-root index.md may declare okf_version (spec §11).
+      // Only the bundle-root index.md may declare okf_version (spec §11)
+      // and the bundle description.
       if (reservedFile.kind === "index" && !relPath.includes("/")) {
         okfVersion = declaredOkfVersion(document.source);
+        description = declaredDescription(document.source);
       }
       continue;
     }
@@ -136,6 +149,7 @@ export function buildBundle(
     problems,
     readOnly: options.readOnly ?? false,
     okfVersion,
+    description,
     ...(options.keepSources && {
       sources: new Map(documents.map((d) => [d.path, d.source])),
     }),

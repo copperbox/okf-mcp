@@ -638,6 +638,21 @@ describe("authoring", () => {
     assert.equal(reloaded.okfVersion, "0.2");
   });
 
+  it("preserves a root-index description across regeneration", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\nokf_version: "0.1"\ndescription: Data warehouse knowledge.\n---\n\n# Old Index\n',
+    );
+    await writeConcept(root, "tables/orders.md", { type: "Table", title: "Orders" }, "Body");
+    const bundle = await loadBundle({ id: "t", root });
+    await generateIndexes(bundle);
+
+    const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
+    assert.match(rootIndex, /description: Data warehouse knowledge\./);
+    const reloaded = await loadBundle({ id: "t", root });
+    assert.equal(reloaded.description, "Data warehouse knowledge.");
+  });
+
   it("stamps okf_version only when the existing root frontmatter lacks it", async () => {
     await fs.writeFile(
       path.join(root, "index.md"),

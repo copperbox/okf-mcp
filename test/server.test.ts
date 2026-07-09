@@ -128,6 +128,51 @@ describe("reload_bundles tool", () => {
   });
 });
 
+describe("bundle description from the root index.md", () => {
+  const DESCRIPTION = "Acme warehouse knowledge: tables, datasets, playbooks.";
+
+  let described: string;
+  let bare: string;
+  beforeEach(async () => {
+    described = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-test-"));
+    await fs.writeFile(
+      path.join(described, "index.md"),
+      `---\nokf_version: "0.1"\ndescription: "${DESCRIPTION}"\n---\n\n# Index\n`,
+    );
+    await fs.writeFile(
+      path.join(described, "orders.md"),
+      "---\ntype: Table\n---\n\nRows.\n",
+    );
+    bare = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-test-"));
+    await fs.writeFile(path.join(bare, "index.md"), "# Index\n");
+  });
+  afterEach(async () => {
+    await fs.rm(described, { recursive: true, force: true });
+    await fs.rm(bare, { recursive: true, force: true });
+  });
+
+  it("list_bundles surfaces the description and omits it when undeclared", async () => {
+    const store = new OkfStore([
+      { id: "d", root: described },
+      { id: "b", root: bare },
+    ]);
+    const client = await connectClient(store);
+    const bundles = (await callJson(client, "list_bundles", {})) as Array<
+      Record<string, unknown>
+    >;
+    assert.equal(bundles[0]?.description, DESCRIPTION);
+    assert.ok(!("description" in bundles[1]!));
+  });
+
+  it("the root index.md resource carries the bundle description", async () => {
+    const store = new OkfStore([{ id: "d", root: described }]);
+    const client = await connectClient(store);
+    const resources = await client.listResources();
+    const rootIndex = resources.resources.find((r) => r.uri === "okf://d/index.md");
+    assert.equal(rootIndex?.description, DESCRIPTION);
+  });
+});
+
 describe("remote bundle tools", () => {
   const DOC = "---\ntype: Table\ntitle: Orders\n---\n\nOrder rows.\n";
   const URL = "https://github.com/acme/kb/tree/main/kb";
@@ -199,6 +244,30 @@ describe("remote bundle tools", () => {
       uri: "okf://shared/tables/orders.md",
     });
     assert.equal((resource.contents[0] as { text: string }).text, DOC);
+  });
+
+  it("load_remote_bundle and list_remote_bundles report a description declared by the remote root index", async () => {
+    const store = new OkfStore([{ id: "t", root }], {
+      fetchImpl: fakeGitHub({
+        "kb/tables/orders.md": DOC,
+        "kb/index.md": "---\ndescription: Shared org knowledge.\n---\n\n# Index\n",
+      }),
+    });
+    await store.load();
+    const client = await connect(store);
+
+    const loaded = toolJson(
+      await client.callTool({
+        name: "load_remote_bundle",
+        arguments: { id: "shared", url: URL },
+      }),
+    ) as { description?: string };
+    assert.equal(loaded.description, "Shared org knowledge.");
+
+    const listed = toolJson(
+      await client.callTool({ name: "list_remote_bundles", arguments: {} }),
+    ) as Array<{ description?: string }>;
+    assert.equal(listed[0]?.description, "Shared org knowledge.");
   });
 
   it("rejects authoring tools against read-only remote bundles", async () => {

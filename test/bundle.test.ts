@@ -100,6 +100,31 @@ describe("loadBundle", () => {
     assert.equal(bundle.okfVersion, undefined);
   });
 
+  it("parses description from the bundle-root index.md frontmatter", () => {
+    const bundle = buildBundle("m", "/m", [
+      {
+        path: "index.md",
+        source: '---\nokf_version: "0.1"\ndescription: Acme data warehouse knowledge.\n---\n\n# Index\n',
+      },
+    ]);
+    assert.equal(bundle.description, "Acme data warehouse knowledge.");
+  });
+
+  it("leaves description undefined when absent or declared only by a nested index", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "# Index\n" },
+      { path: "guides/index.md", source: "---\ndescription: Nested.\n---\n\n# Guides\n" },
+    ]);
+    assert.equal(bundle.description, undefined);
+  });
+
+  it("ignores a non-string description declaration", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "---\ndescription: [not, a, string]\n---\n\n# Index\n" },
+    ]);
+    assert.equal(bundle.description, undefined);
+  });
+
   it("resolves relative and absolute link forms to the same concept space", async () => {
     const bundle = await loadBundle({ id: "acme", root: FIXTURE });
     const orders = bundle.concepts.get("tables/orders")!;

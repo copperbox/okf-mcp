@@ -184,6 +184,12 @@ export function createOkfServer(
           ...bundle.reserved.map((file) => ({
             uri: okfUri(bundle.id, file.path),
             name: `${bundle.id}/${file.path}`,
+            // The root index.md carries the bundle's declared purpose so
+            // agents can judge relevance from the resource list alone.
+            ...(file.path === "index.md" &&
+              bundle.description !== undefined && {
+                description: bundle.description,
+              }),
             mimeType: "text/markdown",
           })),
         ]),
@@ -217,7 +223,8 @@ export function createOkfServer(
     "list_bundles",
     {
       title: "List bundles",
-      description: "List configured OKF bundles with concept counts",
+      description:
+        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose)",
       inputSchema: {},
     },
     async () =>
@@ -226,6 +233,7 @@ export function createOkfServer(
           id: bundle.id,
           root: bundle.root,
           okfVersion: bundle.okfVersion,
+          description: bundle.description,
           concepts: bundle.concepts.size,
           reservedFiles: bundle.reserved.map((f) => f.path),
           problems: bundle.problems.length,
@@ -255,6 +263,7 @@ export function createOkfServer(
     return {
       id,
       url,
+      description: bundle.description,
       concepts: bundle.concepts.size,
       problems: bundle.problems.length,
       readOnly: true,
@@ -312,7 +321,7 @@ export function createOkfServer(
     {
       title: "List remote bundles",
       description:
-        "List read-only remote bundles (GitHub trees or archives) with their source URLs and concept counts",
+        "List read-only remote bundles (GitHub trees or archives) with their source URLs, concept counts, and each bundle's declared description",
       inputSchema: {},
     },
     async () =>

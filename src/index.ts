@@ -22,6 +22,7 @@ export type {
 } from "./authoring.js";
 export {
   buildBundle,
+  declaredDescription,
   declaredOkfVersion,
   discoverColocatedBundles,
   loadBundle,

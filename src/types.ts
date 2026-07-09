@@ -128,6 +128,8 @@ export interface LoadedBundle {
   readOnly: boolean;
   /** OKF version declared by the bundle-root index.md frontmatter (spec §11). */
   okfVersion?: string;
+  /** One-line bundle purpose declared by the bundle-root index.md frontmatter. */
+  description?: string;
   /** Raw document sources, present only for bundles with no local files. */
   sources?: Map<string, string>;
   /**
