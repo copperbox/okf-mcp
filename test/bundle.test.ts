@@ -8,6 +8,7 @@ import {
   buildBundle,
   discoverColocatedBundles,
   loadBundle,
+  readBundleDescription,
   readColocatedAgentsGuide,
 } from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
@@ -257,6 +258,31 @@ describe("discoverColocatedBundles", () => {
       discoverColocatedBundles(root, { only: ["acme/deep"] }),
       /--only: no bundle subdirectory named "acme\/deep"/,
     );
+  });
+});
+
+describe("readBundleDescription", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-description-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads the description from the root index.md frontmatter", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\ndescription: "Acme knowledge."\n---\n\n# Index\n',
+    );
+    assert.equal(await readBundleDescription(root), "Acme knowledge.");
+  });
+
+  it("returns undefined when index.md is absent or declares no description", async () => {
+    assert.equal(await readBundleDescription(root), undefined);
+    await fs.writeFile(path.join(root, "index.md"), "# Index\n");
+    assert.equal(await readBundleDescription(root), undefined);
   });
 });
 

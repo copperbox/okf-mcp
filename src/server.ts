@@ -108,6 +108,10 @@ search_concepts (text plus type/tag/path/link filters), then read specific conce
 with get_concept and explore with get_neighbors / find_path — rather than dumping
 every document.
 
+Colocated bundles may be discovered but not loaded yet (lazy mounting):
+list_bundles marks them loaded: false, any tool naming one loads it, and no-arg
+sweeps cover loaded bundles only, noting what they excluded.
+
 If bundle files may have changed outside this server (e.g. a human editing in
 Obsidian), call reload_bundles before relying on current state.`;
   const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
@@ -190,15 +194,35 @@ export function createOkfServer(
     { instructions: serverInstructions(options) },
   );
 
-  const selectBundles = (bundle: string | undefined) =>
-    bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
+  const selectBundles = async (bundle: string | undefined) =>
+    bundle !== undefined ? [await store.bundle(bundle)] : store.bundles();
+
+  /**
+   * A no-arg sweep covers only loaded bundles; when lazy colocated bundles
+   * are discovered but not loaded, say so in the result rather than letting
+   * the truncated sweep read as complete (issue #64).
+   */
+  const sweepJson = (data: unknown, sweep: boolean): CallToolResult => {
+    const result = json(data);
+    const excluded = store.discoveredBundles();
+    if (!sweep || excluded.length === 0) return result;
+    result.content.push({
+      type: "text",
+      text:
+        `Note: ${excluded.length} discovered bundle(s) are not loaded and were ` +
+        `excluded from this sweep: ${excluded.map((d) => d.id).join(", ")}. ` +
+        "Pass one as the `bundle` argument to load and include it (first access " +
+        "loads a bundle); list_bundles shows every bundle's loaded state.",
+    });
+    return result;
+  };
 
   /**
    * Read any bundle document (concept or reserved file) after path
    * validation, falling back to a synthesized view for a missing index.md.
    */
   const readDocument = async (bundleId: string | undefined, relPath: string) => {
-    const bundle = store.bundle(bundleId);
+    const bundle = await store.bundle(bundleId);
     const safePath = assertSafeDocumentPath(relPath);
     try {
       return { text: await readBundleDocument(bundle, safePath), synthesized: false };
@@ -213,27 +237,40 @@ export function createOkfServer(
     "okf-document",
     new ResourceTemplate("okf://{bundle}/{+path}", {
       list: async () => ({
-        resources: store.bundles().flatMap((bundle) => [
-          ...[...bundle.concepts.values()].map((concept) => ({
-            uri: okfUri(bundle.id, concept.path),
-            name: deriveTitle(concept),
-            ...(concept.frontmatter.description !== undefined && {
-              description: concept.frontmatter.description,
+        resources: [
+          ...store.bundles().flatMap((bundle) => [
+            ...[...bundle.concepts.values()].map((concept) => ({
+              uri: okfUri(bundle.id, concept.path),
+              name: deriveTitle(concept),
+              ...(concept.frontmatter.description !== undefined && {
+                description: concept.frontmatter.description,
+              }),
+              mimeType: "text/markdown",
+            })),
+            ...bundle.reserved.map((file) => ({
+              uri: okfUri(bundle.id, file.path),
+              name: `${bundle.id}/${file.path}`,
+              // The root index.md carries the bundle's declared purpose so
+              // agents can judge relevance from the resource list alone.
+              ...(file.path === "index.md" &&
+                bundle.description !== undefined && {
+                  description: bundle.description,
+                }),
+              mimeType: "text/markdown",
+            })),
+          ]),
+          // A discovered-but-unloaded bundle is represented by its root
+          // index.md alone (not silently absent); reading it loads the
+          // bundle, after which its documents list individually.
+          ...store.discoveredBundles().map((discovered) => ({
+            uri: okfUri(discovered.id, "index.md"),
+            name: `${discovered.id}/index.md (bundle not loaded yet)`,
+            ...(discovered.description !== undefined && {
+              description: discovered.description,
             }),
             mimeType: "text/markdown",
           })),
-          ...bundle.reserved.map((file) => ({
-            uri: okfUri(bundle.id, file.path),
-            name: `${bundle.id}/${file.path}`,
-            // The root index.md carries the bundle's declared purpose so
-            // agents can judge relevance from the resource list alone.
-            ...(file.path === "index.md" &&
-              bundle.description !== undefined && {
-                description: bundle.description,
-              }),
-            mimeType: "text/markdown",
-          })),
-        ]),
+        ],
       }),
     }),
     {
@@ -265,12 +302,12 @@ export function createOkfServer(
     {
       title: "List bundles",
       description:
-        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose)",
+        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose). Bundles with `loaded: false` were discovered under a colocated root but not yet parsed — any tool naming one loads it on the spot.",
       inputSchema: {},
     },
     async () =>
-      json(
-        store.bundles().map((bundle) => ({
+      json([
+        ...store.bundles().map((bundle) => ({
           id: bundle.id,
           root: bundle.root,
           okfVersion: bundle.okfVersion,
@@ -279,8 +316,17 @@ export function createOkfServer(
           reservedFiles: bundle.reserved.map((f) => f.path),
           problems: bundle.problems.length,
           readOnly: bundle.readOnly,
+          loaded: true,
         })),
-      ),
+        ...store.discoveredBundles().map((discovered) => ({
+          id: discovered.id,
+          root: discovered.root,
+          ...(discovered.description !== undefined && {
+            description: discovered.description,
+          }),
+          loaded: false,
+        })),
+      ]),
   );
 
   server.registerTool(
@@ -288,7 +334,7 @@ export function createOkfServer(
     {
       title: "Reload bundles",
       description:
-        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed.",
+        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed. Without a bundle id, only loaded bundles reload (an unloaded discovered bundle has no stale index); naming an unloaded bundle loads it.",
       inputSchema: {
         bundle: z
           .string()
@@ -299,8 +345,8 @@ export function createOkfServer(
     async ({ bundle }) => json(await store.reloadBundles(bundle)),
   );
 
-  const remoteBundleSummary = (id: string, url: string) => {
-    const bundle = store.bundle(id);
+  const remoteBundleSummary = async (id: string, url: string) => {
+    const bundle = await store.bundle(id);
     return {
       id,
       url,
@@ -353,7 +399,7 @@ export function createOkfServer(
         ...(exclude !== undefined && { exclude }),
         ...(canonicalUrl !== undefined && { canonicalUrl }),
       });
-      return json(remoteBundleSummary(id, url));
+      return json(await remoteBundleSummary(id, url));
     },
   );
 
@@ -427,16 +473,16 @@ export function createOkfServer(
     },
     async () =>
       json(
-        store
-          .remoteBundleConfigs()
-          .map((config) => ({
-            ...remoteBundleSummary(config.id, config.url),
+        await Promise.all(
+          store.remoteBundleConfigs().map(async (config) => ({
+            ...(await remoteBundleSummary(config.id, config.url)),
             ...(config.include !== undefined && { include: config.include }),
             ...(config.exclude !== undefined && { exclude: config.exclude }),
             ...(config.canonicalUrl !== undefined && {
               canonicalUrl: config.canonicalUrl,
             }),
           })),
+        ),
       ),
   );
 
@@ -453,12 +499,13 @@ export function createOkfServer(
       },
     },
     async ({ bundle, pathPrefix, type }) =>
-      json(
-        searchConcepts(selectBundles(bundle), {
+      sweepJson(
+        searchConcepts(await selectBundles(bundle), {
           ...(pathPrefix !== undefined && { pathPrefix }),
           ...(type !== undefined && { types: [type] }),
           limit: 500,
         }).hits.map(({ score: _score, ...hit }) => hit),
+        bundle === undefined,
       ),
   );
 
@@ -480,7 +527,7 @@ export function createOkfServer(
       },
     },
     async ({ bundle, id, section }) => {
-      const concept = store.getConcept(bundle, id);
+      const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const sections = splitSections(concept.body).map((s) => s.heading);
       if (section === undefined) return json({ ...concept, sections });
@@ -509,8 +556,8 @@ export function createOkfServer(
       },
     },
     async ({ bundle, id }) => {
-      const loadedBundle = store.bundle(bundle);
-      const concept = store.getConcept(bundle, id);
+      const loadedBundle = await store.bundle(bundle);
+      const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const siblings = colocatedSiblings(loadedBundle, store.bundles());
       const { citations } = extractCitations(
@@ -568,7 +615,11 @@ export function createOkfServer(
         offset: z.number().int().nonnegative().optional(),
       },
     },
-    async ({ bundle, ...filters }) => json(searchConcepts(selectBundles(bundle), filters)),
+    async ({ bundle, ...filters }) =>
+      sweepJson(
+        searchConcepts(await selectBundles(bundle), filters),
+        bundle === undefined,
+      ),
   );
 
   server.registerTool(
@@ -579,7 +630,8 @@ export function createOkfServer(
         "Distinct concept `type` values with usage counts, sorted by count. Reuse an existing type when authoring or filtering instead of inventing a variant.",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => json(listTypes(selectBundles(bundle))),
+    async ({ bundle }) =>
+      sweepJson(listTypes(await selectBundles(bundle)), bundle === undefined),
   );
 
   server.registerTool(
@@ -590,7 +642,8 @@ export function createOkfServer(
         "Distinct tag values with usage counts, sorted by count. Reuse an existing tag when authoring or filtering instead of inventing a variant.",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => json(listTags(selectBundles(bundle))),
+    async ({ bundle }) =>
+      sweepJson(listTags(await selectBundles(bundle)), bundle === undefined),
   );
 
   server.registerTool(
@@ -614,7 +667,7 @@ export function createOkfServer(
     },
     async ({ bundle, type, title, tags }) =>
       json(
-        suggestConceptPath(store.bundle(bundle), {
+        suggestConceptPath(await store.bundle(bundle), {
           type,
           ...(title !== undefined && { title }),
           ...(tags !== undefined && { tags }),
@@ -631,10 +684,11 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
-      json(
+      sweepJson(
         bundle !== undefined
-          ? graphSummary(store.bundle(bundle), store.bundles())
+          ? graphSummary(await store.bundle(bundle), store.bundles())
           : store.bundles().map((b) => graphSummary(b, store.bundles())),
+        bundle === undefined,
       ),
   );
 
@@ -643,12 +697,15 @@ export function createOkfServer(
    * when the prefix names a mounted bundle; plain concept IDs are qualified
    * with the tool's `bundle` argument (or the only configured bundle).
    */
-  const qualifyForCrossBundle = (bundleId: string | undefined, id: string): string => {
+  const qualifyForCrossBundle = async (
+    bundleId: string | undefined,
+    id: string,
+  ): Promise<string> => {
     const colon = id.indexOf(":");
     if (colon > 0 && store.bundles().some((b) => b.id === id.slice(0, colon))) {
       return id;
     }
-    return qualifyNodeId(store.bundle(bundleId).id, id);
+    return qualifyNodeId((await store.bundle(bundleId)).id, id);
   };
 
   const crossBundleParam = z
@@ -677,11 +734,11 @@ export function createOkfServer(
         crossBundle
           ? neighborsInGraph(
               buildMultiGraph(store.bundles()),
-              qualifyForCrossBundle(bundle, id),
+              await qualifyForCrossBundle(bundle, id),
               direction ?? "both",
               depth ?? 1,
             )
-          : getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+          : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
       ),
   );
 
@@ -703,10 +760,10 @@ export function createOkfServer(
         path: crossBundle
           ? pathInGraph(
               buildMultiGraph(store.bundles()),
-              qualifyForCrossBundle(bundle, from),
-              qualifyForCrossBundle(bundle, to),
+              await qualifyForCrossBundle(bundle, from),
+              await qualifyForCrossBundle(bundle, to),
             )
-          : findPath(store.bundle(bundle), from, to),
+          : findPath(await store.bundle(bundle), from, to),
       }),
   );
 
@@ -732,7 +789,7 @@ export function createOkfServer(
         exportGraph(
           crossBundle
             ? buildMultiGraph(store.bundles(), options)
-            : buildGraph(store.bundle(bundle), options),
+            : buildGraph(await store.bundle(bundle), options),
           format ?? "json",
         ),
       );
@@ -744,8 +801,8 @@ export function createOkfServer(
    * concept or a graceful "not a git repository" result for non-git bundles.
    */
   const resolveGitConcept = async (bundleId: string | undefined, id: string) => {
-    const bundle = store.bundle(bundleId);
-    const concept = store.getConcept(bundleId, id);
+    const bundle = await store.bundle(bundleId);
+    const concept = await store.getConcept(bundleId, id);
     if (!concept) throw new Error(`unknown concept: ${id}`);
     const notGit = (await isGitWorkTree(bundle.root))
       ? undefined
@@ -805,10 +862,11 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
-      json(
+      sweepJson(
         await Promise.all(
-          selectBundles(bundle).map((b) => validateBundle(b, store.bundles())),
+          (await selectBundles(bundle)).map((b) => validateBundle(b, store.bundles())),
         ),
+        bundle === undefined,
       ),
   );
 
@@ -863,7 +921,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, path: relPath, frontmatter, body, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await writeConcept(
           target.root,
@@ -925,7 +983,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, id, frontmatter, section, keepTimestamp, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await updateConcept(target, id, {
           ...(frontmatter !== undefined && { frontmatter }),
@@ -963,7 +1021,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, id, logMessage, failIfLinked }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await deleteConcept(target, id, {
           ...(failIfLinked !== undefined && { failIfLinked }),
@@ -995,7 +1053,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, from, to, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await renameConcept(target, from, to);
         await logAndReindex(
@@ -1037,8 +1095,8 @@ export function createOkfServer(
         },
       },
       async ({ id, fromBundle, toBundle, toPath, stub }) => {
-        const source = store.bundle(fromBundle);
-        const target = store.bundle(toBundle);
+        const source = await store.bundle(fromBundle);
+        const target = await store.bundle(toBundle);
         assertWritableBundle(source);
         assertWritableBundle(target);
         const result = await promoteConcept(source, target, id, {
@@ -1083,7 +1141,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, message, directory }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const { path: logPath } = await appendLogEntry(target.root, message, {
           ...(directory !== undefined && { directory }),
@@ -1102,7 +1160,7 @@ export function createOkfServer(
         inputSchema: { bundle: bundleParam },
       },
       async ({ bundle }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const { written, skipped } = await generateIndexes(target);
         await store.reloadBundle(target.id);

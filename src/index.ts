@@ -28,6 +28,7 @@ export {
   discoverColocatedBundles,
   loadBundle,
   outsideLinkDangles,
+  readBundleDescription,
   readBundleDocument,
   readColocatedAgentsGuide,
   resolveOutsideLink,
@@ -116,6 +117,7 @@ export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export type {
   BundleReloadStats,
   ColocatedRemoteRootMount,
+  DiscoveredBundle,
   OkfStoreOptions,
 } from "./store.js";
 export { okfUri, OKF_VERSION, RESERVED_FILENAMES } from "./types.js";

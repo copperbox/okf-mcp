@@ -45,6 +45,9 @@ Options:
                           name); repeatable. Dot directories and loose files
                           at the root are skipped. A root AGENTS.md is served
                           as a bundle guide in the MCP server instructions.
+                          The mcp command mounts these lazily: discovered at
+                          startup (name + index.md description), parsed on
+                          first access; other commands load them eagerly.
   --only a,b,c            With --colocated-bundles or
                           --colocated-remote-bundles: mount only the named
                           subfolders (comma-separated); the rest of the root
@@ -82,7 +85,8 @@ Options:
   --writable              Enable authoring: write_concept tool and index command
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
-                          the reload_bundles tool)
+                          the reload_bundles tool). Lazily mounted colocated
+                          bundles are watched from the moment they load.
   --help                  Show this help
 `;
 
@@ -219,6 +223,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
   const configs = parseBundleFlags(values.bundle ?? []);
+  const [command = "mcp", ...rest] = positionals;
   const colocatedRoots = values["colocated-bundles"] ?? [];
   const remoteRootUrls = values["colocated-remote-bundles"] ?? [];
   const only = values.only
@@ -251,7 +256,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       );
       return 2;
     }
-    configs.push(...discovered);
+    // The long-lived server mounts colocated bundles lazily — discovered now,
+    // parsed on first access. One-shot commands sweep every bundle anyway, so
+    // laziness would only reorder the same work; they load eagerly.
+    configs.push(
+      ...(command === "mcp"
+        ? discovered.map((config) => ({ ...config, lazy: true }))
+        : discovered),
+    );
   }
   const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
   try {
@@ -277,7 +289,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     })),
   });
   await store.load();
-  const [command = "mcp", ...rest] = positionals;
 
   switch (command) {
     case "mcp": {
@@ -293,8 +304,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
+      const discovered = store.discoveredBundles();
+      const served = [
+        store.bundles().map((b) => b.id).join(", ") || "(none loaded)",
+        ...(discovered.length > 0
+          ? [`+ ${discovered.length} discovered colocated (loading on first access)`]
+          : []),
+      ].join(" ");
       console.error(
-        `okf-mcp serving ${store.bundles().map((b) => b.id).join(", ")} over stdio` +
+        `okf-mcp serving ${served} over stdio` +
           (values.writable ? " (writable)" : " (read-only)"),
       );
       if (values.watch) {
@@ -313,6 +331,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         });
         if (watcher.watching.length > 0) {
           console.error(`okf-mcp: watching ${watcher.watching.join(", ")} for changes`);
+        } else if (discovered.length > 0) {
+          console.error(
+            "okf-mcp: --watch: watching starts when a discovered bundle loads",
+          );
         } else {
           console.error("okf-mcp: --watch: no local bundles are being watched");
         }
@@ -349,7 +371,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error("error: concept requires an ID");
         return 2;
       }
-      const concept = store.getConcept(undefined, id);
+      const concept = await store.getConcept(undefined, id);
       if (!concept) {
         console.error(`error: unknown concept: ${id}`);
         return 1;
@@ -363,7 +385,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`error: unknown graph format: ${format}`);
         return 2;
       }
-      console.log(exportGraph(buildGraph(store.bundle(undefined)), format));
+      console.log(exportGraph(buildGraph(await store.bundle(undefined)), format));
       return 0;
     }
     case "index": {
@@ -384,7 +406,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     case "pack": {
-      const bundle = store.bundle(rest[0]);
+      const bundle = await store.bundle(rest[0]);
       const out = values.out ?? `${bundle.id}.tar.gz`;
       const format = archiveKind(out);
       if (format === null) {

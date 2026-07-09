@@ -185,6 +185,19 @@ okf-mcp --colocated-bundles /path/to/knowledge \
 
 Each colocated bundle derives `canonicalUrl = <rootUrl>/<folder>` (here `…/tree/main/acme`, `…/tree/main/ops`), and the derived URLs get the same tree/blob/raw prefix expansion as explicitly declared ones. A bare URL works when exactly one colocated root is configured; with several, name the root: `--canonical-url /path/to/knowledge=<url>`. An explicit per-bundle `--canonical-url id=<url>` still overrides the derived value. Non-GitHub root URLs work too — the folder name is appended to the literal prefix. Consumers can still mount an individual bundle straight from its subdirectory tree URL (`--remote-bundle acme=https://github.com/acme/knowledge/tree/main/acme`) — or mount the whole published root by one URL with [`--colocated-remote-bundles`](#consuming-a-published-colocated-root-by-one-url).
 
+#### Lazy mounting: discover all, load on first access
+
+A colocated root may hold many bundles a given project never touches, so the MCP server (`mcp`, the default command) mounts colocated bundles **lazily**: at startup each subdirectory costs only its discovery — the folder name plus a frontmatter-only read of its root `index.md` for the `description` — and a bundle is parsed and indexed the first time any tool names it (`bundle` argument, `okf://` resource read, `reload_bundles <id>`, …). The semantics, chosen so nothing is silently truncated:
+
+- `list_bundles` lists every bundle with a `loaded` marker; unloaded ones carry their name and description so an agent can see what exists and choose what to hydrate.
+- No-arg sweeps (`search_concepts`, `list_concepts`, `list_types`, `list_tags`, `graph_summary`, `validate_bundle`) cover **loaded** bundles only, and the tool result carries a note naming the discovered bundles that were excluded — irrelevant bundles stop polluting results, without the truncation reading as complete coverage.
+- `resources/list` represents an unloaded bundle by its root `index.md` alone (with the discovered description); reading it loads the bundle, after which its documents list individually.
+- [Cross-bundle derivation](#cross-bundle-awareness) sees loaded siblings only: a `../sibling/...` link into an unloaded bundle derives no edge and its citation classifies `missing` until the sibling loads (any access to it makes the edges appear); `validate`'s dangling-link warnings likewise stay silent for unloaded siblings.
+- No-arg `reload_bundles` reloads loaded bundles only (an unloaded bundle has no stale index); naming an unloaded bundle loads it. `--watch` watches loaded bundles and starts watching a lazy bundle the moment it hydrates.
+- `--only` composes: filtered-out subfolders are not even discovered.
+
+One-shot CLI commands (`inspect`, `validate`, `search`, …) sweep every bundle by design, so they load colocated bundles eagerly as before. Remote mounts are always eager — a remote root is one fetch, and its folder names are unknown until fetched.
+
 #### Root `AGENTS.md`: the bundle guide
 
 If the colocated root holds an `AGENTS.md` (exact name), its content is appended to the MCP server instructions under a `Bundle guide (from AGENTS.md):` delimiter, so every session starts knowing which bundles exist and which matter for what kind of work — and passes explicit `bundle` arguments instead of sweeping everything. Write it as a short registry for an agent deciding where to look: a line or two per bundle, what it covers, when to reach for it. It doubles as a readable vault-root note in Obsidian and travels with the repo.
@@ -267,8 +280,8 @@ Read tools:
 
 | Tool | Purpose |
 |---|---|
-| `list_bundles` | Configured bundles with concept counts, read-only flags, and each bundle's declared `description` |
-| `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts |
+| `list_bundles` | Configured bundles with concept counts, read-only flags, each bundle's declared `description`, and a `loaded` marker for [lazily mounted](#lazy-mounting-discover-all-load-on-first-access) colocated bundles |
+| `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts. No-arg form covers loaded bundles; naming an unloaded discovered bundle loads it |
 | `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL or a `.tar.gz`/`.tgz`/`.zip` archive, in memory only |
 | `load_colocated_remote_bundles` | Mount a published colocated root by URL — every subfolder becomes its own read-only bundle — returning the root `AGENTS.md` guide inline in the result |
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs and declared `description`s |

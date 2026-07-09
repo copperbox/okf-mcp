@@ -36,6 +36,27 @@ async function walkMarkdownFiles(root: string, dir = ""): Promise<string[]> {
 }
 
 /**
+ * Whether a directory tree holds at least one markdown file, stopping at the
+ * first hit (same dot-skipping rules as walkMarkdownFiles). Files are checked
+ * before descending so the common case — an index.md at the bundle root —
+ * costs a single readdir, keeping colocated discovery cheap for bundles that
+ * may never be loaded.
+ */
+async function hasMarkdownFile(root: string): Promise<boolean> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const directories: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) return true;
+    if (entry.isDirectory()) directories.push(entry.name);
+  }
+  for (const directory of directories) {
+    if (await hasMarkdownFile(path.join(root, directory))) return true;
+  }
+  return false;
+}
+
+/**
  * Discover the bundles colocated under a shared root (`--colocated-bundles`):
  * each immediate subdirectory containing at least one markdown file becomes a
  * bundle config with `id` = the directory basename and `colocatedRoot` = the
@@ -64,7 +85,7 @@ export async function discoverColocatedBundles(
       if (!plainSubdir) {
         throw new Error(`--only: no bundle subdirectory named "${name}" under ${root}`);
       }
-      if ((await walkMarkdownFiles(bundleRoot)).length === 0) {
+      if (!(await hasMarkdownFile(bundleRoot))) {
         throw new Error(`--only: "${name}" under ${root} contains no markdown`);
       }
       configs.push({ id: name, root: bundleRoot, colocatedRoot: root });
@@ -77,8 +98,7 @@ export async function discoverColocatedBundles(
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const bundleRoot = path.join(root, entry.name);
-    const markdown = await walkMarkdownFiles(bundleRoot);
-    if (markdown.length === 0) continue;
+    if (!(await hasMarkdownFile(bundleRoot))) continue;
     configs.push({ id: entry.name, root: bundleRoot, colocatedRoot: root });
   }
   return configs;
@@ -118,6 +138,21 @@ export function declaredOkfVersion(source: string): string | undefined {
 export function declaredDescription(source: string): string | undefined {
   const description = splitFrontmatter(source).data?.description;
   return typeof description === "string" ? description : undefined;
+}
+
+/**
+ * Frontmatter-only read of a bundle root's `index.md` for its declared
+ * one-line `description` — what lazy discovery records about a bundle it
+ * does not parse. Undefined when the file is absent or declares none.
+ */
+export async function readBundleDescription(root: string): Promise<string | undefined> {
+  let source: string;
+  try {
+    source = await fs.readFile(path.join(root, "index.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+  return declaredDescription(source);
 }
 
 /** One markdown document as raw text, addressed by its bundle-relative path. */

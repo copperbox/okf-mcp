@@ -94,6 +94,12 @@ export interface BundleConfig {
    * so downstream features can rely on the layout.
    */
   colocatedRoot?: string;
+  /**
+   * Discover at startup, parse on first access: load() records only the id
+   * and the root index.md's frontmatter `description`; the full index is
+   * built the first time any caller names the bundle (OkfStore.bundle).
+   */
+  lazy?: boolean;
 }
 
 /** A read-only bundle fetched from a remote source (issue: exchange goal). */

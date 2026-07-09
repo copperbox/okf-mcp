@@ -1,4 +1,6 @@
-import { loadBundle } from "./bundle.js";
+import path from "node:path";
+
+import { loadBundle, readBundleDescription } from "./bundle.js";
 import { loadColocatedRemoteBundles, loadRemoteBundle } from "./remote.js";
 import type { ColocatedRemoteMount } from "./remote.js";
 import type {
@@ -87,14 +89,45 @@ export interface ColocatedRemoteRootMount {
   agentsGuide?: string;
 }
 
+/** A bundle discovered at load() but not yet parsed/indexed (lazy configs). */
+export interface DiscoveredBundle {
+  id: string;
+  /** Absolute path to the bundle root. */
+  root: string;
+  /** One-line purpose from a frontmatter-only read of the root index.md. */
+  description?: string;
+  /** Absolute path of the shared colocated root, when discovered under one. */
+  colocatedRoot?: string;
+}
+
 /**
  * In-memory index over one or more OKF bundles. The store itself never
  * watches the filesystem; callers reload after external changes (authoring
  * reloads automatically, and watchBundles in watch.ts drives reloads for
  * `--watch`).
+ *
+ * Lazy mounting (issue #64): a config marked `lazy` is only *discovered* at
+ * load() — id plus a frontmatter-only read of its root index.md for the
+ * description — and parsed/indexed the first time any caller names it via
+ * bundle(). Consequences, all chosen so nothing is silently truncated:
+ * - bundles() returns loaded bundles only; discoveredBundles() lists the
+ *   rest, so callers sweeping "all bundles" can report what they excluded.
+ * - Cross-bundle features (sibling links, canonical-URL edges) see loaded
+ *   siblings only; edges into a discovered bundle appear once it hydrates.
+ * - reloadBundle(id) on a discovered bundle hydrates it; the no-arg
+ *   reloadBundles() covers loaded bundles only.
+ * - onHydrate lets `--watch` start watching a bundle when it loads.
  */
 export class OkfStore {
   private loaded = new Map<string, LoadedBundle>();
+  /** Lazy configs discovered but not yet loaded, with their discovery info. */
+  private readonly pending = new Map<
+    string,
+    { config: BundleConfig; info: DiscoveredBundle }
+  >();
+  /** In-flight lazy loads, so concurrent first accesses share one parse. */
+  private readonly hydrating = new Map<string, Promise<LoadedBundle>>();
+  private readonly hydrateListeners: ((bundle: LoadedBundle) => void)[] = [];
   private readonly remotes = new Map<string, RemoteBundleConfig>();
   private readonly colocatedRoots = new Map<string, ColocatedRemoteRootConfig>();
   private readonly colocatedMounts = new Map<
@@ -129,6 +162,21 @@ export class OkfStore {
 
   async load(): Promise<void> {
     for (const config of this.configs) {
+      if (config.lazy) {
+        const description = await readBundleDescription(config.root);
+        this.pending.set(config.id, {
+          config,
+          info: {
+            id: config.id,
+            root: path.resolve(config.root),
+            ...(description !== undefined && { description }),
+            ...(config.colocatedRoot !== undefined && {
+              colocatedRoot: path.resolve(config.colocatedRoot),
+            }),
+          },
+        });
+        continue;
+      }
       this.loaded.set(config.id, await loadBundle(config));
     }
     for (const remote of this.remotes.values()) {
@@ -201,7 +249,48 @@ export class OkfStore {
     return [...this.colocatedMounts].map(([url, mount]) => ({ url, ...mount }));
   }
 
+  /** Bundles discovered by a lazy config but not yet loaded. */
+  discoveredBundles(): DiscoveredBundle[] {
+    return [...this.pending.values()].map((entry) => entry.info);
+  }
+
+  /**
+   * Register a listener called whenever a discovered bundle finishes its
+   * first load (via bundle() or reloadBundle). Lets `--watch` start watching
+   * a bundle the moment it hydrates. Returns an unsubscribe function.
+   */
+  onHydrate(listener: (bundle: LoadedBundle) => void): () => void {
+    this.hydrateListeners.push(listener);
+    return () => {
+      const index = this.hydrateListeners.indexOf(listener);
+      if (index >= 0) this.hydrateListeners.splice(index, 1);
+    };
+  }
+
+  /** First load of a discovered bundle; concurrent callers share one parse. */
+  private hydrate(id: string): Promise<LoadedBundle> {
+    const inflight = this.hydrating.get(id);
+    if (inflight !== undefined) return inflight;
+    const entry = this.pending.get(id)!;
+    const load = loadBundle(entry.config).then(
+      (bundle) => {
+        this.loaded.set(id, bundle);
+        this.pending.delete(id);
+        this.hydrating.delete(id);
+        for (const listener of this.hydrateListeners) listener(bundle);
+        return bundle;
+      },
+      (err: unknown) => {
+        this.hydrating.delete(id);
+        throw err;
+      },
+    );
+    this.hydrating.set(id, load);
+    return load;
+  }
+
   async reloadBundle(id: string): Promise<LoadedBundle> {
+    if (this.pending.has(id)) return this.hydrate(id);
     const remote = this.remotes.get(id);
     const config = this.configs.find((c) => c.id === id);
     const rootUrl = this.colocatedRootOf(id);
@@ -255,14 +344,19 @@ export class OkfStore {
   /**
    * Re-read bundles to pick up external edits: local bundles from disk,
    * remote bundles by refetching their tree or archive. With no id, all
-   * bundles reload. Returns per-bundle stats including which concept IDs
-   * were added, removed, or changed since the previous load.
+   * *loaded* bundles reload — discovered-but-unloaded bundles stay untouched
+   * (there is no stale index to refresh). Naming an unloaded bundle hydrates
+   * it, reported as an all-added delta. Returns per-bundle stats including
+   * which concept IDs were added, removed, or changed since the previous load.
    */
   async reloadBundles(id?: string): Promise<BundleReloadStats[]> {
     const ids =
       id !== undefined
         ? [id]
-        : [...this.configs.map((c) => c.id), ...this.remotes.keys()];
+        : [
+            ...this.configs.filter((c) => !this.pending.has(c.id)).map((c) => c.id),
+            ...this.remotes.keys(),
+          ];
     const stats: BundleReloadStats[] = [];
     const statFor = (
       bundleId: string,
@@ -304,29 +398,32 @@ export class OkfStore {
   }
 
   /**
-   * Resolve a bundle by id. With no id, returns the only bundle when
-   * exactly one is configured — so single-bundle setups can omit it.
+   * Resolve a bundle by id, loading a discovered-but-unloaded bundle on the
+   * way — the transparent hydration point every tool naming a bundle goes
+   * through. With no id, returns the only bundle when exactly one is
+   * configured — so single-bundle setups can omit it.
    */
-  bundle(id?: string): LoadedBundle {
-    if (id !== undefined) {
-      const bundle = this.loaded.get(id);
-      if (!bundle) {
-        throw new Error(
-          `unknown bundle "${id}" (available: ${[...this.loaded.keys()].join(", ")})`,
-        );
+  async bundle(id?: string): Promise<LoadedBundle> {
+    if (id === undefined) {
+      const ids = [...this.loaded.keys(), ...this.pending.keys()];
+      if (ids.length !== 1) {
+        throw new Error(`bundle id required when ${ids.length} bundles are configured`);
       }
-      return bundle;
+      id = ids[0]!;
     }
-    const all = this.bundles();
-    if (all.length === 1) return all[0]!;
-    throw new Error(
-      `bundle id required when ${all.length} bundles are configured`,
-    );
+    const bundle = this.loaded.get(id);
+    if (bundle !== undefined) return bundle;
+    if (this.pending.has(id)) return this.hydrate(id);
+    const available = [...this.loaded.keys(), ...this.pending.keys()];
+    throw new Error(`unknown bundle "${id}" (available: ${available.join(", ")})`);
   }
 
   /** Look up a concept by ID, tolerating a trailing `.md`. */
-  getConcept(bundleId: string | undefined, conceptId: string): Concept | undefined {
-    const bundle = this.bundle(bundleId);
+  async getConcept(
+    bundleId: string | undefined,
+    conceptId: string,
+  ): Promise<Concept | undefined> {
+    const bundle = await this.bundle(bundleId);
     return (
       bundle.concepts.get(conceptId) ??
       bundle.concepts.get(conceptId.replace(/\.md$/i, ""))

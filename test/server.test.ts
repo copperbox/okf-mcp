@@ -173,6 +173,158 @@ describe("bundle description from the root index.md", () => {
   });
 });
 
+describe("lazy colocated bundles", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-lazy-"));
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "index.md"),
+      '---\ndescription: "Acme knowledge."\n---\n\n# Index\n',
+    );
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\nSee [runbook](../ops/runbook.md).\n",
+    );
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Runbook\ntitle: Runbook\n---\n\nSteps.\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  function lazyStore(): OkfStore {
+    return new OkfStore([
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root, lazy: true },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root, lazy: true },
+    ]);
+  }
+
+  it("list_bundles marks discovered bundles loaded: false until first access", async () => {
+    const client = await connectClient(lazyStore());
+    const before = (await callJson(client, "list_bundles", {})) as Array<
+      Record<string, unknown>
+    >;
+    assert.deepEqual(before, [
+      {
+        id: "acme",
+        root: path.join(root, "acme"),
+        description: "Acme knowledge.",
+        loaded: false,
+      },
+      { id: "ops", root: path.join(root, "ops"), loaded: false },
+    ]);
+
+    // Any tool naming a bundle hydrates it transparently.
+    const concept = (await callJson(client, "get_concept", {
+      bundle: "acme",
+      id: "note",
+    })) as Record<string, unknown>;
+    assert.equal((concept.frontmatter as Record<string, unknown>).type, "Note");
+
+    const after = (await callJson(client, "list_bundles", {})) as Array<
+      Record<string, unknown>
+    >;
+    assert.deepEqual(
+      after.map((b) => [b.id, b.loaded, b.concepts]),
+      [
+        ["acme", true, 1],
+        ["ops", false, undefined],
+      ],
+    );
+  });
+
+  it("no-arg sweeps cover loaded bundles only and note the exclusion", async () => {
+    const client = await connectClient(lazyStore());
+    const swept = await callTool(client, "list_types", {});
+    assert.deepEqual(JSON.parse(textContent(swept)), []);
+    const note = swept.content[1];
+    assert.ok(note?.type === "text");
+    assert.match(note.text, /2 discovered bundle\(s\)/);
+    assert.match(note.text, /acme, ops/);
+
+    // Naming a bundle hydrates it and carries no note.
+    const named = await callTool(client, "list_types", { bundle: "ops" });
+    assert.equal(named.content.length, 1);
+    assert.deepEqual(JSON.parse(textContent(named)), [{ type: "Runbook", count: 1 }]);
+
+    // The next sweep includes ops and only excludes acme.
+    const partial = await callTool(client, "search_concepts", { query: "runbook" });
+    assert.equal((JSON.parse(textContent(partial)) as { total: number }).total, 1);
+    const partialNote = partial.content[1];
+    assert.ok(partialNote?.type === "text");
+    assert.match(partialNote.text, /1 discovered bundle\(s\)[\s\S]*acme/);
+
+    // Once everything is loaded the note disappears.
+    await callTool(client, "list_types", { bundle: "acme" });
+    const full = await callTool(client, "list_types", {});
+    assert.equal(full.content.length, 1);
+  });
+
+  it("resources/list shows an unloaded bundle as its root index.md; reading loads it", async () => {
+    const client = await connectClient(lazyStore());
+    const before = await client.listResources();
+    assert.deepEqual(
+      before.resources.map((r) => [r.uri, r.name]),
+      [
+        ["okf://acme/index.md", "acme/index.md (bundle not loaded yet)"],
+        ["okf://ops/index.md", "ops/index.md (bundle not loaded yet)"],
+      ],
+    );
+    // The discovered description travels on the placeholder resource.
+    assert.equal(before.resources[0]?.description, "Acme knowledge.");
+
+    const read = await client.readResource({ uri: "okf://acme/index.md" });
+    assert.match((read.contents[0] as { text: string }).text, /# Index/);
+
+    const after = await client.listResources();
+    const uris = after.resources.map((r) => r.uri);
+    assert.ok(uris.includes("okf://acme/note.md"), `resources: ${uris.join(", ")}`);
+    // ops is still only discovered.
+    assert.ok(uris.includes("okf://ops/index.md"));
+    assert.ok(!uris.includes("okf://ops/runbook.md"));
+  });
+
+  it("reload_bundles ignores unloaded bundles unless one is named", async () => {
+    const client = await connectClient(lazyStore());
+    assert.deepEqual(await callJson(client, "reload_bundles", {}), []);
+
+    const named = (await callJson(client, "reload_bundles", {
+      bundle: "ops",
+    })) as Array<Record<string, unknown>>;
+    assert.deepEqual(named, [
+      { bundle: "ops", concepts: 1, problems: 0, added: ["runbook"], removed: [], changed: [] },
+    ]);
+    const bundles = (await callJson(client, "list_bundles", {})) as Array<
+      Record<string, unknown>
+    >;
+    assert.deepEqual(
+      bundles.map((b) => [b.id, b.loaded]),
+      [
+        ["ops", true],
+        ["acme", false],
+      ],
+    );
+  });
+
+  it("cross-bundle edges into a sibling appear once the sibling loads", async () => {
+    const client = await connectClient(lazyStore());
+    const before = (await callJson(client, "graph_summary", {
+      bundle: "acme",
+    })) as Record<string, unknown>;
+    assert.equal(before.crossBundleEdges, 0);
+
+    await callTool(client, "get_concept", { bundle: "ops", id: "runbook" });
+    const after = (await callJson(client, "graph_summary", {
+      bundle: "acme",
+    })) as Record<string, unknown>;
+    assert.equal(after.crossBundleEdges, 1);
+  });
+});
+
 describe("remote bundle tools", () => {
   const DOC = "---\ntype: Table\ntitle: Orders\n---\n\nOrder rows.\n";
   const URL = "https://github.com/acme/kb/tree/main/kb";

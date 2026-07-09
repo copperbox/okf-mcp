@@ -44,8 +44,8 @@ describe("OkfStore.reloadBundles", () => {
       },
     ]);
     // The in-memory index reflects the reload.
-    assert.equal(store.getConcept("t", "metrics/revenue")?.frontmatter.type, "Metric");
-    assert.equal(store.getConcept("t", "tables/customers"), undefined);
+    assert.equal((await store.getConcept("t", "metrics/revenue"))?.frontmatter.type, "Metric");
+    assert.equal(await store.getConcept("t", "tables/customers"), undefined);
   });
 
   it("reports empty deltas when nothing changed on disk", async () => {
@@ -74,12 +74,100 @@ describe("OkfStore.reloadBundles", () => {
       assert.deepEqual(stats.map((s) => s.bundle), ["o"]);
       assert.deepEqual(stats[0]?.added, ["b"]);
       // Bundle "t" was not reloaded, so c.md is still invisible.
-      assert.equal(store.getConcept("t", "c"), undefined);
+      assert.equal(await store.getConcept("t", "c"), undefined);
 
       await assert.rejects(store.reloadBundles("nope"), /unknown bundle/);
     } finally {
       await fs.rm(other, { recursive: true, force: true });
     }
+  });
+});
+
+describe("OkfStore lazy bundles", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-lazy-"));
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "index.md"),
+      '---\ndescription: "Acme knowledge."\n---\n\n# Index\n',
+    );
+    await writeDoc(root, "acme/note.md", "type: Note\ntitle: Note", "Body.");
+    await writeDoc(root, "ops/runbook.md", "type: Runbook\ntitle: Runbook", "Steps.");
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  function lazyStore(): OkfStore {
+    return new OkfStore([
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root, lazy: true },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root, lazy: true },
+    ]);
+  }
+
+  it("discovers lazy bundles without loading and hydrates on first access", async () => {
+    const store = lazyStore();
+    await store.load();
+
+    assert.deepEqual(store.bundles(), []);
+    assert.deepEqual(store.discoveredBundles(), [
+      {
+        id: "acme",
+        root: path.join(root, "acme"),
+        description: "Acme knowledge.",
+        colocatedRoot: root,
+      },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+
+    const bundle = await store.bundle("acme");
+    assert.deepEqual([...bundle.concepts.keys()], ["note"]);
+    assert.equal(bundle.colocatedRoot, root);
+    assert.deepEqual(store.bundles().map((b) => b.id), ["acme"]);
+    assert.deepEqual(store.discoveredBundles().map((d) => d.id), ["ops"]);
+  });
+
+  it("getConcept hydrates, and an unknown id names the discovered bundles", async () => {
+    const store = lazyStore();
+    await store.load();
+    const concept = await store.getConcept("ops", "runbook");
+    assert.equal(concept?.frontmatter.type, "Runbook");
+    await assert.rejects(store.bundle("nope"), /available: ops, acme/);
+  });
+
+  it("bundle() with no id hydrates the only configured bundle", async () => {
+    const store = new OkfStore([
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root, lazy: true },
+    ]);
+    await store.load();
+    const bundle = await store.bundle();
+    assert.equal(bundle.id, "acme");
+  });
+
+  it("concurrent first accesses share one load and notify onHydrate once", async () => {
+    const store = lazyStore();
+    await store.load();
+    const hydrated: string[] = [];
+    store.onHydrate((bundle) => hydrated.push(bundle.id));
+    const [a, b] = await Promise.all([store.bundle("acme"), store.bundle("acme")]);
+    assert.equal(a, b);
+    assert.deepEqual(hydrated, ["acme"]);
+  });
+
+  it("no-arg reloadBundles skips unloaded bundles; naming one hydrates it", async () => {
+    const store = lazyStore();
+    await store.load();
+    await store.bundle("acme");
+
+    assert.deepEqual((await store.reloadBundles()).map((s) => s.bundle), ["acme"]);
+    assert.deepEqual(store.discoveredBundles().map((d) => d.id), ["ops"]);
+
+    const stats = await store.reloadBundles("ops");
+    assert.deepEqual(stats, [
+      { bundle: "ops", concepts: 1, problems: 0, added: ["runbook"], removed: [], changed: [] },
+    ]);
+    assert.deepEqual(store.discoveredBundles(), []);
   });
 });
 
@@ -93,9 +181,12 @@ describe("OkfStore remote bundles", () => {
       fetchImpl: fakeGitHub({ "kb/tables/orders.md": DOC }),
     });
     await store.load();
-    const bundle = store.bundle("shared");
+    const bundle = await store.bundle("shared");
     assert.equal(bundle.readOnly, true);
-    assert.equal(store.getConcept("shared", "tables/orders")?.frontmatter.type, "Table");
+    assert.equal(
+      (await store.getConcept("shared", "tables/orders"))?.frontmatter.type,
+      "Table",
+    );
   });
 
   it("addRemoteBundle mutates only the in-memory index and rejects duplicate ids", async () => {
@@ -229,7 +320,7 @@ describe("OkfStore colocated remote roots", () => {
     const mount = await store.addColocatedRemoteBundles({ url: ROOT_URL });
     assert.deepEqual(mount.bundles.map((b) => b.id), ["acme", "ops"]);
     assert.equal(mount.agentsGuide, "# Guide\n");
-    assert.equal(store.bundle("ops").readOnly, true);
+    assert.equal((await store.bundle("ops")).readOnly, true);
     await assert.rejects(
       store.addColocatedRemoteBundles({ url: ROOT_URL }),
       /already mounted/,
@@ -294,6 +385,6 @@ describe("OkfStore colocated remote roots", () => {
     const bundle = await store.reloadBundle("acme");
     assert.equal(bundle.id, "acme");
     // The sibling picked up the upstream change too.
-    assert.equal(store.bundle("ops").concepts.size, 2);
+    assert.equal((await store.bundle("ops")).concepts.size, 2);
   });
 });
