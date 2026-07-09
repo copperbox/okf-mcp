@@ -20,7 +20,13 @@ export type {
   UpdateConceptResult,
   WriteConceptOptions,
 } from "./authoring.js";
-export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
+export {
+  buildBundle,
+  declaredDescription,
+  declaredOkfVersion,
+  loadBundle,
+  readBundleDocument,
+} from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export { canonicalUrlPrefixes, resolveUrlToConcept } from "./canonical.js";
 export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
