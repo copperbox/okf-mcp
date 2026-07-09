@@ -41,6 +41,18 @@ import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
 
+/**
+ * Agent-facing guide to the mounted bundles (a colocated root's AGENTS.md),
+ * appended to the server instructions so every session knows which bundles
+ * exist and which matter for what kind of work.
+ */
+export interface BundleGuide {
+  /** Raw markdown content of the guide. */
+  text: string;
+  /** Path of the full file, named by the truncation pointer. */
+  source: string;
+}
+
 export interface ServerOptions {
   /**
    * Allow the authoring tools (write_concept, update_concept, delete_concept,
@@ -48,6 +60,29 @@ export interface ServerOptions {
    * Default: read-only.
    */
   writable?: boolean;
+  /**
+   * Bundle guides appended to the server instructions; each is truncated past
+   * BUNDLE_GUIDE_BUDGET characters with a pointer to its full file.
+   */
+  bundleGuides?: BundleGuide[];
+}
+
+/**
+ * Instructions load into the agent's context every session, so a bundle
+ * guide longer than this many characters is truncated rather than injected
+ * whole (the full file stays readable where it lives).
+ */
+export const BUNDLE_GUIDE_BUDGET = 4000;
+
+/** A guide under the budget passes through whole; past it, cut at the last
+ * line break before the budget and point at the full file. */
+function renderBundleGuide(guide: BundleGuide): string {
+  const heading = "Bundle guide (from AGENTS.md):";
+  const text = guide.text.trim();
+  if (text.length <= BUNDLE_GUIDE_BUDGET) return `${heading}\n\n${text}`;
+  const lastBreak = text.lastIndexOf("\n", BUNDLE_GUIDE_BUDGET);
+  const kept = text.slice(0, lastBreak > 0 ? lastBreak : BUNDLE_GUIDE_BUDGET).trimEnd();
+  return `${heading}\n\n${kept}\n\n[Guide truncated — read the full file at ${guide.source}.]`;
 }
 
 /**
@@ -55,7 +90,7 @@ export interface ServerOptions {
  * session (so kept deliberately short): the OKF conventions the tools assume
  * but cannot express individually.
  */
-function serverInstructions(writable: boolean): string {
+function serverInstructions(options: ServerOptions): string {
   const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
 concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
 A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
@@ -69,12 +104,14 @@ every document.
 
 If bundle files may have changed outside this server (e.g. a human editing in
 Obsidian), call reload_bundles before relying on current state.`;
-  if (!writable) {
-    return `${shared}\n\nThis server is read-only; authoring tools are not available.`;
+  const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
+  if (!options.writable) {
+    return [
+      `${shared}\n\nThis server is read-only; authoring tools are not available.`,
+      ...guides,
+    ].join("\n\n");
   }
-  return `${shared}
-
-Writing: call suggest_concept_path before creating a concept so placement matches
+  const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
 where similar concepts live, and reuse existing types/tags. Prefer update_concept
 for partial edits — it patches frontmatter keys and/or one body section, preserving
 the rest of the document — over full write_concept rewrites. write_concept,
@@ -84,6 +121,7 @@ go to the nearest existing directory log.md above the concept, falling back to t
 bundle root's. Use append_log_entry for change narrative not tied to a single concept
 write. When knowledge outgrows its bundle (e.g. project → org), promote_concept moves
 it and leaves a citation stub behind. Remote bundles are always read-only.`;
+  return [shared, writing, ...guides].join("\n\n");
 }
 
 function json(data: unknown): CallToolResult {
@@ -146,7 +184,7 @@ export function createOkfServer(
 ): McpServer {
   const server = new McpServer(
     { name: "okf-mcp", version: "0.1.0" },
-    { instructions: serverInstructions(options.writable ?? false) },
+    { instructions: serverInstructions(options) },
   );
 
   const selectBundles = (bundle: string | undefined) =>

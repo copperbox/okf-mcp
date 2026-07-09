@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { writeConcept } from "../src/authoring.js";
-import { createOkfServer } from "../src/server.js";
+import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "../src/server.js";
 import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
 import { fakeArchiveServer, makeTarGz } from "./archives.js";
@@ -1349,6 +1349,54 @@ describe("server instructions", () => {
     assert.ok(!instructions.includes("suggest_concept_path"));
     assert.ok(instructions.includes("read-only"));
     assert.ok(instructions.includes("reload_bundles"));
+    await client.close();
+  });
+
+  it("appends a colocated root's AGENTS.md as a bundle guide", async () => {
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]), {
+      bundleGuides: [
+        {
+          text: "- acme: warehouse schema tables and their playbooks.\n",
+          source: "/vault/AGENTS.md",
+        },
+      ],
+    });
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    assert.ok(instructions.includes("Bundle guide (from AGENTS.md):"));
+    assert.ok(
+      instructions.includes("- acme: warehouse schema tables and their playbooks."),
+    );
+    assert.ok(!instructions.includes("truncated"), "a short guide is injected whole");
+    await client.close();
+  });
+
+  it("truncates an oversized guide and points at the full file", async () => {
+    const line = "- bundle: covers one subsystem in unnecessary detail.\n";
+    const text = line.repeat(
+      Math.ceil((BUNDLE_GUIDE_BUDGET * 2) / line.length),
+    );
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]), {
+      bundleGuides: [{ text, source: "/vault/AGENTS.md" }],
+    });
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    const guide = instructions.slice(instructions.indexOf("Bundle guide"));
+    assert.ok(
+      guide.length <= BUNDLE_GUIDE_BUDGET + 200,
+      `guide should be cut near the ${BUNDLE_GUIDE_BUDGET}-char budget, got ${guide.length}`,
+    );
+    assert.ok(guide.includes("truncated"));
+    assert.ok(guide.includes("/vault/AGENTS.md"), "pointer should name the full file");
+    await client.close();
+  });
+
+  it("leaves instructions unchanged when no bundle guide is configured", async () => {
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    assert.ok(!instructions.includes("Bundle guide"));
+    assert.ok(!instructions.includes("AGENTS.md"));
     await client.close();
   });
 });

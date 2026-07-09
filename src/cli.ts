@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { generateIndexes } from "./authoring.js";
-import { discoverColocatedBundles } from "./bundle.js";
+import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
 import { buildGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
 import { archiveKind } from "./remote.js";
 import { searchConcepts } from "./search.js";
-import { createOkfServer } from "./server.js";
+import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
+import type { BundleGuide } from "./server.js";
 import { OkfStore } from "./store.js";
 import type { BundleConfig, RemoteBundleConfig } from "./types.js";
 import { validateBundle } from "./validate.js";
@@ -41,7 +43,8 @@ Options:
                           Mount every immediate subdirectory of <root> that
                           contains markdown as its own bundle (id = folder
                           name); repeatable. Dot directories and loose files
-                          at the root are skipped.
+                          at the root are skipped. A root AGENTS.md is served
+                          as a bundle guide in the MCP server instructions.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
@@ -111,6 +114,28 @@ function applyCanonicalUrlFlags(
   }
 }
 
+/**
+ * Read each colocated root's AGENTS.md (agent-facing bundle guide) for the
+ * server instructions, warning on stderr when one exceeds the injection
+ * budget and will be truncated.
+ */
+async function collectBundleGuides(roots: string[]): Promise<BundleGuide[]> {
+  const guides: BundleGuide[] = [];
+  for (const root of [...new Set(roots)]) {
+    const text = await readColocatedAgentsGuide(root);
+    if (text === undefined) continue;
+    const source = path.resolve(root, "AGENTS.md");
+    if (text.length > BUNDLE_GUIDE_BUDGET) {
+      console.error(
+        `okf-mcp: ${source} is ${text.length} chars; instructions carry the first ` +
+          `~${BUNDLE_GUIDE_BUDGET} and point at the full file — keep it a short bundle registry`,
+      );
+    }
+    guides.push({ text, source });
+  }
+  return guides;
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -160,7 +185,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   switch (command) {
     case "mcp": {
-      const server = createOkfServer(store, { writable: values.writable ?? false });
+      const server = createOkfServer(store, {
+        writable: values.writable ?? false,
+        bundleGuides: await collectBundleGuides(values["colocated-bundles"] ?? []),
+      });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
       console.error(
