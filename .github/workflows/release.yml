@@ -24,9 +24,10 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 bundles npm 10.
-      # Pinned to a major so a new npm major can't change behavior mid-release
-      # (npm 12 changed `pack --json` output and broke the pack verification).
-      - run: npm install -g npm@12
+      # Pinned to a major so a new npm major can't change behavior mid-release.
+      # npm 12.0.0 is broken twice over: `pack --json` changed shape, and
+      # `publish --provenance` crashes (sigstore missing from bundled deps).
+      - run: npm install -g npm@11
 
       - run: npm ci
 
