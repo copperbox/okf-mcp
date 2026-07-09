@@ -292,26 +292,28 @@ export class OkfStore {
   async reloadBundle(id: string): Promise<LoadedBundle> {
     if (this.pending.has(id)) return this.hydrate(id);
     const remote = this.remotes.get(id);
-    const config = this.configs.find((c) => c.id === id);
-    const rootUrl = this.colocatedRootOf(id);
-    let bundle: LoadedBundle | undefined;
     if (remote !== undefined) {
-      bundle = await loadRemoteBundle(remote, this.fetchImpl);
+      const bundle = await loadRemoteBundle(remote, this.fetchImpl);
       this.loaded.set(id, bundle);
-    } else if (config !== undefined) {
-      bundle = await loadBundle(config);
+      return bundle;
+    }
+    const config = this.configs.find((c) => c.id === id);
+    if (config !== undefined) {
+      const bundle = await loadBundle(config);
       this.loaded.set(id, bundle);
-    } else if (rootUrl !== undefined) {
-      // The root is one remote source: refetch it whole (siblings update too).
-      await this.loadColocatedRoot(rootUrl);
-      bundle = this.loaded.get(id);
-      if (bundle === undefined) {
-        throw new Error(
-          `bundle "${id}" no longer exists under colocated remote root ${rootUrl}`,
-        );
-      }
-    } else {
+      return bundle;
+    }
+    const rootUrl = this.colocatedRootOf(id);
+    if (rootUrl === undefined) {
       throw new Error(`unknown bundle: ${id}`);
+    }
+    // The root is one remote source: refetch it whole (siblings update too).
+    await this.loadColocatedRoot(rootUrl);
+    const bundle = this.loaded.get(id);
+    if (bundle === undefined) {
+      throw new Error(
+        `bundle "${id}" no longer exists under colocated remote root ${rootUrl}`,
+      );
     }
     return bundle;
   }

@@ -305,12 +305,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
       const discovered = store.discoveredBundles();
-      const served = [
-        store.bundles().map((b) => b.id).join(", ") || "(none loaded)",
-        ...(discovered.length > 0
-          ? [`+ ${discovered.length} discovered colocated (loading on first access)`]
-          : []),
-      ].join(" ");
+      const loadedIds = store.bundles().map((b) => b.id).join(", ") || "(none loaded)";
+      const served =
+        discovered.length > 0
+          ? `${loadedIds} + ${discovered.length} discovered colocated (loading on first access)`
+          : loadedIds;
       console.error(
         `okf-mcp serving ${served} over stdio` +
           (values.writable ? " (writable)" : " (read-only)"),
