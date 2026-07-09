@@ -74,8 +74,10 @@ export interface ServerOptions {
  */
 export const BUNDLE_GUIDE_BUDGET = 4000;
 
-/** A guide under the budget passes through whole; past it, cut at the last
- * line break before the budget and point at the full file. */
+/**
+ * A guide under the budget passes through whole; past it, cut at the last
+ * line break before the budget and point at the full file.
+ */
 function renderBundleGuide(guide: BundleGuide): string {
   const heading = "Bundle guide (from AGENTS.md):";
   const text = guide.text.trim();
@@ -104,13 +106,6 @@ every document.
 
 If bundle files may have changed outside this server (e.g. a human editing in
 Obsidian), call reload_bundles before relying on current state.`;
-  const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
-  if (!options.writable) {
-    return [
-      `${shared}\n\nThis server is read-only; authoring tools are not available.`,
-      ...guides,
-    ].join("\n\n");
-  }
   const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
 where similar concepts live, and reuse existing types/tags. Prefer update_concept
 for partial edits — it patches frontmatter keys and/or one body section, preserving
@@ -121,7 +116,11 @@ go to the nearest existing directory log.md above the concept, falling back to t
 bundle root's. Use append_log_entry for change narrative not tied to a single concept
 write. When knowledge outgrows its bundle (e.g. project → org), promote_concept moves
 it and leaves a citation stub behind. Remote bundles are always read-only.`;
-  return [shared, writing, ...guides].join("\n\n");
+  const authoring = options.writable
+    ? writing
+    : "This server is read-only; authoring tools are not available.";
+  const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
+  return [shared, authoring, ...guides].join("\n\n");
 }
 
 function json(data: unknown): CallToolResult {
