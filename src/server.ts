@@ -321,7 +321,7 @@ export function createOkfServer(
     {
       title: "List remote bundles",
       description:
-        "List read-only remote bundles (GitHub trees or archives) with their source URLs and concept counts",
+        "List read-only remote bundles (GitHub trees or archives) with their source URLs, concept counts, and each bundle's declared description",
       inputSchema: {},
     },
     async () =>
