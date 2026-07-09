@@ -17,7 +17,12 @@ import {
   updateConcept,
   writeConcept,
 } from "./authoring.js";
-import { readBundleDocument } from "./bundle.js";
+import {
+  colocatedSiblings,
+  readBundleDocument,
+  readColocatedAgentsGuide,
+  resolveOutsideLink,
+} from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
@@ -35,11 +40,23 @@ import {
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
 import { searchConcepts } from "./search.js";
-import type { OkfStore } from "./store.js";
+import type { ColocatedRootMount, OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
+
+/**
+ * Agent-facing guide to the mounted bundles (a colocated root's AGENTS.md),
+ * appended to the server instructions so every session knows which bundles
+ * exist and which matter for what kind of work.
+ */
+export interface BundleGuide {
+  /** Raw markdown content of the guide. */
+  text: string;
+  /** Path of the full file, named by the truncation pointer. */
+  source: string;
+}
 
 export interface ServerOptions {
   /**
@@ -48,6 +65,34 @@ export interface ServerOptions {
    * Default: read-only.
    */
   writable?: boolean;
+  /**
+   * Bundle guides appended to the server instructions; each is truncated past
+   * BUNDLE_GUIDE_BUDGET characters with a pointer to its full file.
+   */
+  bundleGuides?: BundleGuide[];
+}
+
+/**
+ * Instructions load into the agent's context every session, so a bundle
+ * guide longer than this many characters is truncated rather than injected
+ * whole (the full file stays readable where it lives).
+ */
+export const BUNDLE_GUIDE_BUDGET = 4000;
+
+/**
+ * A guide under the budget passes through whole; past it, cut at the last
+ * line break before the budget and point at the full file.
+ */
+function renderBundleGuide(guide: BundleGuide): string {
+  const heading = "Bundle guide (from AGENTS.md):";
+  const text = guide.text.trim();
+  if (text.length <= BUNDLE_GUIDE_BUDGET) return `${heading}\n\n${text}`;
+  const lastBreak = text.lastIndexOf("\n", BUNDLE_GUIDE_BUDGET);
+  const kept = text.slice(0, lastBreak > 0 ? lastBreak : BUNDLE_GUIDE_BUDGET).trimEnd();
+  return (
+    `${heading}\n\n${kept}\n\n[Guide truncated — call get_bundle_guide for the ` +
+    `full guide (source: ${guide.source}).]`
+  );
 }
 
 /**
@@ -55,7 +100,7 @@ export interface ServerOptions {
  * session (so kept deliberately short): the OKF conventions the tools assume
  * but cannot express individually.
  */
-function serverInstructions(writable: boolean): string {
+function serverInstructions(options: ServerOptions): string {
   const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
 concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
 A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
@@ -65,16 +110,16 @@ e.g. [Orders](/tables/orders.md). index.md and log.md are reserved, generated fi
 Reading: orient with graph_summary and list_types / list_tags, narrow with
 search_concepts (text plus type/tag/path/link filters), then read specific concepts
 with get_concept and explore with get_neighbors / find_path — rather than dumping
-every document.
+every document. When a get_bundle_guide tool is listed, call it before exploring:
+it says what each mounted bundle is for and which to use for what work.
+
+Colocated bundles may be discovered but not loaded yet (lazy mounting):
+list_bundles marks them loaded: false, any tool naming one loads it, and no-arg
+sweeps cover loaded bundles only, noting what they excluded.
 
 If bundle files may have changed outside this server (e.g. a human editing in
 Obsidian), call reload_bundles before relying on current state.`;
-  if (!writable) {
-    return `${shared}\n\nThis server is read-only; authoring tools are not available.`;
-  }
-  return `${shared}
-
-Writing: call suggest_concept_path before creating a concept so placement matches
+  const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
 where similar concepts live, and reuse existing types/tags. Prefer update_concept
 for partial edits — it patches frontmatter keys and/or one body section, preserving
 the rest of the document — over full write_concept rewrites. write_concept,
@@ -84,6 +129,11 @@ go to the nearest existing directory log.md above the concept, falling back to t
 bundle root's. Use append_log_entry for change narrative not tied to a single concept
 write. When knowledge outgrows its bundle (e.g. project → org), promote_concept moves
 it and leaves a citation stub behind. Remote bundles are always read-only.`;
+  const authoring = options.writable
+    ? writing
+    : "This server is read-only; authoring tools are not available.";
+  const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
+  return [shared, authoring, ...guides].join("\n\n");
 }
 
 function json(data: unknown): CallToolResult {
@@ -146,18 +196,38 @@ export function createOkfServer(
 ): McpServer {
   const server = new McpServer(
     { name: "okf-mcp", version: "0.1.0" },
-    { instructions: serverInstructions(options.writable ?? false) },
+    { instructions: serverInstructions(options) },
   );
 
-  const selectBundles = (bundle: string | undefined) =>
-    bundle !== undefined ? [store.bundle(bundle)] : store.bundles();
+  const selectBundles = async (bundle: string | undefined) =>
+    bundle !== undefined ? [await store.bundle(bundle)] : store.bundles();
+
+  /**
+   * A no-arg sweep covers only loaded bundles; when lazy colocated bundles
+   * are discovered but not loaded, say so in the result rather than letting
+   * the truncated sweep read as complete (issue #64).
+   */
+  const sweepJson = (data: unknown, sweep: boolean): CallToolResult => {
+    const result = json(data);
+    const excluded = store.discoveredBundles();
+    if (!sweep || excluded.length === 0) return result;
+    result.content.push({
+      type: "text",
+      text:
+        `Note: ${excluded.length} discovered bundle(s) are not loaded and were ` +
+        `excluded from this sweep: ${excluded.map((d) => d.id).join(", ")}. ` +
+        "Pass one as the `bundle` argument to load and include it (first access " +
+        "loads a bundle); list_bundles shows every bundle's loaded state.",
+    });
+    return result;
+  };
 
   /**
    * Read any bundle document (concept or reserved file) after path
    * validation, falling back to a synthesized view for a missing index.md.
    */
   const readDocument = async (bundleId: string | undefined, relPath: string) => {
-    const bundle = store.bundle(bundleId);
+    const bundle = await store.bundle(bundleId);
     const safePath = assertSafeDocumentPath(relPath);
     try {
       return { text: await readBundleDocument(bundle, safePath), synthesized: false };
@@ -172,21 +242,40 @@ export function createOkfServer(
     "okf-document",
     new ResourceTemplate("okf://{bundle}/{+path}", {
       list: async () => ({
-        resources: store.bundles().flatMap((bundle) => [
-          ...[...bundle.concepts.values()].map((concept) => ({
-            uri: okfUri(bundle.id, concept.path),
-            name: deriveTitle(concept),
-            ...(concept.frontmatter.description !== undefined && {
-              description: concept.frontmatter.description,
+        resources: [
+          ...store.bundles().flatMap((bundle) => [
+            ...[...bundle.concepts.values()].map((concept) => ({
+              uri: okfUri(bundle.id, concept.path),
+              name: deriveTitle(concept),
+              ...(concept.frontmatter.description !== undefined && {
+                description: concept.frontmatter.description,
+              }),
+              mimeType: "text/markdown",
+            })),
+            ...bundle.reserved.map((file) => ({
+              uri: okfUri(bundle.id, file.path),
+              name: `${bundle.id}/${file.path}`,
+              // The root index.md carries the bundle's declared purpose so
+              // agents can judge relevance from the resource list alone.
+              ...(file.path === "index.md" &&
+                bundle.description !== undefined && {
+                  description: bundle.description,
+                }),
+              mimeType: "text/markdown",
+            })),
+          ]),
+          // A discovered-but-unloaded bundle is represented by its root
+          // index.md alone (not silently absent); reading it loads the
+          // bundle, after which its documents list individually.
+          ...store.discoveredBundles().map((discovered) => ({
+            uri: okfUri(discovered.id, "index.md"),
+            name: `${discovered.id}/index.md (bundle not loaded yet)`,
+            ...(discovered.description !== undefined && {
+              description: discovered.description,
             }),
             mimeType: "text/markdown",
           })),
-          ...bundle.reserved.map((file) => ({
-            uri: okfUri(bundle.id, file.path),
-            name: `${bundle.id}/${file.path}`,
-            mimeType: "text/markdown",
-          })),
-        ]),
+        ],
       }),
     }),
     {
@@ -217,44 +306,130 @@ export function createOkfServer(
     "list_bundles",
     {
       title: "List bundles",
-      description: "List configured OKF bundles with concept counts",
+      description:
+        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose). Bundles with `loaded: false` were discovered under a colocated root but not yet parsed — any tool naming one loads it on the spot.",
       inputSchema: {},
     },
     async () =>
-      json(
-        store.bundles().map((bundle) => ({
+      json([
+        ...store.bundles().map((bundle) => ({
           id: bundle.id,
           root: bundle.root,
           okfVersion: bundle.okfVersion,
+          description: bundle.description,
           concepts: bundle.concepts.size,
           reservedFiles: bundle.reserved.map((f) => f.path),
           problems: bundle.problems.length,
           readOnly: bundle.readOnly,
+          loaded: true,
         })),
-      ),
+        ...store.discoveredBundles().map((discovered) => ({
+          id: discovered.id,
+          root: discovered.root,
+          ...(discovered.description !== undefined && {
+            description: discovered.description,
+          }),
+          loaded: false,
+        })),
+      ]),
   );
+
+  /**
+   * One get_bundle_guide entry: the root's AGENTS.md full text (local roots
+   * read it from disk on demand, so external edits show up; remote roots
+   * return the guide fetched with the mount) plus each bundle's one-line
+   * description. Unlike the instructions injection, never truncated.
+   */
+  const bundleGuideEntry = async (mount: ColocatedRootMount) => {
+    const guide = mount.remote
+      ? mount.agentsGuide
+      : await readColocatedAgentsGuide(mount.root);
+    return {
+      root: mount.root,
+      ...(guide !== undefined
+        ? {
+            guide,
+            source: mount.remote
+              ? `${mount.root}/AGENTS.md`
+              : path.join(mount.root, "AGENTS.md"),
+          }
+        : {
+            note:
+              "this root has no AGENTS.md; the bundle descriptions below are the guide",
+          }),
+      bundles: mount.bundles,
+    };
+  };
+
+  const bundleGuideTool = server.registerTool(
+    "get_bundle_guide",
+    {
+      title: "Get bundle guide",
+      description:
+        "Describes what each mounted bundle is for and which to use for what work: each colocated root's AGENTS.md guide in full (read on demand, never truncated) plus every bundle's one-line description. Call before choosing which bundles to search or explore.",
+      inputSchema: {
+        root: z
+          .string()
+          .optional()
+          .describe(
+            "Colocated root — a local root path or a remote root URL, as reported by a previous call; omitted covers every mounted root",
+          ),
+      },
+    },
+    async ({ root }) => {
+      const mounts = store.mountedColocatedRoots();
+      const selected =
+        root === undefined
+          ? mounts
+          : mounts.filter(
+              (m) => m.root === root || (!m.remote && m.root === path.resolve(root)),
+            );
+      if (selected.length === 0) {
+        throw new Error(
+          `unknown colocated root: ${root} ` +
+            `(mounted: ${mounts.map((m) => m.root).join(", ")})`,
+        );
+      }
+      return json(await Promise.all(selected.map(bundleGuideEntry)));
+    },
+  );
+
+  /**
+   * get_bundle_guide exists only while a colocated root is mounted: hidden
+   * from tools/list otherwise, flipped on when a runtime mount introduces
+   * the first root (enable() notifies connected clients via
+   * tools/list_changed), and off again should none remain.
+   */
+  const syncBundleGuideTool = () => {
+    const mounted = store.mountedColocatedRoots().length > 0;
+    if (mounted === bundleGuideTool.enabled) return;
+    if (mounted) bundleGuideTool.enable();
+    else bundleGuideTool.disable();
+  };
+  syncBundleGuideTool();
 
   server.registerTool(
     "reload_bundles",
     {
       title: "Reload bundles",
       description:
-        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed.",
+        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed. Without a bundle id, only loaded bundles reload (an unloaded discovered bundle has no stale index); naming an unloaded bundle loads it.",
       inputSchema: {
         bundle: z
           .string()
           .optional()
-          .describe("Bundle ID to reload; omitted reloads all configured bundles"),
+          .describe("Bundle ID to reload; omitted reloads all loaded bundles"),
       },
     },
     async ({ bundle }) => json(await store.reloadBundles(bundle)),
   );
 
-  const remoteBundleSummary = (id: string, url: string) => {
-    const bundle = store.bundle(id);
+  const remoteBundleSummary = async (id: string, url: string) => {
+    const bundle = await store.bundle(id);
     return {
       id,
       url,
+      description: bundle.description,
       concepts: bundle.concepts.size,
       problems: bundle.problems.length,
       readOnly: true,
@@ -303,7 +478,69 @@ export function createOkfServer(
         ...(exclude !== undefined && { exclude }),
         ...(canonicalUrl !== undefined && { canonicalUrl }),
       });
-      return json(remoteBundleSummary(id, url));
+      return json(await remoteBundleSummary(id, url));
+    },
+  );
+
+  server.registerTool(
+    "load_colocated_remote_bundles",
+    {
+      title: "Load colocated remote bundles",
+      description:
+        "Mount a published colocated root by URL: each immediate subdirectory of the GitHub tree (or .tar.gz/.tgz/.zip archive) containing markdown becomes its own read-only bundle, id = folder name, and relative ../sibling links between them derive cross-bundle edges. File-count and size limits apply across the whole root. The root's AGENTS.md (bundle guide) is returned in `agentsGuide` — server instructions are fixed at initialization, so read the guide from this result; get_bundle_guide (registered with the mount) serves it again any time later.",
+      inputSchema: {
+        url: z
+          .string()
+          .describe(
+            "Public GitHub tree URL of the root (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]) or a .tar.gz/.tgz/.zip archive URL or local path",
+          ),
+        only: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Mount only these immediate subfolders; a name that is not a bundle subdirectory of the root is an error",
+          ),
+        include: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Glob patterns over bundle-relative paths, applied within every bundle; when present, only matching files load",
+          ),
+        exclude: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Glob patterns over bundle-relative paths to skip, applied within every bundle",
+          ),
+        canonicalUrl: z
+          .string()
+          .optional()
+          .describe(
+            "Published canonical URL of the root; every bundle derives <url>/<folder> (tree mounts derive canonical URLs from the tree URL automatically; archives have none without this)",
+          ),
+      },
+    },
+    async ({ url, only, include, exclude, canonicalUrl }) => {
+      const mount = await store.addColocatedRemoteBundles({
+        url,
+        ...(only !== undefined && { only }),
+        ...(include !== undefined && { include }),
+        ...(exclude !== undefined && { exclude }),
+        ...(canonicalUrl !== undefined && { canonicalUrl }),
+      });
+      // The first colocated root makes get_bundle_guide appear mid-session.
+      syncBundleGuideTool();
+      return json({
+        url,
+        bundles: mount.bundles.map((bundle) => ({
+          id: bundle.id,
+          description: bundle.description,
+          concepts: bundle.concepts.size,
+          problems: bundle.problems.length,
+          readOnly: true,
+        })),
+        ...(mount.agentsGuide !== undefined && { agentsGuide: mount.agentsGuide }),
+      });
     },
   );
 
@@ -312,21 +549,21 @@ export function createOkfServer(
     {
       title: "List remote bundles",
       description:
-        "List read-only remote bundles (GitHub trees or archives) with their source URLs and concept counts",
+        "List read-only remote bundles (GitHub trees or archives) with their source URLs, concept counts, and each bundle's declared description",
       inputSchema: {},
     },
     async () =>
       json(
-        store
-          .remoteBundleConfigs()
-          .map((config) => ({
-            ...remoteBundleSummary(config.id, config.url),
+        await Promise.all(
+          store.remoteBundleConfigs().map(async (config) => ({
+            ...(await remoteBundleSummary(config.id, config.url)),
             ...(config.include !== undefined && { include: config.include }),
             ...(config.exclude !== undefined && { exclude: config.exclude }),
             ...(config.canonicalUrl !== undefined && {
               canonicalUrl: config.canonicalUrl,
             }),
           })),
+        ),
       ),
   );
 
@@ -343,12 +580,13 @@ export function createOkfServer(
       },
     },
     async ({ bundle, pathPrefix, type }) =>
-      json(
-        searchConcepts(selectBundles(bundle), {
+      sweepJson(
+        searchConcepts(await selectBundles(bundle), {
           ...(pathPrefix !== undefined && { pathPrefix }),
           ...(type !== undefined && { types: [type] }),
           limit: 500,
         }).hits.map(({ score: _score, ...hit }) => hit),
+        bundle === undefined,
       ),
   );
 
@@ -370,7 +608,7 @@ export function createOkfServer(
       },
     },
     async ({ bundle, id, section }) => {
-      const concept = store.getConcept(bundle, id);
+      const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const sections = splitSections(concept.body).map((s) => s.heading);
       if (section === undefined) return json({ ...concept, sections });
@@ -392,18 +630,22 @@ export function createOkfServer(
     {
       title: "Get citations",
       description:
-        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept in the bundle, or missing (a bundle-relative target that does not resolve)",
+        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept (in the bundle, or reached by a relative `../` link into a mounted colocated sibling bundle), or missing (a relative target that does not resolve)",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
       },
     },
     async ({ bundle, id }) => {
-      const loadedBundle = store.bundle(bundle);
-      const concept = store.getConcept(bundle, id);
+      const loadedBundle = await store.bundle(bundle);
+      const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
-      const { citations } = extractCitations(concept.body, concept.path, (cid) =>
-        loadedBundle.concepts.has(cid),
+      const siblings = colocatedSiblings(loadedBundle, store.bundles());
+      const { citations } = extractCitations(
+        concept.body,
+        concept.path,
+        (cid) => loadedBundle.concepts.has(cid),
+        (linkPath) => resolveOutsideLink(linkPath, siblings) !== undefined,
       );
       return json(citations);
     },
@@ -454,7 +696,11 @@ export function createOkfServer(
         offset: z.number().int().nonnegative().optional(),
       },
     },
-    async ({ bundle, ...filters }) => json(searchConcepts(selectBundles(bundle), filters)),
+    async ({ bundle, ...filters }) =>
+      sweepJson(
+        searchConcepts(await selectBundles(bundle), filters),
+        bundle === undefined,
+      ),
   );
 
   server.registerTool(
@@ -465,7 +711,8 @@ export function createOkfServer(
         "Distinct concept `type` values with usage counts, sorted by count. Reuse an existing type when authoring or filtering instead of inventing a variant.",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => json(listTypes(selectBundles(bundle))),
+    async ({ bundle }) =>
+      sweepJson(listTypes(await selectBundles(bundle)), bundle === undefined),
   );
 
   server.registerTool(
@@ -476,7 +723,8 @@ export function createOkfServer(
         "Distinct tag values with usage counts, sorted by count. Reuse an existing tag when authoring or filtering instead of inventing a variant.",
       inputSchema: { bundle: bundleParam },
     },
-    async ({ bundle }) => json(listTags(selectBundles(bundle))),
+    async ({ bundle }) =>
+      sweepJson(listTags(await selectBundles(bundle)), bundle === undefined),
   );
 
   server.registerTool(
@@ -500,7 +748,7 @@ export function createOkfServer(
     },
     async ({ bundle, type, title, tags }) =>
       json(
-        suggestConceptPath(store.bundle(bundle), {
+        suggestConceptPath(await store.bundle(bundle), {
           type,
           ...(title !== undefined && { title }),
           ...(tags !== undefined && { tags }),
@@ -517,10 +765,11 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
-      json(
+      sweepJson(
         bundle !== undefined
-          ? graphSummary(store.bundle(bundle), store.bundles())
+          ? graphSummary(await store.bundle(bundle), store.bundles())
           : store.bundles().map((b) => graphSummary(b, store.bundles())),
+        bundle === undefined,
       ),
   );
 
@@ -529,12 +778,15 @@ export function createOkfServer(
    * when the prefix names a mounted bundle; plain concept IDs are qualified
    * with the tool's `bundle` argument (or the only configured bundle).
    */
-  const qualifyForCrossBundle = (bundleId: string | undefined, id: string): string => {
+  const qualifyForCrossBundle = async (
+    bundleId: string | undefined,
+    id: string,
+  ): Promise<string> => {
     const colon = id.indexOf(":");
     if (colon > 0 && store.bundles().some((b) => b.id === id.slice(0, colon))) {
       return id;
     }
-    return qualifyNodeId(store.bundle(bundleId).id, id);
+    return qualifyNodeId((await store.bundle(bundleId)).id, id);
   };
 
   const crossBundleParam = z
@@ -563,11 +815,11 @@ export function createOkfServer(
         crossBundle
           ? neighborsInGraph(
               buildMultiGraph(store.bundles()),
-              qualifyForCrossBundle(bundle, id),
+              await qualifyForCrossBundle(bundle, id),
               direction ?? "both",
               depth ?? 1,
             )
-          : getNeighbors(store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+          : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
       ),
   );
 
@@ -589,10 +841,10 @@ export function createOkfServer(
         path: crossBundle
           ? pathInGraph(
               buildMultiGraph(store.bundles()),
-              qualifyForCrossBundle(bundle, from),
-              qualifyForCrossBundle(bundle, to),
+              await qualifyForCrossBundle(bundle, from),
+              await qualifyForCrossBundle(bundle, to),
             )
-          : findPath(store.bundle(bundle), from, to),
+          : findPath(await store.bundle(bundle), from, to),
       }),
   );
 
@@ -618,7 +870,7 @@ export function createOkfServer(
         exportGraph(
           crossBundle
             ? buildMultiGraph(store.bundles(), options)
-            : buildGraph(store.bundle(bundle), options),
+            : buildGraph(await store.bundle(bundle), options),
           format ?? "json",
         ),
       );
@@ -630,8 +882,8 @@ export function createOkfServer(
    * concept or a graceful "not a git repository" result for non-git bundles.
    */
   const resolveGitConcept = async (bundleId: string | undefined, id: string) => {
-    const bundle = store.bundle(bundleId);
-    const concept = store.getConcept(bundleId, id);
+    const bundle = await store.bundle(bundleId);
+    const concept = await store.getConcept(bundleId, id);
     if (!concept) throw new Error(`unknown concept: ${id}`);
     const notGit = (await isGitWorkTree(bundle.root))
       ? undefined
@@ -691,7 +943,12 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
-      json(await Promise.all(selectBundles(bundle).map(validateBundle))),
+      sweepJson(
+        await Promise.all(
+          (await selectBundles(bundle)).map((b) => validateBundle(b, store.bundles())),
+        ),
+        bundle === undefined,
+      ),
   );
 
   if (options.writable) {
@@ -745,7 +1002,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, path: relPath, frontmatter, body, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await writeConcept(
           target.root,
@@ -807,7 +1064,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, id, frontmatter, section, keepTimestamp, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await updateConcept(target, id, {
           ...(frontmatter !== undefined && { frontmatter }),
@@ -845,7 +1102,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, id, logMessage, failIfLinked }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await deleteConcept(target, id, {
           ...(failIfLinked !== undefined && { failIfLinked }),
@@ -877,7 +1134,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, from, to, logMessage }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await renameConcept(target, from, to);
         await logAndReindex(
@@ -895,7 +1152,7 @@ export function createOkfServer(
       {
         title: "Promote concept",
         description:
-          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at its canonical location so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
+          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at the promoted copy (a relative ../<bundle>/<path> link between colocated siblings, the canonical location otherwise) so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
         inputSchema: {
           id: z
             .string()
@@ -919,8 +1176,8 @@ export function createOkfServer(
         },
       },
       async ({ id, fromBundle, toBundle, toPath, stub }) => {
-        const source = store.bundle(fromBundle);
-        const target = store.bundle(toBundle);
+        const source = await store.bundle(fromBundle);
+        const target = await store.bundle(toBundle);
         assertWritableBundle(source);
         assertWritableBundle(target);
         const result = await promoteConcept(source, target, id, {
@@ -965,7 +1222,7 @@ export function createOkfServer(
         },
       },
       async ({ bundle, message, directory }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const { path: logPath } = await appendLogEntry(target.root, message, {
           ...(directory !== undefined && { directory }),
@@ -984,7 +1241,7 @@ export function createOkfServer(
         inputSchema: { bundle: bundleParam },
       },
       async ({ bundle }) => {
-        const target = store.bundle(bundle);
+        const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const { written, skipped } = await generateIndexes(target);
         await store.reloadBundle(target.id);

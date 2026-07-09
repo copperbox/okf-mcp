@@ -338,6 +338,21 @@ describe("extractCitations", () => {
     assert.equal(citations[0]?.kind, "concept");
   });
 
+  it("classifies a resolving outside target as concept via the outsideResolves hook", () => {
+    const body =
+      "# Citations\n\n[1] [Orders](../acme/tables/orders.md)\n[2] [Gone](../acme/tables/gone.md)\n";
+    const outsideResolves = (p: string) => p === "../acme/tables/orders.md";
+    const { citations } = extractCitations(body, "runbook.md", exists, outsideResolves);
+    assert.equal(citations[0]?.kind, "concept");
+    assert.equal(citations[1]?.kind, "missing");
+  });
+
+  it("keeps reporting outside targets as missing without an outsideResolves hook", () => {
+    const body = "# Citations\n\n[1] [Orders](../acme/tables/orders.md)\n";
+    const { citations } = extractCitations(body, "runbook.md", exists);
+    assert.equal(citations[0]?.kind, "missing");
+  });
+
   it("returns nothing for a body without a Citations section", () => {
     const body = "# Schema\n\n[1] [not a citation](https://example.com)\n";
     assert.deepEqual(extractCitations(body, "a.md", exists), {

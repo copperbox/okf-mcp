@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { buildBundle, loadBundle } from "../src/bundle.js";
+import {
+  buildBundle,
+  discoverColocatedBundles,
+  loadBundle,
+  readBundleDescription,
+  readColocatedAgentsGuide,
+} from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
@@ -98,6 +106,31 @@ describe("loadBundle", () => {
     assert.equal(bundle.okfVersion, undefined);
   });
 
+  it("parses description from the bundle-root index.md frontmatter", () => {
+    const bundle = buildBundle("m", "/m", [
+      {
+        path: "index.md",
+        source: '---\nokf_version: "0.1"\ndescription: Acme data warehouse knowledge.\n---\n\n# Index\n',
+      },
+    ]);
+    assert.equal(bundle.description, "Acme data warehouse knowledge.");
+  });
+
+  it("leaves description undefined when absent or declared only by a nested index", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "# Index\n" },
+      { path: "guides/index.md", source: "---\ndescription: Nested.\n---\n\n# Guides\n" },
+    ]);
+    assert.equal(bundle.description, undefined);
+  });
+
+  it("ignores a non-string description declaration", () => {
+    const bundle = buildBundle("m", "/m", [
+      { path: "index.md", source: "---\ndescription: [not, a, string]\n---\n\n# Index\n" },
+    ]);
+    assert.equal(bundle.description, undefined);
+  });
+
   it("resolves relative and absolute link forms to the same concept space", async () => {
     const bundle = await loadBundle({ id: "acme", root: FIXTURE });
     const orders = bundle.concepts.get("tables/orders")!;
@@ -122,6 +155,160 @@ describe("loadBundle", () => {
     ]);
     const plain = await loadBundle({ id: "acme", root: FIXTURE });
     assert.equal(plain.canonicalUrls, undefined);
+  });
+});
+
+describe("discoverColocatedBundles", () => {
+  let root: string;
+
+  async function write(relPath: string, content = ""): Promise<void> {
+    const absolute = path.join(root, relPath);
+    await fs.mkdir(path.dirname(absolute), { recursive: true });
+    await fs.writeFile(absolute, content);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-colocated-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("mounts each immediate subdirectory holding markdown as a bundle named after it", async () => {
+    await write("acme/tables/orders.md", "---\ntype: Table\n---\n\nRows.\n");
+    await write("ops/runbook.md", "---\ntype: Note\n---\n\nSteps.\n");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs, [
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+  });
+
+  it("skips dot directories such as .obsidian and .git", async () => {
+    await write(".obsidian/plugins/readme.md");
+    await write(".git/COMMIT_EDITMSG.md");
+    await write("acme/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
+  });
+
+  it("ignores loose files at the root and subdirectories without markdown", async () => {
+    await write("README.md", "# Vault\n");
+    await write("AGENTS.md", "Instructions.\n");
+    await write("assets/logo.png");
+    await fs.mkdir(path.join(root, "empty"));
+    await write("acme/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
+  });
+
+  it("does not count markdown hidden inside a subdirectory's dot directories", async () => {
+    await write("drafts/.obsidian/note.md");
+    await write("acme/deep/nested/note.md");
+    const configs = await discoverColocatedBundles(root);
+    assert.deepEqual(configs.map((c) => c.id), ["acme"]);
+  });
+
+  it("loadBundle carries the discovered colocatedRoot onto the loaded bundle", async () => {
+    await write("acme/note.md", "---\ntype: Note\n---\n\nBody.\n");
+    await write("solo/note.md", "---\ntype: Note\n---\n\nBody.\n");
+    const [config] = await discoverColocatedBundles(root);
+    const colocated = await loadBundle(config!);
+    assert.equal(colocated.colocatedRoot, path.resolve(root));
+    const independent = await loadBundle({ id: "solo", root: path.join(root, "solo") });
+    assert.equal(independent.colocatedRoot, undefined);
+  });
+
+  it("mounts only the subfolders named by `only`, ignoring the rest", async () => {
+    await write("acme/note.md");
+    await write("legal/policy.md");
+    await write("ops/runbook.md");
+    const configs = await discoverColocatedBundles(root, { only: ["ops", "acme"] });
+    assert.deepEqual(configs, [
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+  });
+
+  it("errors when `only` names a missing subdirectory instead of silently skipping it", async () => {
+    await write("acme/note.md");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["acme", "nope"] }),
+      /--only: no bundle subdirectory named "nope"/,
+    );
+  });
+
+  it("errors when `only` names a subdirectory holding no markdown", async () => {
+    await write("acme/note.md");
+    await write("assets/logo.png");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["assets"] }),
+      /--only: "assets" .*contains no markdown/,
+    );
+  });
+
+  it("rejects `only` names that are not immediate plain subdirectories (dot dirs, nested paths)", async () => {
+    await write(".obsidian/plugins/readme.md");
+    await write("acme/deep/note.md");
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: [".obsidian"] }),
+      /--only: no bundle subdirectory named "\.obsidian"/,
+    );
+    await assert.rejects(
+      discoverColocatedBundles(root, { only: ["acme/deep"] }),
+      /--only: no bundle subdirectory named "acme\/deep"/,
+    );
+  });
+});
+
+describe("readBundleDescription", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-description-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads the description from the root index.md frontmatter", async () => {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\ndescription: "Acme knowledge."\n---\n\n# Index\n',
+    );
+    assert.equal(await readBundleDescription(root), "Acme knowledge.");
+  });
+
+  it("returns undefined when index.md is absent or declares no description", async () => {
+    assert.equal(await readBundleDescription(root), undefined);
+    await fs.writeFile(path.join(root, "index.md"), "# Index\n");
+    assert.equal(await readBundleDescription(root), undefined);
+  });
+});
+
+describe("readColocatedAgentsGuide", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-agents-guide-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads the root AGENTS.md", async () => {
+    await fs.writeFile(path.join(root, "AGENTS.md"), "- acme: schema tables.\n");
+    assert.equal(await readColocatedAgentsGuide(root), "- acme: schema tables.\n");
+  });
+
+  it("returns undefined when the file is absent", async () => {
+    assert.equal(await readColocatedAgentsGuide(root), undefined);
+  });
+
+  it("matches the exact name AGENTS.md only", async () => {
+    await fs.writeFile(path.join(root, "agents.md"), "lowercase\n");
+    await fs.writeFile(path.join(root, "Agents.md"), "mixed case\n");
+    assert.equal(await readColocatedAgentsGuide(root), undefined);
   });
 });
 

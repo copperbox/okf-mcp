@@ -16,9 +16,13 @@ async function writeDoc(root: string, relPath: string, frontmatter: string, body
 }
 
 /** Poll until `condition` returns true, failing after `timeoutMs`. */
-async function until(condition: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+async function until(
+  condition: () => boolean | Promise<boolean>,
+  what: string,
+  timeoutMs = 5000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -55,7 +59,7 @@ describe("watchBundles", () => {
 
     await writeDoc(root, "metrics/revenue.md", "type: Metric", "Sum of totals.");
     await until(
-      () => store.getConcept("t", "metrics/revenue") !== undefined,
+      async () => (await store.getConcept("t", "metrics/revenue")) !== undefined,
       "the new concept to appear in the store",
     );
     const added = reloads.flat().flatMap((s) => s.added);
@@ -105,7 +109,46 @@ describe("watchBundles", () => {
     await writeDoc(root, "late.md", "type: Note", "Late.");
     await sleep(200);
     assert.equal(reloads.length, 0);
-    assert.equal(store.getConcept("t", "late"), undefined);
+    assert.equal(await store.getConcept("t", "late"), undefined);
+  });
+
+  it("watches a lazy bundle only after it hydrates", async () => {
+    const lazyRoot = await fs.mkdtemp(path.join(os.tmpdir(), "okf-watch-lazy-"));
+    try {
+      await writeDoc(lazyRoot, "acme/note.md", "type: Note\ntitle: Note", "Body.");
+      const config = {
+        id: "acme",
+        root: path.join(lazyRoot, "acme"),
+        colocatedRoot: lazyRoot,
+        lazy: true,
+      };
+      const lazyStore = new OkfStore([config]);
+      await lazyStore.load();
+      watcher = watchBundles(lazyStore, [config], {
+        debounceMs: 25,
+        onReload: (stats) => reloads.push(stats),
+      });
+      assert.deepEqual(watcher.watching, []);
+
+      // Unloaded: edits are invisible and trigger no reload.
+      await writeDoc(lazyRoot, "acme/early.md", "type: Note", "Early.");
+      await sleep(200);
+      assert.equal(reloads.length, 0);
+
+      // First access hydrates (picking up the earlier edit) and starts watching.
+      const bundle = await lazyStore.bundle("acme");
+      assert.deepEqual([...bundle.concepts.keys()], ["early", "note"]);
+      assert.deepEqual(watcher.watching, ["acme"]);
+
+      await writeDoc(lazyRoot, "acme/late.md", "type: Note", "Late.");
+      await until(
+        async () => (await lazyStore.getConcept("acme", "late")) !== undefined,
+        "the post-hydration edit to reload",
+      );
+      assert.ok(reloads.flat().some((s) => s.added.includes("late")));
+    } finally {
+      await fs.rm(lazyRoot, { recursive: true, force: true });
+    }
   });
 
   it("reports bundles it cannot watch instead of throwing", async () => {

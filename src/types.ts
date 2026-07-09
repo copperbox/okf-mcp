@@ -87,6 +87,19 @@ export interface BundleConfig {
    * bundle's concepts as derived cross-bundle edges.
    */
   canonicalUrl?: string;
+  /**
+   * Set when the bundle was discovered as a subdirectory of a shared
+   * `--colocated-bundles` root: the absolute/cwd-relative path of that root.
+   * Marks the bundle as a sibling of every other bundle sharing the value,
+   * so downstream features can rely on the layout.
+   */
+  colocatedRoot?: string;
+  /**
+   * Discover at startup, parse on first access: load() records only the id
+   * and the root index.md's frontmatter `description`; the full index is
+   * built the first time any caller names the bundle (OkfStore.bundle).
+   */
+  lazy?: boolean;
 }
 
 /** A read-only bundle fetched from a remote source (issue: exchange goal). */
@@ -110,6 +123,33 @@ export interface RemoteBundleConfig {
   canonicalUrl?: string;
 }
 
+/**
+ * A published colocated root mounted from a remote source: each immediate
+ * subdirectory of the tree (or archive) containing markdown becomes its own
+ * read-only bundle, `id` = folder basename — the remote counterpart of
+ * `--colocated-bundles`.
+ */
+export interface ColocatedRemoteRootConfig {
+  /**
+   * Public GitHub tree URL of the root
+   * (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]), or a
+   * `.tar.gz`/`.tgz`/`.zip` archive — any http(s) URL or local path.
+   */
+  url: string;
+  /** Mount only these immediate subfolders; an unknown name is an error. */
+  only?: string[];
+  /** Glob patterns over bundle-relative paths; when present, only matches load. */
+  include?: string[];
+  /** Glob patterns over bundle-relative paths to skip. */
+  exclude?: string[];
+  /**
+   * Published canonical URL of the root: every bundle derives
+   * `<url>/<folder>`. Tree mounts also derive canonicals from the tree URL
+   * itself; archives have no per-file URLs, so this is their only source.
+   */
+  canonicalUrl?: string;
+}
+
 export interface LoadedBundle {
   id: string;
   /** Absolute path to the bundle root, or the source URL for remote bundles. */
@@ -119,8 +159,17 @@ export interface LoadedBundle {
   problems: BundleProblem[];
   /** Read-only bundles are rejected by all authoring paths (remote bundles). */
   readOnly: boolean;
+  /**
+   * Absolute path of the shared `--colocated-bundles` root the bundle was
+   * discovered under, when it was. Bundles sharing the value are declared
+   * siblings: relative `../<sibling>/...` links between them resolve as
+   * derived cross-bundle edges. Declared, never inferred from disk paths.
+   */
+  colocatedRoot?: string;
   /** OKF version declared by the bundle-root index.md frontmatter (spec §11). */
   okfVersion?: string;
+  /** One-line bundle purpose declared by the bundle-root index.md frontmatter. */
+  description?: string;
   /** Raw document sources, present only for bundles with no local files. */
   sources?: Map<string, string>;
   /**

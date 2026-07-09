@@ -149,6 +149,63 @@ Append routing guidance to the CLAUDE.md snippet above:
   edge is needed.
 ```
 
+### Colocated bundles (vault as monorepo)
+
+A common layout keeps several bundles as sibling subdirectories of one root — for example a repo opened as a single Obsidian vault:
+
+```
+knowledge/          ← repo root, opened as an Obsidian vault
+├── AGENTS.md       ← belongs to no bundle
+├── acme/           ← bundle "acme"
+└── ops/            ← bundle "ops"
+```
+
+Instead of repeating `--bundle` for each subdirectory, mount them all with one flag:
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge
+```
+
+Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles. Relative `../sibling/...` links between colocated bundles derive [cross-bundle graph edges](#cross-bundle-awareness), resolve citations, are checked by `validate`, and are rewritten to the sibling's canonical URL by [`pack`](#cli).
+
+When the root holds many bundles but the current project only needs a few, `--only <folder,folder,...>` is the escape hatch for scoped mounting:
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge --only acme,ops
+```
+
+Only the named subfolders are mounted; everything else in the root is ignored entirely — not discovered, not listed — which keeps startup light and stops irrelevant bundles from diluting search results, type/tag vocabularies, and `graph_summary` sweeps. A name that doesn't exist as a subdirectory of the root (or exists but contains no markdown) is a startup error rather than a silent skip, and passing `--only` without `--colocated-bundles` is an error too.
+
+When the root is published as one repo, every bundle's canonical URL is mechanical — the repo's tree URL plus the folder name — so one flag declares them all for [cross-bundle awareness](#cross-bundle-awareness):
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge \
+        --canonical-url https://github.com/acme/knowledge/tree/main
+```
+
+Each colocated bundle derives `canonicalUrl = <rootUrl>/<folder>` (here `…/tree/main/acme`, `…/tree/main/ops`), and the derived URLs get the same tree/blob/raw prefix expansion as explicitly declared ones. A bare URL works when exactly one colocated root is configured; with several, name the root: `--canonical-url /path/to/knowledge=<url>`. An explicit per-bundle `--canonical-url id=<url>` still overrides the derived value. Non-GitHub root URLs work too — the folder name is appended to the literal prefix. Consumers can still mount an individual bundle straight from its subdirectory tree URL (`--remote-bundle acme=https://github.com/acme/knowledge/tree/main/acme`) — or mount the whole published root by one URL with [`--colocated-remote-bundles`](#consuming-a-published-colocated-root-by-one-url).
+
+#### Lazy mounting: discover all, load on first access
+
+A colocated root may hold many bundles a given project never touches, so the MCP server (`mcp`, the default command) mounts colocated bundles **lazily**: at startup each subdirectory costs only its discovery — the folder name plus a frontmatter-only read of its root `index.md` for the `description` — and a bundle is parsed and indexed the first time any tool names it (`bundle` argument, `okf://` resource read, `reload_bundles <id>`, …). The semantics, chosen so nothing is silently truncated:
+
+- `list_bundles` lists every bundle with a `loaded` marker; unloaded ones carry their name and description so an agent can see what exists and choose what to hydrate.
+- No-arg sweeps (`search_concepts`, `list_concepts`, `list_types`, `list_tags`, `graph_summary`, `validate_bundle`) cover **loaded** bundles only, and the tool result carries a note naming the discovered bundles that were excluded — irrelevant bundles stop polluting results, without the truncation reading as complete coverage.
+- `resources/list` represents an unloaded bundle by its root `index.md` alone (with the discovered description); reading it loads the bundle, after which its documents list individually.
+- [Cross-bundle derivation](#cross-bundle-awareness) sees loaded siblings only: a `../sibling/...` link into an unloaded bundle derives no edge and its citation classifies `missing` until the sibling loads (any access to it makes the edges appear); `validate`'s dangling-link warnings likewise stay silent for unloaded siblings.
+- No-arg `reload_bundles` reloads loaded bundles only (an unloaded bundle has no stale index); naming an unloaded bundle loads it. `--watch` watches loaded bundles and starts watching a lazy bundle the moment it hydrates.
+- `--only` composes: filtered-out subfolders are not even discovered.
+
+One-shot CLI commands (`inspect`, `validate`, `search`, …) sweep every bundle by design, so they load colocated bundles eagerly as before. Remote mounts are always eager — a remote root is one fetch, and its folder names are unknown until fetched.
+
+#### Root `AGENTS.md`: the bundle guide
+
+If the colocated root holds an `AGENTS.md` (exact name), its content is appended to the MCP server instructions under a `Bundle guide (from AGENTS.md):` delimiter, so every session starts knowing which bundles exist and which matter for what kind of work — and passes explicit `bundle` arguments instead of sweeping everything. Write it as a short registry for an agent deciding where to look: a line or two per bundle, what it covers, when to reach for it. It doubles as a readable vault-root note in Obsidian and travels with the repo.
+
+Instructions load into the agent's context every session, so the guide is budgeted: past 4 000 characters the server logs a warning and injects a truncated guide with a pointer at `get_bundle_guide` (and the full file). Keep it lean.
+
+The guide is also available on demand through the `get_bundle_guide` tool, which is registered whenever a colocated root (local or remote) is mounted — including mid-session, via `tools/list_changed`, when `load_colocated_remote_bundles` mounts the first one. It returns each root's `AGENTS.md` in full (local roots are read from disk per call, so external edits show up; remote roots return the guide fetched with the mount) plus every bundle's one-line `description`, for one root (`root` argument: the local path or remote URL) or all mounted roots when omitted. The base instructions tell agents to call it before exploring, so the guide stays reachable at any point in a session — not just at the initialize handshake.
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
@@ -160,6 +217,18 @@ npm run dev -- \
 ```
 
 `--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude?, canonicalUrl? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
+
+### Consuming a published colocated root by one URL
+
+A [colocated root](#colocated-bundles-vault-as-monorepo) published as a single repo can be mounted whole — each subfolder becoming its own read-only bundle — instead of repeating `--remote-bundle` per subdirectory tree URL:
+
+```bash
+okf-mcp --colocated-remote-bundles https://github.com/acme/knowledge/tree/main inspect
+```
+
+The same discovery rules as local `--colocated-bundles` apply: every immediate subdirectory containing markdown mounts as a bundle with the folder name as its id (a collision with another mount is an error naming the root), dot directories are skipped, and loose root files belong to no bundle. The mounted bundles declare the root URL as their shared colocated root, so relative `../sibling/...` links inside the published repo derive [cross-bundle edges](#cross-bundle-awareness) between the remote siblings — a repo mounted by URL stays as coherent as a local clone, with no rewrite step. Tree mounts derive each bundle's canonical URL as `<treeUrl>/<folder>` automatically (tree/blob/raw forms all match); `.tar.gz`/`.tgz`/`.zip` roots (any http(s) URL, or a local path; entries are partitioned by first path segment after the wrapper directory) have no per-file URLs, so they derive canonicals only from an explicit root `canonicalUrl`. The flag is repeatable, `--only <folder,folder,...>` restricts the mount to named subfolders exactly as for local roots, and the 500-file / 10 MiB ceilings apply across the whole root — not per bundle — so mounting a root is never more expensive than mounting one big bundle.
+
+A root `AGENTS.md` travels with the mount: the CLI fetches it and appends it to the server instructions as a [bundle guide](#root-agentsmd-the-bundle-guide), same as a local colocated root. The runtime counterpart is the `load_colocated_remote_bundles` tool (`{ url, only?, include?, exclude?, canonicalUrl? }`) — MCP instructions are fixed at initialization, so the tool returns the `AGENTS.md` content in its result (`agentsGuide`) instead, registers `get_bundle_guide` (announced via `tools/list_changed`) so the guide stays retrievable for the rest of the session, and the agent still receives the guide. Reloading any mounted bundle refetches the whole root, tracking subfolders that appeared or vanished upstream.
 
 Remote bundles are strictly read-only and sandboxed:
 
@@ -173,8 +242,13 @@ Remote bundles are strictly read-only and sandboxed:
 
 OKF §5 deliberately has no cross-bundle link syntax, but the server knows every mounted bundle's canonical location and can *derive* cross-bundle relationships from spec-clean data. When a concept's §8 citation target, external link, or frontmatter `resource` URL points under another mounted bundle's canonical location, the graph tools record a derived `kind: "cross-bundle"` edge to that concept — read-only, no new syntax in documents.
 
+[Colocated bundles](#colocated-bundles-vault-as-monorepo) get the same treatment without any URL: an ordinary relative link like `[orders](../acme/tables/orders.md)` — which Obsidian resolves natively when the colocated root is opened as one vault — derives a `kind: "cross-bundle"` edge when its first path segment names a mounted sibling (a bundle declaring the same colocated root) and the remainder resolves to one of its concepts (`.md` optional, like body links). Citations through such a link classify as `concept` instead of `missing`, and `validate` warns when a `../` link points into a mounted sibling at a concept it does not have (dangling); links to unmounted folders or loose root files stay silent — colocation is declared, never inferred from disk.
+
+`promote_concept` emits exactly such links: between colocated siblings the citation stub cites the promoted copy by relative path (e.g. `../../org/standards/naming.md` from a stub one directory deep) instead of an `okf://` URI — and prefers the relative form even when the target has a canonical URL, since the on-disk vault UX is the point of colocation and publishing rewrites relative links to canonical URLs at pack time. The stub's frontmatter `resource` stays the canonical/`okf://` URI (spec §4.1 wants a parseable URI). Non-colocated promotions keep citing the canonical location.
+
 - GitHub tree mounts get their canonical location automatically (the `tree`, `blob`, and `raw.githubusercontent.com` forms of the tree URL all match).
 - Local clones and archives have no inherent URL: give them one with `--canonical-url id=<url>` (or `canonicalUrl` on `load_remote_bundle`), e.g. the GitHub tree URL of the shared bundle's published location, so citations to it resolve even when it is mounted from a local checkout.
+- [Colocated bundles](#colocated-bundles-vault-as-monorepo) published as one repo need only a root-level `--canonical-url <rootUrl>`: each bundle derives `<rootUrl>/<folder>`, and explicit per-bundle flags override.
 - `graph_summary` reports `crossBundleEdges`; `get_neighbors` and `find_path` traverse derived edges when called with `crossBundle: true` (node IDs become `bundle:concept` and carry the target's bundle); `export_graph` with `crossBundle: true` emits one namespaced multi-bundle graph with derived edges rendered dashed in `dot`/`mermaid`.
 
 ## The bundle (your "OKF brain")
@@ -192,7 +266,7 @@ brain/
     └── freshness.md
 ```
 
-Every non-reserved `.md` file is a concept. Frontmatter requires only `type`; `title`, `description`, `resource`, `tags`, and `timestamp` are recommended, and unknown keys are preserved. When `title` is omitted, display names (index entries, MCP resource names, search/list hits) are derived from the filename per spec §4.1 — `customer-order-history.md` becomes "Customer Order History" — and search/list hits carry `titleDerived: true` so agents can tell a derived title from an authored one. The bundle-root `index.md` may declare an `okf_version` in its frontmatter (spec §11): `list_bundles` and `graph_summary` report it, and `validate_bundle` warns — without failing — when it names a newer major version than the server supports. The concept ID is the file path without `.md` (`tables/orders`). Relationships are ordinary markdown links — bundle-absolute (`/tables/orders.md`, recommended) or relative (`./customers.md`) — and become directed edges in the graph. Broken links are warnings, never errors.
+Every non-reserved `.md` file is a concept. Frontmatter requires only `type`; `title`, `description`, `resource`, `tags`, and `timestamp` are recommended, and unknown keys are preserved. When `title` is omitted, display names (index entries, MCP resource names, search/list hits) are derived from the filename per spec §4.1 — `customer-order-history.md` becomes "Customer Order History" — and search/list hits carry `titleDerived: true` so agents can tell a derived title from an authored one. The bundle-root `index.md` may declare an `okf_version` in its frontmatter (spec §11): `list_bundles` and `graph_summary` report it, and `validate_bundle` warns — without failing — when it names a newer major version than the server supports. The same frontmatter may declare a `description` — one line saying what the bundle is for, written for an agent deciding whether to look inside (e.g. `description: "Payments-team runbooks and schema notes"`): `list_bundles` and `list_remote_bundles` report it, the root `index.md` MCP resource carries it, and like the rest of the root frontmatter it survives index regeneration. The concept ID is the file path without `.md` (`tables/orders`). Relationships are ordinary markdown links — bundle-absolute (`/tables/orders.md`, recommended) or relative (`./customers.md`) — and become directed edges in the graph. Broken links are warnings, never errors.
 
 Writes regenerate every `index.md` as a generated artifact, with two exceptions for human curation (spec §6 supports hand-curated indexes with meaningful section groupings). An `index.md` whose frontmatter declares `generated: false` is treated as hand-curated and never rewritten — `regenerate_indexes` reports it as skipped, and deletes leave its directory in place. And the bundle-root `index.md`'s frontmatter always survives regeneration: a declared `okf_version` and any extension keys are carried over; `okf_version` is stamped only when absent.
 
@@ -208,13 +282,15 @@ Read tools:
 
 | Tool | Purpose |
 |---|---|
-| `list_bundles` | Configured bundles with concept counts and read-only flags |
-| `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts |
+| `list_bundles` | Configured bundles with concept counts, read-only flags, each bundle's declared `description`, and a `loaded` marker for [lazily mounted](#lazy-mounting-discover-all-load-on-first-access) colocated bundles |
+| `get_bundle_guide` | Each colocated root's [`AGENTS.md` guide](#root-agentsmd-the-bundle-guide) in full plus every bundle's one-line `description`; registered only while a colocated root is mounted (dynamically, on the first runtime mount) |
+| `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts. No-arg form covers loaded bundles; naming an unloaded discovered bundle loads it |
 | `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL or a `.tar.gz`/`.tgz`/`.zip` archive, in memory only |
-| `list_remote_bundles` | Remote bundles currently loaded, with their source URLs |
+| `load_colocated_remote_bundles` | Mount a published colocated root by URL — every subfolder becomes its own read-only bundle — returning the root `AGENTS.md` guide inline in the result |
+| `list_remote_bundles` | Remote bundles currently loaded, with their source URLs and declared `description`s |
 | `list_concepts` | Concept metadata (including the `resource` URI when set), filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
-| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing` |
+| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing`; `../` targets resolving into a colocated sibling count as `concept` |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; an exact-`resource` filter maps an asset URI to its concept; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
@@ -226,7 +302,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 
@@ -238,7 +314,7 @@ Write tools (only with `--writable`):
 | `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte. `timestamp` refreshes to the write time like `write_concept` (a concept without one gains it in its spec-order slot) unless the patch names it or `keepTimestamp: true` pins it; log + reindex |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
-| `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at its canonical location — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
+| `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at the promoted copy (relative `../<bundle>/<path>` link between colocated siblings, canonical location otherwise) — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
 | `append_log_entry` | Record a change-narrative entry in the bundle-root `log.md` — or a per-directory one via `directory` — without touching any concept |
 | `regenerate_indexes` | Rewrite `index.md` navigation from frontmatter, reporting hand-curated indexes (`generated: false`) it skipped |
 
@@ -249,8 +325,9 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 ## CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url>]
-        [--writable] [--watch] [command]
+okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
+        [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
+        [--canonical-url [id=]<url>] [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -268,7 +345,11 @@ okf-mcp --bundle [id=]<path> [--remote-bundle id=<url>] [--canonical-url id=<url
 okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
 
-`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
+Relative `../<sibling>/...` links into [colocated](#colocated-bundles-vault-as-monorepo) siblings only mean something while the shared layout holds, so the archived copy carries the sibling's canonical concept URL instead (its blob form for GitHub canonicals) — a spec §8 citation form that resolves anywhere; only the link targets change, every other byte travels verbatim, and the source files stay untouched. A resolving link whose sibling has no canonical URL (explicit or derived from a root-level `--canonical-url`) fails the pack rather than shipping a dead link.
+
+`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo). `--colocated-remote-bundles <url>` (repeatable) does the same for a published root — a GitHub tree URL or `.tar.gz`/`.tgz`/`.zip` archive — mounting each subfolder as a read-only bundle; see [consuming a published colocated root](#consuming-a-published-colocated-root-by-one-url).
+
+`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness); with a colocated root's path as the id — or a bare URL when exactly one colocated root is configured — every bundle under the root derives `<url>/<folder>`, with explicit per-bundle flags taking precedence.
 
 `--watch` (mcp only) auto-reloads local bundles when `.md` files change on disk, debounced so an editor save burst triggers one reload; `.obsidian/` and other dot directories are ignored. Remote bundles still reload only via the `reload_bundles` tool. Where recursive `fs.watch` is unsupported, the server logs a note to stderr and continues without watching.
 

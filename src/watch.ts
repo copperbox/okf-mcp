@@ -46,6 +46,10 @@ function isRelevant(filename: string | null): boolean {
  * when `.md` files change, via the same reload path as the reload_bundles
  * tool. Remote bundles have no directory to watch and are unaffected.
  * Reloads are serialized so overlapping bundle refreshes cannot interleave.
+ *
+ * A discovered-but-unloaded lazy bundle has no index to keep fresh, so it is
+ * not watched; watching starts the moment it hydrates (store.onHydrate), and
+ * `watching` grows accordingly.
  */
 export function watchBundles(
   store: OkfStore,
@@ -77,7 +81,7 @@ export function watchBundles(
     );
   };
 
-  for (const config of configs) {
+  const startWatching = (config: BundleConfig): void => {
     try {
       const watcher = watch(
         path.resolve(config.root),
@@ -92,12 +96,30 @@ export function watchBundles(
     } catch (err) {
       options.onError?.(config.id, err as Error);
     }
+  };
+
+  const discovered = new Set(store.discoveredBundles().map((d) => d.id));
+  const deferred = new Map<string, BundleConfig>();
+  for (const config of configs) {
+    if (discovered.has(config.id)) deferred.set(config.id, config);
+    else startWatching(config);
   }
+  const unsubscribe =
+    deferred.size > 0
+      ? store.onHydrate((bundle) => {
+          if (closed) return;
+          const config = deferred.get(bundle.id);
+          if (config === undefined) return;
+          deferred.delete(bundle.id);
+          startWatching(config);
+        })
+      : undefined;
 
   return {
     watching,
     close() {
       closed = true;
+      unsubscribe?.();
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
       for (const watcher of watchers) watcher.close();

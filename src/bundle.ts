@@ -35,6 +35,89 @@ async function walkMarkdownFiles(root: string, dir = ""): Promise<string[]> {
   return files.sort();
 }
 
+/**
+ * Whether a directory tree holds at least one markdown file, stopping at the
+ * first hit (same dot-skipping rules as walkMarkdownFiles). Files are checked
+ * before descending so the common case — an index.md at the bundle root —
+ * costs a single readdir, keeping colocated discovery cheap for bundles that
+ * may never be loaded.
+ */
+async function hasMarkdownFile(root: string): Promise<boolean> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const directories: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) return true;
+    if (entry.isDirectory()) directories.push(entry.name);
+  }
+  for (const directory of directories) {
+    if (await hasMarkdownFile(path.join(root, directory))) return true;
+  }
+  return false;
+}
+
+/**
+ * Discover the bundles colocated under a shared root (`--colocated-bundles`):
+ * each immediate subdirectory containing at least one markdown file becomes a
+ * bundle config with `id` = the directory basename and `colocatedRoot` = the
+ * shared root. Dot directories are skipped (same rule as walkMarkdownFiles),
+ * and loose files at the root (README.md, AGENTS.md, ...) belong to no bundle.
+ *
+ * `only` (`--only`) restricts the mount to the named subfolders: the rest of
+ * the root is not read at all, and a name that is not a bundle subdirectory
+ * (missing, a dot directory, a nested path, or holding no markdown) is an
+ * error — a silent no-op would read as "loaded" when it wasn't.
+ */
+export async function discoverColocatedBundles(
+  root: string,
+  options: { only?: string[] } = {},
+): Promise<BundleConfig[]> {
+  if (options.only !== undefined) {
+    const configs: BundleConfig[] = [];
+    // Deduped and codepoint-sorted, matching full discovery's output order.
+    for (const name of [...new Set(options.only)].sort()) {
+      const bundleRoot = path.join(root, name);
+      const plainSubdir =
+        !name.startsWith(".") &&
+        !name.includes("/") &&
+        !name.includes(path.sep) &&
+        (await fs.stat(bundleRoot).then((s) => s.isDirectory(), () => false));
+      if (!plainSubdir) {
+        throw new Error(`--only: no bundle subdirectory named "${name}" under ${root}`);
+      }
+      if (!(await hasMarkdownFile(bundleRoot))) {
+        throw new Error(`--only: "${name}" under ${root} contains no markdown`);
+      }
+      configs.push({ id: name, root: bundleRoot, colocatedRoot: root });
+    }
+    return configs;
+  }
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const configs: BundleConfig[] = [];
+  // Codepoint order, matching walkMarkdownFiles' sorted output.
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const bundleRoot = path.join(root, entry.name);
+    if (!(await hasMarkdownFile(bundleRoot))) continue;
+    configs.push({ id: entry.name, root: bundleRoot, colocatedRoot: root });
+  }
+  return configs;
+}
+
+/**
+ * Read a colocated root's `AGENTS.md` — the loose root file (belonging to no
+ * bundle) that guides agents across the bundles mounted from that root.
+ * Matched by the exact name `AGENTS.md` only, even on case-insensitive
+ * filesystems, to keep the convention crisp. Returns undefined when absent.
+ */
+export async function readColocatedAgentsGuide(root: string): Promise<string | undefined> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  if (!entries.some((entry) => entry.isFile() && entry.name === "AGENTS.md")) {
+    return undefined;
+  }
+  return fs.readFile(path.join(root, "AGENTS.md"), "utf8");
+}
+
 function isReserved(relPath: string): ReservedFile | null {
   const base = path.posix.basename(relPath).toLowerCase();
   if (!(RESERVED_FILENAMES as readonly string[]).includes(base)) return null;
@@ -45,6 +128,31 @@ function isReserved(relPath: string): ReservedFile | null {
 export function declaredOkfVersion(source: string): string | undefined {
   const version = splitFrontmatter(source).data?.okf_version;
   return typeof version === "string" ? version : undefined;
+}
+
+/**
+ * The one-line purpose a bundle-root index.md declares in its frontmatter
+ * `description`, letting agents judge a bundle's relevance without reading
+ * into it.
+ */
+export function declaredDescription(source: string): string | undefined {
+  const description = splitFrontmatter(source).data?.description;
+  return typeof description === "string" ? description : undefined;
+}
+
+/**
+ * Frontmatter-only read of a bundle root's `index.md` for its declared
+ * one-line `description` — what lazy discovery records about a bundle it
+ * does not parse. Undefined when the file is absent or declares none.
+ */
+export async function readBundleDescription(root: string): Promise<string | undefined> {
+  let source: string;
+  try {
+    source = await fs.readFile(path.join(root, "index.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+  return declaredDescription(source);
 }
 
 /** One markdown document as raw text, addressed by its bundle-relative path. */
@@ -61,6 +169,8 @@ export interface BuildBundleOptions {
   keepSources?: boolean;
   /** Expanded canonical URL prefixes of the bundle root (canonicalUrlPrefixes). */
   canonicalUrls?: string[];
+  /** Shared colocated root the bundle was discovered under (LoadedBundle.colocatedRoot). */
+  colocatedRoot?: string;
 }
 
 /**
@@ -79,15 +189,18 @@ export function buildBundle(
   const reserved: ReservedFile[] = [];
   const problems: BundleProblem[] = [];
   let okfVersion: string | undefined;
+  let description: string | undefined;
 
   for (const document of [...documents].sort((a, b) => (a.path < b.path ? -1 : 1))) {
     const relPath = document.path;
     const reservedFile = isReserved(relPath);
     if (reservedFile) {
       reserved.push(reservedFile);
-      // Only the bundle-root index.md may declare okf_version (spec §11).
+      // Only the bundle-root index.md may declare okf_version (spec §11)
+      // and the bundle description.
       if (reservedFile.kind === "index" && !relPath.includes("/")) {
         okfVersion = declaredOkfVersion(document.source);
+        description = declaredDescription(document.source);
       }
       continue;
     }
@@ -115,11 +228,15 @@ export function buildBundle(
     problems,
     readOnly: options.readOnly ?? false,
     okfVersion,
+    description,
     ...(options.keepSources && {
       sources: new Map(documents.map((d) => [d.path, d.source])),
     }),
     ...(options.canonicalUrls !== undefined &&
       options.canonicalUrls.length > 0 && { canonicalUrls: options.canonicalUrls }),
+    ...(options.colocatedRoot !== undefined && {
+      colocatedRoot: options.colocatedRoot,
+    }),
   };
 }
 
@@ -160,6 +277,9 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
   return buildBundle(config.id, root, documents, {
     ...(config.canonicalUrl !== undefined && {
       canonicalUrls: canonicalUrlPrefixes(config.canonicalUrl),
+    }),
+    ...(config.colocatedRoot !== undefined && {
+      colocatedRoot: path.resolve(config.colocatedRoot),
     }),
   });
 }
@@ -248,4 +368,91 @@ function targetsMissingConcept(
   if (path.posix.basename(linkPath).includes(".")) return false;
   if (reservedPaths.has(`${linkPath}.md`)) return false;
   return !directories.has(linkPath);
+}
+
+/**
+ * The colocated siblings of a bundle: the other mounted bundles declaring
+ * the same colocated root. Colocation is declared (`--colocated-bundles`),
+ * never inferred from disk paths, so bundles without a colocatedRoot have
+ * no siblings.
+ */
+export function colocatedSiblings(
+  bundle: LoadedBundle,
+  all: LoadedBundle[],
+): LoadedBundle[] {
+  if (bundle.colocatedRoot === undefined) return [];
+  return all.filter(
+    (b) => b.id !== bundle.id && b.colocatedRoot === bundle.colocatedRoot,
+  );
+}
+
+/** Sibling concept an outside link resolves to (resolveOutsideLink). */
+export interface OutsideLinkTarget {
+  bundle: LoadedBundle;
+  conceptId: string;
+}
+
+/**
+ * Split an outside link's normalized `../…` path into the mounted sibling
+ * its first segment names (folder name = bundle id) and the remaining path
+ * inside that sibling. A bundle root is an immediate subdirectory of its
+ * colocated root, so exactly one leading `../` lands in the root; any
+ * further `..` escapes it. Undefined when the path escapes the root, stops
+ * at the root level, or names no mounted sibling.
+ */
+function splitSiblingLink(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): { sibling: LoadedBundle; rest: string } | undefined {
+  if (!linkPath.startsWith("../")) return undefined;
+  const inside = linkPath.slice(3);
+  if (inside === ".." || inside.startsWith("../")) return undefined;
+  const slash = inside.indexOf("/");
+  if (slash <= 0) return undefined;
+  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
+  if (sibling === undefined) return undefined;
+  return { sibling, rest: inside.slice(slash + 1) };
+}
+
+/**
+ * Resolve an `outside` link (a normalized `../…` path) from a colocated
+ * bundle into a sibling concept: the first segment under the colocated root
+ * names the sibling bundle, the remainder maps to a concept id with the
+ * `.md` suffix optional, like body links. Undefined when the path escapes
+ * the colocated root, names no mounted sibling, or the sibling has no such
+ * concept.
+ */
+export function resolveOutsideLink(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): OutsideLinkTarget | undefined {
+  const split = splitSiblingLink(linkPath, siblings);
+  if (split === undefined) return undefined;
+  const conceptId = conceptIdFromPath(split.rest);
+  if (conceptId === "" || !split.sibling.concepts.has(conceptId)) return undefined;
+  return { bundle: split.sibling, conceptId };
+}
+
+/**
+ * Whether an outside link from a colocated bundle dangles: it points into a
+ * mounted sibling at a concept the sibling does not have. Judged only inside
+ * mounted siblings — loose files at the colocated root, unmounted folders,
+ * and paths escaping the root are unjudgeable and stay silent — with the
+ * same exemptions as in-bundle broken links (trailing-slash directory links,
+ * non-md extensions, extensionless targets naming a sibling directory or
+ * reserved file).
+ */
+export function outsideLinkDangles(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): boolean {
+  const split = splitSiblingLink(linkPath, siblings);
+  if (split === undefined) return false;
+  const { sibling, rest } = split;
+  if (rest === "" || sibling.concepts.has(conceptIdFromPath(rest))) return false;
+  return targetsMissingConcept(
+    rest,
+    knownDirectories(sibling.concepts, sibling.reserved),
+    new Set(sibling.reserved.map((file) => file.path)),
+  );
 }

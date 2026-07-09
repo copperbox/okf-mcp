@@ -20,8 +20,24 @@ export type {
   UpdateConceptResult,
   WriteConceptOptions,
 } from "./authoring.js";
-export { buildBundle, declaredOkfVersion, loadBundle, readBundleDocument } from "./bundle.js";
-export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
+export {
+  buildBundle,
+  colocatedSiblings,
+  declaredDescription,
+  declaredOkfVersion,
+  discoverColocatedBundles,
+  loadBundle,
+  outsideLinkDangles,
+  readBundleDescription,
+  readBundleDocument,
+  readColocatedAgentsGuide,
+  resolveOutsideLink,
+} from "./bundle.js";
+export type {
+  BuildBundleOptions,
+  BundleDocument,
+  OutsideLinkTarget,
+} from "./bundle.js";
 export { canonicalUrlPrefixes, resolveUrlToConcept } from "./canonical.js";
 export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type {
@@ -79,25 +95,38 @@ export { packBundle } from "./pack.js";
 export type { PackOptions, PackResult } from "./pack.js";
 export {
   archiveKind,
+  loadColocatedRemoteBundles,
   loadRemoteBundle,
   MAX_ARCHIVE_DOWNLOAD_BYTES,
   MAX_REMOTE_BYTES,
   MAX_REMOTE_FILES,
   parseGitHubTreeUrl,
 } from "./remote.js";
-export type { ArchiveKind, GitHubTreeRef } from "./remote.js";
+export type {
+  ArchiveKind,
+  ColocatedRemoteMount,
+  GitHubTreeRef,
+} from "./remote.js";
 export { searchConcepts } from "./search.js";
 export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
-export { createOkfServer } from "./server.js";
-export type { ServerOptions } from "./server.js";
+export { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
+export type { BundleGuide, ServerOptions } from "./server.js";
 export { OkfStore } from "./store.js";
 export { suggestConceptPath } from "./suggest.js";
 export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
-export type { BundleReloadStats, OkfStoreOptions } from "./store.js";
+export type {
+  BundleReloadStats,
+  ColocatedRemoteRootMount,
+  ColocatedRootBundle,
+  ColocatedRootMount,
+  DiscoveredBundle,
+  OkfStoreOptions,
+} from "./store.js";
 export { okfUri, OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 export type {
   BundleConfig,
   BundleProblem,
+  ColocatedRemoteRootConfig,
   Concept,
   ConceptFrontmatter,
   ConceptLink,
