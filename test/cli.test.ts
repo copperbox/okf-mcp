@@ -22,12 +22,12 @@ function runCli(args: string[]): Promise<CliResult> {
       ["--import", "tsx", CLI, ...args],
       { cwd: repoRoot },
       (error, stdout, stderr) => {
-        const code =
-          error === null
-            ? 0
-            : typeof (error as { code?: unknown }).code === "number"
-              ? ((error as { code: number }).code)
-              : 1;
+        let code = 1;
+        if (error === null) {
+          code = 0;
+        } else if (typeof error.code === "number") {
+          code = error.code;
+        }
         resolve({ code, stdout, stderr });
       },
     );
