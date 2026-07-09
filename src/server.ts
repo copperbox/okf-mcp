@@ -20,6 +20,7 @@ import {
 import {
   colocatedSiblings,
   readBundleDocument,
+  readColocatedAgentsGuide,
   resolveOutsideLink,
 } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
@@ -39,7 +40,7 @@ import {
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
 import { searchConcepts } from "./search.js";
-import type { OkfStore } from "./store.js";
+import type { ColocatedRootMount, OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
@@ -88,7 +89,10 @@ function renderBundleGuide(guide: BundleGuide): string {
   if (text.length <= BUNDLE_GUIDE_BUDGET) return `${heading}\n\n${text}`;
   const lastBreak = text.lastIndexOf("\n", BUNDLE_GUIDE_BUDGET);
   const kept = text.slice(0, lastBreak > 0 ? lastBreak : BUNDLE_GUIDE_BUDGET).trimEnd();
-  return `${heading}\n\n${kept}\n\n[Guide truncated — read the full file at ${guide.source}.]`;
+  return (
+    `${heading}\n\n${kept}\n\n[Guide truncated — call get_bundle_guide for the ` +
+    `full guide (source: ${guide.source}).]`
+  );
 }
 
 /**
@@ -106,7 +110,8 @@ e.g. [Orders](/tables/orders.md). index.md and log.md are reserved, generated fi
 Reading: orient with graph_summary and list_types / list_tags, narrow with
 search_concepts (text plus type/tag/path/link filters), then read specific concepts
 with get_concept and explore with get_neighbors / find_path — rather than dumping
-every document.
+every document. When a get_bundle_guide tool is listed, call it before exploring:
+it says what each mounted bundle is for and which to use for what work.
 
 Colocated bundles may be discovered but not loaded yet (lazy mounting):
 list_bundles marks them loaded: false, any tool naming one loads it, and no-arg
@@ -329,6 +334,80 @@ export function createOkfServer(
       ]),
   );
 
+  /**
+   * One get_bundle_guide entry: the root's AGENTS.md full text (local roots
+   * read it from disk on demand, so external edits show up; remote roots
+   * return the guide fetched with the mount) plus each bundle's one-line
+   * description. Unlike the instructions injection, never truncated.
+   */
+  const bundleGuideEntry = async (mount: ColocatedRootMount) => {
+    const guide = mount.remote
+      ? mount.agentsGuide
+      : await readColocatedAgentsGuide(mount.root);
+    return {
+      root: mount.root,
+      ...(guide !== undefined
+        ? {
+            guide,
+            source: mount.remote
+              ? `${mount.root}/AGENTS.md`
+              : path.join(mount.root, "AGENTS.md"),
+          }
+        : {
+            note:
+              "this root has no AGENTS.md; the bundle descriptions below are the guide",
+          }),
+      bundles: mount.bundles,
+    };
+  };
+
+  const bundleGuideTool = server.registerTool(
+    "get_bundle_guide",
+    {
+      title: "Get bundle guide",
+      description:
+        "Describes what each mounted bundle is for and which to use for what work: each colocated root's AGENTS.md guide in full (read on demand, never truncated) plus every bundle's one-line description. Call before choosing which bundles to search or explore.",
+      inputSchema: {
+        root: z
+          .string()
+          .optional()
+          .describe(
+            "Colocated root — a local root path or a remote root URL, as reported by a previous call; omitted covers every mounted root",
+          ),
+      },
+    },
+    async ({ root }) => {
+      const mounts = store.mountedColocatedRoots();
+      const selected =
+        root === undefined
+          ? mounts
+          : mounts.filter(
+              (m) => m.root === root || (!m.remote && m.root === path.resolve(root)),
+            );
+      if (selected.length === 0) {
+        throw new Error(
+          `unknown colocated root: ${root} ` +
+            `(mounted: ${mounts.map((m) => m.root).join(", ")})`,
+        );
+      }
+      return json(await Promise.all(selected.map(bundleGuideEntry)));
+    },
+  );
+
+  /**
+   * get_bundle_guide exists only while a colocated root is mounted: hidden
+   * from tools/list otherwise, flipped on when a runtime mount introduces
+   * the first root (enable() notifies connected clients via
+   * tools/list_changed), and off again should none remain.
+   */
+  const syncBundleGuideTool = () => {
+    const mounted = store.mountedColocatedRoots().length > 0;
+    if (mounted === bundleGuideTool.enabled) return;
+    if (mounted) bundleGuideTool.enable();
+    else bundleGuideTool.disable();
+  };
+  syncBundleGuideTool();
+
   server.registerTool(
     "reload_bundles",
     {
@@ -408,7 +487,7 @@ export function createOkfServer(
     {
       title: "Load colocated remote bundles",
       description:
-        "Mount a published colocated root by URL: each immediate subdirectory of the GitHub tree (or .tar.gz/.tgz/.zip archive) containing markdown becomes its own read-only bundle, id = folder name, and relative ../sibling links between them derive cross-bundle edges. File-count and size limits apply across the whole root. The root's AGENTS.md (bundle guide) is returned in `agentsGuide` — server instructions are fixed at initialization, so read the guide from this result.",
+        "Mount a published colocated root by URL: each immediate subdirectory of the GitHub tree (or .tar.gz/.tgz/.zip archive) containing markdown becomes its own read-only bundle, id = folder name, and relative ../sibling links between them derive cross-bundle edges. File-count and size limits apply across the whole root. The root's AGENTS.md (bundle guide) is returned in `agentsGuide` — server instructions are fixed at initialization, so read the guide from this result; get_bundle_guide (registered with the mount) serves it again any time later.",
       inputSchema: {
         url: z
           .string()
@@ -449,6 +528,8 @@ export function createOkfServer(
         ...(exclude !== undefined && { exclude }),
         ...(canonicalUrl !== undefined && { canonicalUrl }),
       });
+      // The first colocated root makes get_bundle_guide appear mid-session.
+      syncBundleGuideTool();
       return json({
         url,
         bundles: mount.bundles.map((bundle) => ({

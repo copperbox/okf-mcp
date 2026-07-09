@@ -89,6 +89,31 @@ export interface ColocatedRemoteRootMount {
   agentsGuide?: string;
 }
 
+/** One bundle's line in a colocated root's guide view. */
+export interface ColocatedRootBundle {
+  id: string;
+  /** One-line purpose declared by the bundle-root index.md frontmatter. */
+  description?: string;
+  /** False for bundles discovered under a lazy root but not yet parsed. */
+  loaded: boolean;
+}
+
+/**
+ * Any mounted colocated root — local (`--colocated-bundles`) or remote —
+ * viewed uniformly for guide access (the get_bundle_guide tool).
+ */
+export interface ColocatedRootMount {
+  /** Absolute path of a local root, or the source URL of a remote root. */
+  root: string;
+  remote: boolean;
+  bundles: ColocatedRootBundle[];
+  /**
+   * The remote root's AGENTS.md fetched at mount time; local roots have
+   * none here — their guide is read from disk on demand, so it stays fresh.
+   */
+  agentsGuide?: string;
+}
+
 /** A bundle discovered at load() but not yet parsed/indexed (lazy configs). */
 export interface DiscoveredBundle {
   id: string;
@@ -247,6 +272,47 @@ export class OkfStore {
   /** Mounted colocated remote roots: url, bundle ids, root AGENTS.md guide. */
   colocatedRemoteRootMounts(): ColocatedRemoteRootMount[] {
     return [...this.colocatedMounts].map(([url, mount]) => ({ url, ...mount }));
+  }
+
+  /**
+   * Every mounted colocated root, local and remote, with each bundle's
+   * one-line description — the store-level view behind get_bundle_guide.
+   * Local roots come from the configs' declared colocatedRoot (loaded or
+   * lazily discovered bundles alike); remote roots from their mounts.
+   */
+  mountedColocatedRoots(): ColocatedRootMount[] {
+    const locals = new Map<string, ColocatedRootMount>();
+    for (const config of this.configs) {
+      if (config.colocatedRoot === undefined) continue;
+      const root = path.resolve(config.colocatedRoot);
+      let mount = locals.get(root);
+      if (mount === undefined) {
+        mount = { root, remote: false, bundles: [] };
+        locals.set(root, mount);
+      }
+      const loaded = this.loaded.get(config.id);
+      const description =
+        loaded?.description ?? this.pending.get(config.id)?.info.description;
+      mount.bundles.push({
+        id: config.id,
+        ...(description !== undefined && { description }),
+        loaded: loaded !== undefined,
+      });
+    }
+    const remotes = [...this.colocatedMounts].map(([url, mount]) => ({
+      root: url,
+      remote: true,
+      bundles: mount.bundleIds.map((id) => {
+        const description = this.loaded.get(id)?.description;
+        return {
+          id,
+          ...(description !== undefined && { description }),
+          loaded: true,
+        };
+      }),
+      ...(mount.agentsGuide !== undefined && { agentsGuide: mount.agentsGuide }),
+    }));
+    return [...locals.values(), ...remotes];
   }
 
   /** Bundles discovered by a lazy config but not yet loaded. */

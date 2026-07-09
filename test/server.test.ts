@@ -7,6 +7,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { writeConcept } from "../src/authoring.js";
 import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "../src/server.js";
@@ -1539,7 +1540,21 @@ describe("server instructions", () => {
       `guide should be cut near the ${BUNDLE_GUIDE_BUDGET}-char budget, got ${guide.length}`,
     );
     assert.ok(guide.includes("truncated"));
+    assert.ok(
+      guide.includes("get_bundle_guide"),
+      "pointer should name the tool that returns the full guide",
+    );
     assert.ok(guide.includes("/vault/AGENTS.md"), "pointer should name the full file");
+    await client.close();
+  });
+
+  it("points at get_bundle_guide for bundle orientation, even without guides", async () => {
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    // Static text may safely reference the conditional tool: clients that
+    // never see the tool just skip the sentence.
+    assert.ok(instructions.includes("get_bundle_guide"));
     await client.close();
   });
 
@@ -1813,5 +1828,175 @@ describe("colocated remote root tools", () => {
       bundle: "acme",
     })) as { crossBundleEdges: number };
     assert.equal(summary.crossBundleEdges, 1);
+  });
+});
+
+describe("get_bundle_guide tool", () => {
+  const ROOT_URL = "https://github.com/acme/kb/tree/main/kb";
+  const REMOTE_FILES = {
+    "kb/AGENTS.md": "# Remote guide\n\n- kbacme: remote schema tables.\n",
+    "kb/kbacme/orders.md": "---\ntype: Table\n---\n\nRows.\n",
+  };
+
+  interface GuideEntry {
+    root: string;
+    guide?: string;
+    source?: string;
+    note?: string;
+    bundles: Array<{ id: string; description?: string; loaded: boolean }>;
+  }
+
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-guide-test-"));
+    await fs.writeFile(
+      path.join(root, "AGENTS.md"),
+      "# Guide\n\n- acme: warehouse tables.\n- ops: runbooks.\n",
+    );
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "index.md"),
+      '---\ndescription: "Acme warehouse tables."\n---\n\n# Index\n',
+    );
+    await fs.writeFile(
+      path.join(root, "acme", "orders.md"),
+      "---\ntype: Table\n---\n\nRows.\n",
+    );
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Runbook\n---\n\nSteps.\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  function colocatedConfigs(lazy = false) {
+    return [
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root, ...(lazy && { lazy }) },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root, ...(lazy && { lazy }) },
+    ];
+  }
+
+  it("is not listed and rejects calls when no colocated root is mounted", async () => {
+    const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
+    const { tools } = await client.listTools();
+    assert.ok(!tools.some((t) => t.name === "get_bundle_guide"));
+    const result = await callTool(client, "get_bundle_guide", {});
+    assert.equal(result.isError, true);
+    assert.match(textContent(result), /disabled/);
+  });
+
+  it("returns the local root's AGENTS.md and per-bundle descriptions", async () => {
+    const client = await connectClient(new OkfStore(colocatedConfigs()));
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "get_bundle_guide");
+    assert.ok(tool, "tool should be listed when a colocated root is mounted");
+    // The description is the tool's standing advertisement in agent context.
+    assert.match(tool.description ?? "", /bundle/i);
+    assert.match(tool.description ?? "", /before/i);
+
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.equal(entries.length, 1);
+    const entry = entries[0]!;
+    assert.equal(entry.root, root);
+    assert.equal(entry.guide, "# Guide\n\n- acme: warehouse tables.\n- ops: runbooks.\n");
+    assert.equal(entry.source, path.join(root, "AGENTS.md"));
+    assert.deepEqual(entry.bundles, [
+      { id: "acme", description: "Acme warehouse tables.", loaded: true },
+      { id: "ops", loaded: true },
+    ]);
+  });
+
+  it("covers lazily discovered bundles without loading them", async () => {
+    const client = await connectClient(new OkfStore(colocatedConfigs(true)));
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.deepEqual(entries[0]!.bundles, [
+      { id: "acme", description: "Acme warehouse tables.", loaded: false },
+      { id: "ops", loaded: false },
+    ]);
+  });
+
+  it("reads the guide on demand, so external edits and long guides arrive whole", async () => {
+    const client = await connectClient(new OkfStore(colocatedConfigs()));
+    const line = "- bundle: one subsystem, described at length.\n";
+    const long = `# Guide\n\n${line.repeat(
+      Math.ceil((BUNDLE_GUIDE_BUDGET * 2) / line.length),
+    )}`;
+    await fs.writeFile(path.join(root, "AGENTS.md"), long);
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    // Full text, no instruction-budget truncation, fresh from disk.
+    assert.equal(entries[0]!.guide, long);
+  });
+
+  it("notes a root without AGENTS.md but still lists its bundles", async () => {
+    await fs.rm(path.join(root, "AGENTS.md"));
+    const client = await connectClient(new OkfStore(colocatedConfigs()));
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.equal(entries[0]!.guide, undefined);
+    assert.match(entries[0]!.note ?? "", /no AGENTS\.md/);
+    assert.equal(entries[0]!.bundles.length, 2);
+  });
+
+  it("serves a remote root mounted at startup from its fetched guide", async () => {
+    const store = new OkfStore([], {
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: fakeGitHub(REMOTE_FILES),
+    });
+    const client = await connectClient(store);
+    const { tools } = await client.listTools();
+    assert.ok(tools.some((t) => t.name === "get_bundle_guide"));
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]!.root, ROOT_URL);
+    assert.equal(entries[0]!.guide, REMOTE_FILES["kb/AGENTS.md"]);
+    assert.equal(entries[0]!.source, `${ROOT_URL}/AGENTS.md`);
+    assert.deepEqual(entries[0]!.bundles, [{ id: "kbacme", loaded: true }]);
+  });
+
+  it("registers dynamically when a runtime mount introduces the first root", async () => {
+    const store = new OkfStore([], { fetchImpl: fakeGitHub(REMOTE_FILES) });
+    const client = await connectClient(store);
+    let listChanged = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      listChanged += 1;
+    });
+    const before = await client.listTools();
+    assert.ok(!before.tools.some((t) => t.name === "get_bundle_guide"));
+
+    await callJson(client, "load_colocated_remote_bundles", { url: ROOT_URL });
+    const after = await client.listTools();
+    assert.ok(after.tools.some((t) => t.name === "get_bundle_guide"));
+    assert.ok(listChanged >= 1, "clients should be told the tool list changed");
+
+    const entries = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.equal(entries[0]!.guide, REMOTE_FILES["kb/AGENTS.md"]);
+  });
+
+  it("selects one root by param, defaults to all, and rejects unknown roots", async () => {
+    const store = new OkfStore(colocatedConfigs(), {
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: fakeGitHub(REMOTE_FILES),
+    });
+    const client = await connectClient(store);
+
+    const all = (await callJson(client, "get_bundle_guide", {})) as GuideEntry[];
+    assert.deepEqual(all.map((e) => e.root), [root, ROOT_URL]);
+
+    const local = (await callJson(client, "get_bundle_guide", {
+      root,
+    })) as GuideEntry[];
+    assert.deepEqual(local.map((e) => e.root), [root]);
+
+    const remote = (await callJson(client, "get_bundle_guide", {
+      root: ROOT_URL,
+    })) as GuideEntry[];
+    assert.deepEqual(remote.map((e) => e.root), [ROOT_URL]);
+
+    const unknown = await callTool(client, "get_bundle_guide", { root: "/nope" });
+    assert.equal(unknown.isError, true);
+    assert.match(textContent(unknown), /unknown colocated root: \/nope/);
+    assert.match(textContent(unknown), new RegExp(ROOT_URL));
   });
 });

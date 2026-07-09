@@ -117,6 +117,8 @@ export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export type {
   BundleReloadStats,
   ColocatedRemoteRootMount,
+  ColocatedRootBundle,
+  ColocatedRootMount,
   DiscoveredBundle,
   OkfStoreOptions,
 } from "./store.js";

@@ -314,6 +314,49 @@ describe("OkfStore colocated remote roots", () => {
     );
   });
 
+  it("mountedColocatedRoots unifies local roots and remote mounts", async () => {
+    const local = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    try {
+      await fs.mkdir(path.join(local, "proj"));
+      await fs.writeFile(
+        path.join(local, "proj", "index.md"),
+        '---\ndescription: "Project notes."\n---\n\n# Index\n',
+      );
+      const store = new OkfStore(
+        [
+          { id: "proj", root: path.join(local, "proj"), colocatedRoot: local, lazy: true },
+        ],
+        {
+          colocatedRemoteRoots: [{ url: ROOT_URL }],
+          fetchImpl: fakeGitHub(FILES),
+        },
+      );
+      assert.deepEqual(store.mountedColocatedRoots().map((m) => m.root), [local]);
+      await store.load();
+      assert.deepEqual(store.mountedColocatedRoots(), [
+        {
+          root: local,
+          remote: false,
+          bundles: [{ id: "proj", description: "Project notes.", loaded: false }],
+        },
+        {
+          root: ROOT_URL,
+          remote: true,
+          bundles: [
+            { id: "acme", loaded: true },
+            { id: "ops", loaded: true },
+          ],
+          agentsGuide: "# Guide\n",
+        },
+      ]);
+      // Hydration flips the loaded flag without changing the mount shape.
+      await store.bundle("proj");
+      assert.equal(store.mountedColocatedRoots()[0]?.bundles[0]?.loaded, true);
+    } finally {
+      await fs.rm(local, { recursive: true, force: true });
+    }
+  });
+
   it("addColocatedRemoteBundles mounts at runtime and rejects a repeated root", async () => {
     const store = new OkfStore([], { fetchImpl: fakeGitHub(FILES) });
     await store.load();
