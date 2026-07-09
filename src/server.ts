@@ -457,7 +457,7 @@ export function createOkfServer(
         concept.body,
         concept.path,
         (cid) => loadedBundle.concepts.has(cid),
-        (path) => resolveOutsideLink(path, siblings) !== undefined,
+        (linkPath) => resolveOutsideLink(linkPath, siblings) !== undefined,
       );
       return json(citations);
     },

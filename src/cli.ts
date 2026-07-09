@@ -236,12 +236,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
   try {
-    applyCanonicalUrlFlags(
-      values["canonical-url"] ?? [],
-      configs,
-      remotes,
-      values["colocated-bundles"] ?? [],
-    );
+    applyCanonicalUrlFlags(values["canonical-url"] ?? [], configs, remotes, colocatedRoots);
   } catch (err) {
     console.error(`error: ${(err as Error).message}`);
     return 2;

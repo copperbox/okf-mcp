@@ -256,7 +256,7 @@ export function extractCitations(
   body: string,
   conceptPath: string,
   conceptExists: (id: string) => boolean,
-  outsideResolves: (path: string) => boolean = () => false,
+  outsideResolves: (linkPath: string) => boolean = () => false,
 ): ExtractedCitations {
   const citations: Citation[] = [];
   const malformed: string[] = [];
@@ -291,7 +291,7 @@ export function extractCitations(
 function citationKind(
   link: ConceptLink,
   conceptExists: (id: string) => boolean,
-  outsideResolves: (path: string) => boolean,
+  outsideResolves: (linkPath: string) => boolean,
 ): Citation["kind"] {
   if (link.kind === "external") return "external";
   if (

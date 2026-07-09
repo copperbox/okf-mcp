@@ -243,7 +243,7 @@ export async function validateBundle(
       concept.body,
       concept.path,
       (id) => bundle.concepts.has(id),
-      (path) => resolveOutsideLink(path, siblings) !== undefined,
+      (linkPath) => resolveOutsideLink(linkPath, siblings) !== undefined,
     );
     for (const line of malformed) {
       problems.push({
