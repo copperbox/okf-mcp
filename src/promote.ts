@@ -6,6 +6,14 @@
  * via its `resource` URL and a §8 citation on the promoted concept's
  * canonical location — which the graph tools already resolve back into a
  * derived cross-bundle edge when the target bundle has a canonical URL.
+ *
+ * Between colocated siblings the citation is a relative on-disk link into
+ * the sibling folder instead — even when the target has a canonical URL —
+ * because the vault UX is the point of colocation: Obsidian resolves the
+ * link natively, and the graph derives the same cross-bundle edge from it.
+ * Publishing rewrites relative links to canonical URLs at pack time. The
+ * stub's `resource` stays the canonical/okf URI (spec §4.1 wants a
+ * parseable URI there).
  */
 
 import fs from "node:fs/promises";
@@ -49,7 +57,10 @@ export interface PromoteConceptResult {
   to: string;
   /** Frontmatter title of the promoted concept, when it had one. */
   title?: string;
-  /** Canonical location of the promoted concept, cited by the stub. */
+  /**
+   * What the stub cites: a document-relative `../<bundle>/<path>` link when
+   * the bundles are colocated siblings, the canonical location otherwise.
+   */
   citation: string;
   /** Source-bundle path of the citation stub, when one was written. */
   stubPath?: string;
@@ -76,6 +87,27 @@ export function canonicalConceptUrl(bundle: LoadedBundle, relPath: string): stri
   return okfUri(bundle.id, relPath);
 }
 
+/**
+ * Document-relative path from a stub at `stubPath` in `source` to the
+ * promoted copy at `toPath` in `target`, when the two bundles declare the
+ * same colocated root — one `../` per stub directory level plus one to step
+ * from the source bundle root into the shared root, then into the sibling
+ * folder (folder name = bundle id). Undefined when the bundles are not
+ * colocated siblings. Colocation is declared, never inferred from disk.
+ */
+function colocatedCitation(
+  source: LoadedBundle,
+  target: LoadedBundle,
+  stubPath: string,
+  toPath: string,
+): string | undefined {
+  if (source.colocatedRoot === undefined) return undefined;
+  if (source.colocatedRoot !== target.colocatedRoot) return undefined;
+  const dir = path.posix.dirname(stubPath);
+  const ups = dir === "." ? 1 : dir.split("/").length + 1;
+  return `${"../".repeat(ups)}${target.id}/${toPath}`;
+}
+
 /** Top suggested directory for the concept's type/tags, keeping its filename. */
 function defaultTargetPath(target: LoadedBundle, concept: Concept): string {
   const { type, title, tags } = concept.frontmatter;
@@ -92,8 +124,8 @@ function defaultTargetPath(target: LoadedBundle, concept: Concept): string {
 /**
  * Move a concept from one bundle to another: write it into the target bundle
  * (refusing to overwrite), then replace the source copy with a citation stub
- * pointing at its canonical location — or delete it outright with
- * `stub: false`. The target is written first so a failure leaves the source
+ * pointing at the promoted copy (relative link between colocated siblings,
+ * canonical location otherwise) — or delete it outright with `stub: false`. The target is written first so a failure leaves the source
  * untouched. Does not log, reindex, or touch the in-memory indexes — the
  * caller handles both bundles' log.md/index.md and reloads afterwards.
  */
@@ -118,7 +150,8 @@ export async function promoteConcept(
     failIfExists: true,
   });
 
-  const citation = canonicalConceptUrl(target, toPath);
+  const canonical = canonicalConceptUrl(target, toPath);
+  const citation = colocatedCitation(source, target, concept.path, toPath) ?? canonical;
   const inboundLinks = conceptsLinkingTo(source, concept.id)
     .map((other) => other.id)
     .sort();
@@ -141,7 +174,7 @@ export async function promoteConcept(
         type: concept.frontmatter.type,
         ...(title !== undefined && { title }),
         description: `Promoted to bundle "${target.id}"; this stub cites the canonical copy.`,
-        resource: citation,
+        resource: canonical,
       },
       `Promoted to [${label}](${citation}) in bundle \`${target.id}\`.\n\n# Citations\n\n[1] [${label}](${citation})\n`,
     );

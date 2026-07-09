@@ -953,7 +953,7 @@ export function createOkfServer(
       {
         title: "Promote concept",
         description:
-          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at its canonical location so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
+          "Move a concept into another writable bundle (e.g. project → org): write it there (explicit toPath, or suggest_concept_path-style placement keeping the filename), replace the original with a citation stub pointing at the promoted copy (a relative ../<bundle>/<path> link between colocated siblings, the canonical location otherwise) so the source graph stays navigable, then log the change and regenerate indexes in both bundles",
         inputSchema: {
           id: z
             .string()

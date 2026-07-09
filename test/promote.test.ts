@@ -9,6 +9,7 @@ import { loadBundle } from "../src/bundle.js";
 import { deriveCrossBundleEdges } from "../src/graph.js";
 import { canonicalConceptUrl, promoteConcept } from "../src/promote.js";
 import type { LoadedBundle } from "../src/types.js";
+import { validateBundle } from "../src/validate.js";
 
 describe("promoteConcept", () => {
   let projRoot: string;
@@ -152,6 +153,118 @@ describe("promoteConcept", () => {
     await assert.rejects(promoteConcept(proj, org, "nope"), /unknown concept/);
     // Failed promotions leave the source untouched.
     await fs.access(path.join(projRoot, "notes/naming.md"));
+  });
+});
+
+describe("promoteConcept between colocated siblings", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-promote-vault-"));
+    await writeConcept(
+      path.join(root, "proj"),
+      "notes/naming.md",
+      { type: "Standard", title: "Naming", tags: ["style"] },
+      "Use snake_case.",
+    );
+    await writeConcept(
+      path.join(root, "proj"),
+      "overview.md",
+      { type: "Guide", title: "Overview" },
+      "Start here.",
+    );
+    await writeConcept(
+      path.join(root, "org"),
+      "standards/reviews.md",
+      { type: "Standard", title: "Reviews" },
+      "Review rules.",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const load = (id: string, canonicalUrl?: string) =>
+    loadBundle({
+      id,
+      root: path.join(root, id),
+      colocatedRoot: root,
+      ...(canonicalUrl !== undefined && { canonicalUrl }),
+    });
+
+  it("cites a document-relative sibling path and keeps a URI resource", async () => {
+    const result = await promoteConcept(await load("proj"), await load("org"), "notes/naming", {
+      toPath: "standards/naming.md",
+    });
+    assert.equal(result.citation, "../../org/standards/naming.md");
+
+    const stub = (await load("proj")).concepts.get("notes/naming");
+    assert.equal(stub?.frontmatter.resource, "okf://org/standards/naming.md");
+    assert.match(
+      stub?.body ?? "",
+      /\[1\] \[Naming\]\(\.\.\/\.\.\/org\/standards\/naming\.md\)/,
+    );
+    // The stub's link parses as an outside link into the sibling bundle.
+    const outside = stub?.links.find((l) => l.kind === "outside");
+    assert.equal(outside?.path, "../org/standards/naming.md");
+  });
+
+  it("steps up once per stub directory level (root-level stub: one ../)", async () => {
+    const result = await promoteConcept(await load("proj"), await load("org"), "overview", {
+      toPath: "guides/overview.md",
+    });
+    assert.equal(result.citation, "../org/guides/overview.md");
+  });
+
+  it("prefers the relative link over the target's canonical URL", async () => {
+    const canonicalUrl = "https://github.com/acme/kb/tree/main/kb";
+    const result = await promoteConcept(
+      await load("proj"),
+      await load("org", canonicalUrl),
+      "notes/naming",
+      { toPath: "standards/naming.md" },
+    );
+    assert.equal(result.citation, "../../org/standards/naming.md");
+    // The resource stays a URI (spec §4.1) — here the canonical blob URL.
+    const stub = (await load("proj")).concepts.get("notes/naming");
+    assert.equal(
+      stub?.frontmatter.resource,
+      "https://github.com/acme/kb/blob/main/kb/standards/naming.md",
+    );
+  });
+
+  it("round-trips into a derived cross-bundle edge and a clean validate", async () => {
+    await promoteConcept(await load("proj"), await load("org"), "notes/naming", {
+      toPath: "standards/naming.md",
+    });
+    const projAfter = await load("proj");
+    const orgAfter = await load("org");
+    const edges = deriveCrossBundleEdges([projAfter, orgAfter]);
+    assert.ok(
+      edges.some(
+        (e) =>
+          e.from === "proj:notes/naming" &&
+          e.to === "org:standards/naming" &&
+          e.kind === "cross-bundle",
+      ),
+    );
+    // The stub's relative citation resolves — no missing-citation warning.
+    const report = await validateBundle(projAfter, [projAfter, orgAfter]);
+    assert.deepEqual(
+      [...report.errors, ...report.warnings].filter((p) => p.path === "notes/naming.md"),
+      [],
+    );
+  });
+
+  it("falls back to the okf:// URI when the declared roots differ", async () => {
+    const org = await loadBundle({
+      id: "org",
+      root: path.join(root, "org"),
+      colocatedRoot: path.join(root, "elsewhere"),
+    });
+    const result = await promoteConcept(await load("proj"), org, "notes/naming", {
+      toPath: "standards/naming.md",
+    });
+    assert.equal(result.citation, "okf://org/standards/naming.md");
   });
 });
 
