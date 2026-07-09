@@ -103,7 +103,7 @@ export function qualifyNodeId(bundleId: string, conceptId: string): string {
 
 interface DerivedCrossEdges {
   edges: GraphEdge[];
-  /** `${qualifiedFrom}\0${url}` per matched link, to suppress external nodes. */
+  /** `${qualifiedFrom}\0${linkTarget}` per matched link, to suppress external nodes. */
   matched: Set<string>;
 }
 
@@ -122,8 +122,8 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
   const edges: GraphEdge[] = [];
   const seen = new Set<string>();
   const matched = new Set<string>();
-  const derive = (from: string, link: string, bundleId: string, conceptId: string) => {
-    matched.add(`${from}\0${link}`);
+  const derive = (from: string, linkTarget: string, bundleId: string, conceptId: string) => {
+    matched.add(`${from}\0${linkTarget}`);
     const to = qualifyNodeId(bundleId, conceptId);
     if (seen.has(`${from}\0${to}`)) return;
     seen.add(`${from}\0${to}`);

@@ -316,38 +316,44 @@ export interface OutsideLinkTarget {
 }
 
 /**
- * The path under the colocated root named by an outside link's normalized
- * `../…` path, or undefined when the link steps past the root. A bundle root
- * is an immediate subdirectory of its colocated root, so exactly one leading
- * `../` lands in the root; any further `..` escapes it.
+ * Split an outside link's normalized `../…` path into the mounted sibling
+ * its first segment names (folder name = bundle id) and the remaining path
+ * inside that sibling. A bundle root is an immediate subdirectory of its
+ * colocated root, so exactly one leading `../` lands in the root; any
+ * further `..` escapes it. Undefined when the path escapes the root, stops
+ * at the root level, or names no mounted sibling.
  */
-function pathUnderColocatedRoot(linkPath: string): string | undefined {
+function splitSiblingLink(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): { sibling: LoadedBundle; rest: string } | undefined {
   if (!linkPath.startsWith("../")) return undefined;
   const inside = linkPath.slice(3);
-  return inside === ".." || inside.startsWith("../") ? undefined : inside;
+  if (inside === ".." || inside.startsWith("../")) return undefined;
+  const slash = inside.indexOf("/");
+  if (slash <= 0) return undefined;
+  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
+  if (sibling === undefined) return undefined;
+  return { sibling, rest: inside.slice(slash + 1) };
 }
 
 /**
  * Resolve an `outside` link (a normalized `../…` path) from a colocated
  * bundle into a sibling concept: the first segment under the colocated root
- * names the sibling bundle (folder name = bundle id), the remainder maps to
- * a concept id with the `.md` suffix optional, like body links. Undefined
- * when the path escapes the colocated root, names no mounted sibling, or the
- * sibling has no such concept.
+ * names the sibling bundle, the remainder maps to a concept id with the
+ * `.md` suffix optional, like body links. Undefined when the path escapes
+ * the colocated root, names no mounted sibling, or the sibling has no such
+ * concept.
  */
 export function resolveOutsideLink(
   linkPath: string,
   siblings: LoadedBundle[],
 ): OutsideLinkTarget | undefined {
-  const inside = pathUnderColocatedRoot(linkPath);
-  if (inside === undefined) return undefined;
-  const slash = inside.indexOf("/");
-  if (slash <= 0) return undefined;
-  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
-  if (sibling === undefined) return undefined;
-  const conceptId = conceptIdFromPath(inside.slice(slash + 1));
-  if (conceptId === "" || !sibling.concepts.has(conceptId)) return undefined;
-  return { bundle: sibling, conceptId };
+  const split = splitSiblingLink(linkPath, siblings);
+  if (split === undefined) return undefined;
+  const conceptId = conceptIdFromPath(split.rest);
+  if (conceptId === "" || !split.sibling.concepts.has(conceptId)) return undefined;
+  return { bundle: split.sibling, conceptId };
 }
 
 /**
@@ -363,13 +369,9 @@ export function outsideLinkDangles(
   linkPath: string,
   siblings: LoadedBundle[],
 ): boolean {
-  const inside = pathUnderColocatedRoot(linkPath);
-  if (inside === undefined) return false;
-  const slash = inside.indexOf("/");
-  if (slash <= 0) return false;
-  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
-  if (sibling === undefined) return false;
-  const rest = inside.slice(slash + 1);
+  const split = splitSiblingLink(linkPath, siblings);
+  if (split === undefined) return false;
+  const { sibling, rest } = split;
   if (rest === "" || sibling.concepts.has(conceptIdFromPath(rest))) return false;
   return targetsMissingConcept(
     rest,
