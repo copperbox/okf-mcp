@@ -119,17 +119,17 @@ function applyCanonicalUrlFlags(
   remotes: RemoteBundleConfig[],
   colocatedRoots: string[],
 ): void {
+  const resolvedRoots = [...new Set(colocatedRoots.map((root) => path.resolve(root)))];
   const rootUrls = new Map<string, string>();
   for (const value of values) {
     if (/^https?:\/\//i.test(value)) {
-      const roots = [...new Set(colocatedRoots.map((r) => path.resolve(r)))];
-      if (roots.length !== 1) {
+      if (resolvedRoots.length !== 1) {
         throw new Error(
           "--canonical-url without id= requires exactly one --colocated-bundles " +
-            `root (found ${roots.length}); use --canonical-url <root>=<url>`,
+            `root (found ${resolvedRoots.length}); use --canonical-url <root>=<url>`,
         );
       }
-      rootUrls.set(roots[0]!, value);
+      rootUrls.set(resolvedRoots[0]!, value);
       continue;
     }
     const [id, url] = splitIdFlag("--canonical-url", "id=<url>", value);
@@ -139,13 +139,13 @@ function applyCanonicalUrlFlags(
       config.canonicalUrl = url;
       continue;
     }
-    const root = colocatedRoots.find((r) => path.resolve(r) === path.resolve(id));
-    if (root === undefined) {
+    const resolvedId = path.resolve(id);
+    if (!resolvedRoots.includes(resolvedId)) {
       throw new Error(
         `--canonical-url names an unknown bundle or colocated root: ${id}`,
       );
     }
-    rootUrls.set(path.resolve(root), url);
+    rootUrls.set(resolvedId, url);
   }
   for (const config of configs) {
     if (config.canonicalUrl !== undefined || config.colocatedRoot === undefined) {
