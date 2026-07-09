@@ -125,8 +125,9 @@ function defaultTargetPath(target: LoadedBundle, concept: Concept): string {
  * Move a concept from one bundle to another: write it into the target bundle
  * (refusing to overwrite), then replace the source copy with a citation stub
  * pointing at the promoted copy (relative link between colocated siblings,
- * canonical location otherwise) — or delete it outright with `stub: false`. The target is written first so a failure leaves the source
- * untouched. Does not log, reindex, or touch the in-memory indexes — the
+ * canonical location otherwise) — or delete it outright with `stub: false`.
+ * The target is written first so a failure leaves the source untouched.
+ * Does not log, reindex, or touch the in-memory indexes — the
  * caller handles both bundles' log.md/index.md and reloads afterwards.
  */
 export async function promoteConcept(
