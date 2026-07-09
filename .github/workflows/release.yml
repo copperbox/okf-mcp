@@ -24,7 +24,9 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 bundles npm 10.
-      - run: npm install -g npm@latest
+      # Pinned to a major so a new npm major can't change behavior mid-release
+      # (npm 12 changed `pack --json` output and broke the pack verification).
+      - run: npm install -g npm@12
 
       - run: npm ci
 
@@ -54,7 +56,11 @@ jobs:
           node -e "
             const { execFileSync } = require('child_process');
             const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-            const files = JSON.parse(out)[0].files.map((f) => f.path);
+            // npm <= 11 prints an array of results; npm 12 prints an object
+            // keyed by package name.
+            const parsed = JSON.parse(out);
+            const result = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+            const files = result.files.map((f) => f.path);
             const allowed = (p) => p === 'package.json' || p === 'README.md' || p === 'LICENSE' || p.startsWith('dist/');
             const unexpected = files.filter((p) => !allowed(p));
             if (unexpected.length > 0) {
