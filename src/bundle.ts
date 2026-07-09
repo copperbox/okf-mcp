@@ -84,6 +84,20 @@ export async function discoverColocatedBundles(
   return configs;
 }
 
+/**
+ * Read a colocated root's `AGENTS.md` — the loose root file (belonging to no
+ * bundle) that guides agents across the bundles mounted from that root.
+ * Matched by the exact name `AGENTS.md` only, even on case-insensitive
+ * filesystems, to keep the convention crisp. Returns undefined when absent.
+ */
+export async function readColocatedAgentsGuide(root: string): Promise<string | undefined> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  if (!entries.some((entry) => entry.isFile() && entry.name === "AGENTS.md")) {
+    return undefined;
+  }
+  return fs.readFile(path.join(root, "AGENTS.md"), "utf8");
+}
+
 function isReserved(relPath: string): ReservedFile | null {
   const base = path.posix.basename(relPath).toLowerCase();
   if (!(RESERVED_FILENAMES as readonly string[]).includes(base)) return null;

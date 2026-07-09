@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { buildBundle, discoverColocatedBundles, loadBundle } from "../src/bundle.js";
+import {
+  buildBundle,
+  discoverColocatedBundles,
+  loadBundle,
+  readColocatedAgentsGuide,
+} from "../src/bundle.js";
 import { validateBundle } from "../src/validate.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
@@ -252,6 +257,32 @@ describe("discoverColocatedBundles", () => {
       discoverColocatedBundles(root, { only: ["acme/deep"] }),
       /--only: no bundle subdirectory named "acme\/deep"/,
     );
+  });
+});
+
+describe("readColocatedAgentsGuide", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-agents-guide-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads the root AGENTS.md", async () => {
+    await fs.writeFile(path.join(root, "AGENTS.md"), "- acme: schema tables.\n");
+    assert.equal(await readColocatedAgentsGuide(root), "- acme: schema tables.\n");
+  });
+
+  it("returns undefined when the file is absent", async () => {
+    assert.equal(await readColocatedAgentsGuide(root), undefined);
+  });
+
+  it("matches the exact name AGENTS.md only", async () => {
+    await fs.writeFile(path.join(root, "agents.md"), "lowercase\n");
+    await fs.writeFile(path.join(root, "Agents.md"), "mixed case\n");
+    assert.equal(await readColocatedAgentsGuide(root), undefined);
   });
 });
 

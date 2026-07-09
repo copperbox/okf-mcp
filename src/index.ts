@@ -29,6 +29,7 @@ export {
   loadBundle,
   outsideLinkDangles,
   readBundleDocument,
+  readColocatedAgentsGuide,
   resolveOutsideLink,
 } from "./bundle.js";
 export type {
@@ -102,8 +103,8 @@ export {
 export type { ArchiveKind, GitHubTreeRef } from "./remote.js";
 export { searchConcepts } from "./search.js";
 export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
-export { createOkfServer } from "./server.js";
-export type { ServerOptions } from "./server.js";
+export { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
+export type { BundleGuide, ServerOptions } from "./server.js";
 export { OkfStore } from "./store.js";
 export { suggestConceptPath } from "./suggest.js";
 export type { PathSuggestion, SuggestPathInput } from "./suggest.js";

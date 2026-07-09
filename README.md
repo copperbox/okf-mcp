@@ -176,6 +176,12 @@ okf-mcp --colocated-bundles /path/to/knowledge --only acme,ops
 
 Only the named subfolders are mounted; everything else in the root is ignored entirely — not discovered, not listed — which keeps startup light and stops irrelevant bundles from diluting search results, type/tag vocabularies, and `graph_summary` sweeps. A name that doesn't exist as a subdirectory of the root (or exists but contains no markdown) is a startup error rather than a silent skip, and passing `--only` without `--colocated-bundles` is an error too.
 
+#### Root `AGENTS.md`: the bundle guide
+
+If the colocated root holds an `AGENTS.md` (exact name), its content is appended to the MCP server instructions under a `Bundle guide (from AGENTS.md):` delimiter, so every session starts knowing which bundles exist and which matter for what kind of work — and passes explicit `bundle` arguments instead of sweeping everything. Write it as a short registry for an agent deciding where to look: a line or two per bundle, what it covers, when to reach for it. It doubles as a readable vault-root note in Obsidian and travels with the repo.
+
+Instructions load into the agent's context every session, so the guide is budgeted: past 4 000 characters the server logs a warning and injects a truncated guide with a pointer to the full file. Keep it lean.
+
 ## Remote bundles (knowledge exchange)
 
 OKF's third goal is exchanging knowledge across systems. You can index a bundle published in another repository without cloning it, straight from a public GitHub tree:
