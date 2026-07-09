@@ -27,10 +27,13 @@ function conceptFingerprint(concept: Concept): string {
   return JSON.stringify({ frontmatter: concept.frontmatter, body: concept.body });
 }
 
-function diffConcepts(
+/** Stats for one bundle's reload: new counts plus a concept-ID delta vs. the
+ * previous load (a vanished bundle reports all its concepts removed). */
+function reloadStats(
+  bundle: string,
   previous: LoadedBundle | undefined,
   next: LoadedBundle | undefined,
-): Pick<BundleReloadStats, "added" | "removed" | "changed"> {
+): BundleReloadStats {
   const before = previous?.concepts ?? new Map<string, Concept>();
   const after = next?.concepts ?? new Map<string, Concept>();
   const added: string[] = [];
@@ -41,7 +44,14 @@ function diffConcepts(
     else if (conceptFingerprint(old) !== conceptFingerprint(concept)) changed.push(id);
   }
   const removed = [...before.keys()].filter((id) => !after.has(id));
-  return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
+  return {
+    bundle,
+    concepts: after.size,
+    problems: next?.problems.length ?? 0,
+    added: added.sort(),
+    removed: removed.sort(),
+    changed: changed.sort(),
+  };
 }
 
 /**
@@ -426,23 +436,13 @@ export class OkfStore {
             ...this.remotes.keys(),
           ];
     const stats: BundleReloadStats[] = [];
-    const statFor = (
-      bundleId: string,
-      previous: LoadedBundle | undefined,
-      next: LoadedBundle | undefined,
-    ): BundleReloadStats => ({
-      bundle: bundleId,
-      concepts: next?.concepts.size ?? 0,
-      problems: next?.problems.length ?? 0,
-      ...diffConcepts(previous, next),
-    });
     for (const bundleId of ids) {
       const previous = this.loaded.get(bundleId);
-      stats.push(statFor(bundleId, previous, await this.reloadBundle(bundleId)));
+      stats.push(reloadStats(bundleId, previous, await this.reloadBundle(bundleId)));
     }
     if (id !== undefined) return stats;
     // Each colocated root refetches once; stats cover appeared/vanished
-    // folders too (a vanished bundle reports all its concepts removed).
+    // folders too.
     for (const url of this.colocatedRoots.keys()) {
       const previousIds = this.colocatedMounts.get(url)?.bundleIds ?? [];
       const previous = new Map(
@@ -454,7 +454,7 @@ export class OkfStore {
       ];
       for (const bundleId of bundleIds) {
         stats.push(
-          statFor(bundleId, previous.get(bundleId), this.loaded.get(bundleId)),
+          reloadStats(bundleId, previous.get(bundleId), this.loaded.get(bundleId)),
         );
       }
     }

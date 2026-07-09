@@ -418,7 +418,7 @@ export function createOkfServer(
         bundle: z
           .string()
           .optional()
-          .describe("Bundle ID to reload; omitted reloads all configured bundles"),
+          .describe("Bundle ID to reload; omitted reloads all loaded bundles"),
       },
     },
     async ({ bundle }) => json(await store.reloadBundles(bundle)),
