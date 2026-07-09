@@ -23,8 +23,8 @@ const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
   okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
-          [--remote-bundle id=<url>] [--canonical-url [id=]<url>]
-          [--writable] [--watch] [command]
+          [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
+          [--canonical-url [id=]<url>] [--writable] [--watch] [command]
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -45,7 +45,8 @@ Options:
                           name); repeatable. Dot directories and loose files
                           at the root are skipped. A root AGENTS.md is served
                           as a bundle guide in the MCP server instructions.
-  --only a,b,c            With --colocated-bundles: mount only the named
+  --only a,b,c            With --colocated-bundles or
+                          --colocated-remote-bundles: mount only the named
                           subfolders (comma-separated); the rest of the root
                           is ignored entirely. A name that is not a bundle
                           subdirectory of the root is an error.
@@ -53,6 +54,16 @@ Options:
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
                           repeatable, indexed in memory at startup.
+  --colocated-remote-bundles url
+                          Mount a published colocated root by URL (GitHub
+                          tree, or .tar.gz/.tgz/.zip archive): every
+                          immediate subdirectory containing markdown becomes
+                          its own read-only bundle (id = folder name);
+                          repeatable. Tree mounts derive per-bundle canonical
+                          URLs as <url>/<folder>; size/count limits apply
+                          across the whole root. A root AGENTS.md is fetched
+                          and served as a bundle guide in the MCP server
+                          instructions.
   --canonical-url [id=]url
                           Canonical published URL of a bundle's root (e.g. its
                           GitHub tree URL); repeatable. Citations and external
@@ -157,24 +168,28 @@ function applyCanonicalUrlFlags(
   }
 }
 
+/** Bundle guide for the server instructions, warning on stderr when it
+ * exceeds the injection budget and will be truncated. */
+function bundleGuide(text: string, source: string): BundleGuide {
+  if (text.length > BUNDLE_GUIDE_BUDGET) {
+    console.error(
+      `okf-mcp: ${source} is ${text.length} chars; instructions carry the first ` +
+        `~${BUNDLE_GUIDE_BUDGET} and point at the full file — keep it a short bundle registry`,
+    );
+  }
+  return { text, source };
+}
+
 /**
  * Read each colocated root's AGENTS.md (agent-facing bundle guide) for the
- * server instructions, warning on stderr when one exceeds the injection
- * budget and will be truncated.
+ * server instructions.
  */
 async function collectBundleGuides(roots: string[]): Promise<BundleGuide[]> {
   const guides: BundleGuide[] = [];
   for (const root of [...new Set(roots)]) {
     const text = await readColocatedAgentsGuide(root);
     if (text === undefined) continue;
-    const source = path.resolve(root, "AGENTS.md");
-    if (text.length > BUNDLE_GUIDE_BUDGET) {
-      console.error(
-        `okf-mcp: ${source} is ${text.length} chars; instructions carry the first ` +
-          `~${BUNDLE_GUIDE_BUDGET} and point at the full file — keep it a short bundle registry`,
-      );
-    }
-    guides.push({ text, source });
+    guides.push(bundleGuide(text, path.resolve(root, "AGENTS.md")));
   }
   return guides;
 }
@@ -187,6 +202,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "colocated-bundles": { type: "string", multiple: true },
       only: { type: "string" },
       "remote-bundle": { type: "string", multiple: true },
+      "colocated-remote-bundles": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
       out: { type: "string" },
       include: { type: "string", multiple: true },
@@ -204,13 +220,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   const configs = parseBundleFlags(values.bundle ?? []);
   const colocatedRoots = values["colocated-bundles"] ?? [];
+  const remoteRootUrls = values["colocated-remote-bundles"] ?? [];
   const only = values.only
     ?.split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
   if (only !== undefined) {
-    if (colocatedRoots.length === 0) {
-      console.error("error: --only requires --colocated-bundles");
+    if (colocatedRoots.length === 0 && remoteRootUrls.length === 0) {
+      console.error(
+        "error: --only requires --colocated-bundles or --colocated-remote-bundles",
+      );
       return 2;
     }
     if (only.length === 0) {
@@ -241,28 +260,41 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.error(`error: ${(err as Error).message}`);
     return 2;
   }
-  if (configs.length === 0 && remotes.length === 0) {
+  if (configs.length === 0 && remotes.length === 0 && remoteRootUrls.length === 0) {
     console.error(
-      "error: at least one --bundle, --colocated-bundles, or --remote-bundle is required\n",
+      "error: at least one --bundle, --colocated-bundles, --remote-bundle, " +
+        "or --colocated-remote-bundles is required\n",
     );
     console.error(USAGE);
     return 2;
   }
 
-  const store = new OkfStore(configs, { remotes });
+  const store = new OkfStore(configs, {
+    remotes,
+    colocatedRemoteRoots: remoteRootUrls.map((url) => ({
+      url,
+      ...(only !== undefined && { only }),
+    })),
+  });
   await store.load();
   const [command = "mcp", ...rest] = positionals;
 
   switch (command) {
     case "mcp": {
+      const guides = await collectBundleGuides(colocatedRoots);
+      // Remote colocated roots' AGENTS.md guides were fetched during load().
+      for (const mount of store.colocatedRemoteRootMounts()) {
+        if (mount.agentsGuide === undefined) continue;
+        guides.push(bundleGuide(mount.agentsGuide, `${mount.url}/AGENTS.md`));
+      }
       const server = createOkfServer(store, {
         writable: values.writable ?? false,
-        bundleGuides: await collectBundleGuides(colocatedRoots),
+        bundleGuides: guides,
       });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
       console.error(
-        `okf-mcp serving ${[...configs, ...remotes].map((c) => c.id).join(", ")} over stdio` +
+        `okf-mcp serving ${store.bundles().map((b) => b.id).join(", ")} over stdio` +
           (values.writable ? " (writable)" : " (read-only)"),
       );
       if (values.watch) {

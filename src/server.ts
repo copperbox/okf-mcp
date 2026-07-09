@@ -358,6 +358,66 @@ export function createOkfServer(
   );
 
   server.registerTool(
+    "load_colocated_remote_bundles",
+    {
+      title: "Load colocated remote bundles",
+      description:
+        "Mount a published colocated root by URL: each immediate subdirectory of the GitHub tree (or .tar.gz/.tgz/.zip archive) containing markdown becomes its own read-only bundle, id = folder name, and relative ../sibling links between them derive cross-bundle edges. File-count and size limits apply across the whole root. The root's AGENTS.md (bundle guide) is returned in `agentsGuide` — server instructions are fixed at initialization, so read the guide from this result.",
+      inputSchema: {
+        url: z
+          .string()
+          .describe(
+            "Public GitHub tree URL of the root (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]) or a .tar.gz/.tgz/.zip archive URL or local path",
+          ),
+        only: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Mount only these immediate subfolders; a name that is not a bundle subdirectory of the root is an error",
+          ),
+        include: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Glob patterns over bundle-relative paths, applied within every bundle; when present, only matching files load",
+          ),
+        exclude: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Glob patterns over bundle-relative paths to skip, applied within every bundle",
+          ),
+        canonicalUrl: z
+          .string()
+          .optional()
+          .describe(
+            "Published canonical URL of the root; every bundle derives <url>/<folder> (tree mounts derive canonical URLs from the tree URL automatically; archives have none without this)",
+          ),
+      },
+    },
+    async ({ url, only, include, exclude, canonicalUrl }) => {
+      const mount = await store.addColocatedRemoteBundles({
+        url,
+        ...(only !== undefined && { only }),
+        ...(include !== undefined && { include }),
+        ...(exclude !== undefined && { exclude }),
+        ...(canonicalUrl !== undefined && { canonicalUrl }),
+      });
+      return json({
+        url,
+        bundles: mount.bundles.map((bundle) => ({
+          id: bundle.id,
+          description: bundle.description,
+          concepts: bundle.concepts.size,
+          problems: bundle.problems.length,
+          readOnly: true,
+        })),
+        ...(mount.agentsGuide !== undefined && { agentsGuide: mount.agentsGuide }),
+      });
+    },
+  );
+
+  server.registerTool(
     "list_remote_bundles",
     {
       title: "List remote bundles",

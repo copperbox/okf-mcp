@@ -5,10 +5,12 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { describe, it } from "node:test";
 
+import { colocatedSiblings, resolveOutsideLink } from "../src/bundle.js";
 import {
   MAX_ARCHIVE_DOWNLOAD_BYTES,
   MAX_REMOTE_BYTES,
   MAX_REMOTE_FILES,
+  loadColocatedRemoteBundles,
   loadRemoteBundle,
   parseGitHubTreeUrl,
 } from "../src/remote.js";
@@ -330,6 +332,178 @@ describe("loadRemoteBundle from archives", () => {
     await assert.rejects(
       loadRemoteBundle({ id: "r", url: URL }, fetchImpl),
       /decompress/,
+    );
+  });
+});
+
+describe("loadColocatedRemoteBundles", () => {
+  const ROOT_URL = "https://github.com/acme/kb/tree/main/kb";
+  const NOTE = (target: string) =>
+    `---\ntype: Note\n---\n\nSee [it](${target}).\n`;
+
+  it("mounts each subdirectory of a tree as its own read-only colocated bundle", async () => {
+    const fetchImpl = fakeGitHub({
+      "kb/AGENTS.md": "# Guide\n\n- acme: schema tables.\n",
+      "kb/README.md": "loose root file, no bundle\n",
+      "kb/acme/note.md": NOTE("../ops/runbook.md"),
+      "kb/ops/runbook.md": DOC,
+      "kb/.obsidian/workspace.md": "dot dir, skipped",
+    });
+    const mount = await loadColocatedRemoteBundles({ url: ROOT_URL }, fetchImpl);
+
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["acme", "ops"]);
+    assert.equal(mount.agentsGuide, "# Guide\n\n- acme: schema tables.\n");
+    for (const bundle of mount.bundles) {
+      assert.equal(bundle.readOnly, true);
+      assert.equal(bundle.colocatedRoot, ROOT_URL);
+    }
+    const acme = mount.bundles[0]!;
+    assert.deepEqual([...acme.concepts.keys()], ["note"]);
+    assert.equal(acme.root, `${ROOT_URL}/acme`);
+    // Loose root files belong to no bundle.
+    const all = mount.bundles.flatMap((b) => [...b.concepts.keys()]);
+    assert.ok(!all.includes("README"));
+    // Sources are kept so resources can be served.
+    assert.equal(mount.bundles[1]!.sources?.get("runbook.md"), DOC);
+  });
+
+  it("derives per-bundle canonical URLs as <treeUrl>/<folder>", async () => {
+    const mount = await loadColocatedRemoteBundles(
+      { url: ROOT_URL },
+      fakeGitHub({ "kb/acme/note.md": DOC, "kb/ops/runbook.md": DOC }),
+    );
+    assert.deepEqual(mount.bundles[0]!.canonicalUrls, [
+      "https://github.com/acme/kb/tree/main/kb/acme",
+      "https://github.com/acme/kb/blob/main/kb/acme",
+      "https://raw.githubusercontent.com/acme/kb/main/kb/acme",
+    ]);
+  });
+
+  it("resolves relative ../sibling links between the mounted remote bundles", async () => {
+    const mount = await loadColocatedRemoteBundles(
+      { url: ROOT_URL },
+      fakeGitHub({
+        "kb/acme/note.md": NOTE("../ops/runbook.md"),
+        "kb/ops/runbook.md": DOC,
+      }),
+    );
+    const [acme] = mount.bundles;
+    const siblings = colocatedSiblings(acme!, mount.bundles);
+    assert.deepEqual(siblings.map((b) => b.id), ["ops"]);
+    const link = acme!.concepts.get("note")!.links[0]!;
+    assert.equal(link.kind, "outside");
+    const target = resolveOutsideLink(link.path!, siblings);
+    assert.equal(target?.bundle.id, "ops");
+    assert.equal(target?.conceptId, "runbook");
+  });
+
+  it("partitions a wrapped archive by first path segment and reads the guide", async () => {
+    const url = "https://example.com/kb.tar.gz";
+    const fetchImpl = fakeArchiveServer({
+      [url]: makeTarGz({
+        "kb-main/AGENTS.md": "# Guide\n",
+        "kb-main/acme/note.md": DOC,
+        "kb-main/ops/runbook.md": DOC,
+        "kb-main/ops/deep/plan.md": DOC,
+      }),
+    });
+    const mount = await loadColocatedRemoteBundles({ url }, fetchImpl);
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["acme", "ops"]);
+    assert.equal(mount.agentsGuide, "# Guide\n");
+    assert.deepEqual(
+      [...mount.bundles[1]!.concepts.keys()].sort(),
+      ["deep/plan", "runbook"],
+    );
+    // Archives have no per-file URLs, so no canonical location is derived.
+    assert.equal(mount.bundles[0]!.canonicalUrls, undefined);
+    assert.equal(mount.bundles[0]!.colocatedRoot, url);
+    assert.equal(mount.bundles[0]!.readOnly, true);
+  });
+
+  it("derives archive canonical URLs from an explicit root canonicalUrl", async () => {
+    const url = "https://example.com/kb.zip";
+    const fetchImpl = fakeArchiveServer({
+      [url]: makeZip({ "kb/acme/note.md": DOC }),
+    });
+    const mount = await loadColocatedRemoteBundles(
+      { url, canonicalUrl: "https://github.com/acme/kb/tree/main/kb/" },
+      fetchImpl,
+    );
+    assert.deepEqual(mount.bundles[0]!.canonicalUrls, [
+      "https://github.com/acme/kb/tree/main/kb/acme",
+      "https://github.com/acme/kb/blob/main/kb/acme",
+      "https://raw.githubusercontent.com/acme/kb/main/kb/acme",
+    ]);
+  });
+
+  it("only mounts the named subfolders and rejects unknown names", async () => {
+    const files = {
+      "kb/acme/note.md": DOC,
+      "kb/ops/runbook.md": DOC,
+      "kb/scratch/junk.md": DOC,
+    };
+    const mount = await loadColocatedRemoteBundles(
+      { url: ROOT_URL, only: ["ops", "acme"] },
+      fakeGitHub(files),
+    );
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["acme", "ops"]);
+
+    await assert.rejects(
+      loadColocatedRemoteBundles({ url: ROOT_URL, only: ["nope"] }, fakeGitHub(files)),
+      /no bundle subdirectory named "nope"/,
+    );
+  });
+
+  it("applies include/exclude globs per bundle and drops emptied folders", async () => {
+    const mount = await loadColocatedRemoteBundles(
+      {
+        url: ROOT_URL,
+        include: ["tables/**"],
+        exclude: ["tables/archive/*"],
+      },
+      fakeGitHub({
+        "kb/acme/tables/orders.md": DOC,
+        "kb/acme/tables/archive/old.md": DOC,
+        "kb/acme/notes/scratch.md": DOC,
+        "kb/ops/runbook.md": DOC,
+      }),
+    );
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["acme"]);
+    assert.deepEqual([...mount.bundles[0]!.concepts.keys()], ["tables/orders"]);
+  });
+
+  it("enforces the byte limit across the whole root, not per bundle", async () => {
+    const half = MAX_REMOTE_BYTES / 2 + 1;
+    await assert.rejects(
+      loadColocatedRemoteBundles(
+        { url: ROOT_URL },
+        fakeGitHub(
+          { "kb/acme/a.md": DOC, "kb/ops/b.md": DOC },
+          { "kb/acme/a.md": half, "kb/ops/b.md": half },
+        ),
+      ),
+      /too large/,
+    );
+  });
+
+  it("enforces the file-count limit across the whole root", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i <= MAX_REMOTE_FILES; i++) {
+      files[`kb/${i % 2 === 0 ? "acme" : "ops"}/c${i}.md`] = DOC;
+    }
+    await assert.rejects(
+      loadColocatedRemoteBundles({ url: ROOT_URL }, fakeGitHub(files)),
+      /too many files/,
+    );
+  });
+
+  it("rejects a root with no bundle subdirectories holding markdown", async () => {
+    await assert.rejects(
+      loadColocatedRemoteBundles(
+        { url: ROOT_URL },
+        fakeGitHub({ "kb/README.md": "loose only\n" }),
+      ),
+      /no bundle subdirectories with markdown/,
     );
   });
 });

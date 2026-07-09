@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import { makeTarGz } from "./archives.js";
+
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const CLI = path.join(repoRoot, "src", "cli.ts");
 
@@ -207,5 +209,78 @@ describe("cli --only", () => {
     ]);
     assert.equal(code, 2);
     assert.match(stderr, /no bundle subdirectory named "nope"/);
+  });
+});
+
+describe("cli --colocated-remote-bundles", () => {
+  let dir: string;
+  let archive: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-remote-root-"));
+    archive = path.join(dir, "kb.tar.gz");
+    await fs.writeFile(
+      archive,
+      makeTarGz({
+        "kb-main/AGENTS.md": "# Guide\n",
+        "kb-main/acme/note.md":
+          "---\ntype: Note\ntitle: Note\n---\n\n" +
+          "See [runbook](../ops/runbook.md).\n",
+        "kb-main/ops/runbook.md": "---\ntype: Note\ntitle: Runbook\n---\n\nSteps.\n",
+      }),
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("mounts every subdirectory of a local archive root as read-only sibling bundles", async () => {
+    const { code, stdout } = await runCli([
+      "--colocated-remote-bundles",
+      archive,
+      "inspect",
+    ]);
+    assert.equal(code, 0);
+    assert.match(stdout, /"bundle": "acme"/);
+    assert.match(stdout, /"bundle": "ops"/);
+    // The ../ops link derives a cross-bundle edge between the remote siblings.
+    const match = /"bundle": "acme"[\s\S]*?"crossBundleEdges": (\d+)/.exec(stdout);
+    assert.ok(match, `no summary for acme in: ${stdout}`);
+    assert.equal(Number(match[1]), 1);
+  });
+
+  it("applies --only to the remote root", async () => {
+    const { code, stdout } = await runCli([
+      "--colocated-remote-bundles",
+      archive,
+      "--only",
+      "ops",
+      "inspect",
+    ]);
+    assert.equal(code, 0);
+    assert.match(stdout, /"bundle": "ops"/);
+    assert.doesNotMatch(stdout, /"bundle": "acme"/);
+
+    const bad = await runCli([
+      "--colocated-remote-bundles",
+      archive,
+      "--only",
+      "nope",
+      "inspect",
+    ]);
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /no bundle subdirectory named "nope"/);
+  });
+
+  it("satisfies the --only guard without --colocated-bundles", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle",
+      dir,
+      "--only",
+      "acme",
+      "inspect",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /--only requires --colocated-bundles or --colocated-remote-bundles/);
   });
 });
