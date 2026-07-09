@@ -1586,3 +1586,80 @@ describe("README tool documentation", () => {
     assert.deepEqual(undocumented, []);
   });
 });
+
+describe("colocated remote root tools", () => {
+  const DOC = "---\ntype: Table\ntitle: Orders\n---\n\nOrder rows.\n";
+  const ROOT_URL = "https://github.com/acme/kb/tree/main/kb";
+  const FILES = {
+    "kb/AGENTS.md": "# Guide\n\n- acme: schema tables.\n",
+    "kb/acme/tables/orders.md": DOC,
+    "kb/ops/runbook.md": "---\ntype: Note\n---\n\nSteps.\n",
+  };
+
+  it("load_colocated_remote_bundles mounts read-only bundles and returns the AGENTS.md guide inline", async () => {
+    const store = new OkfStore([], { fetchImpl: fakeGitHub(FILES) });
+    const client = await connectClient(store, { writable: true });
+
+    const result = (await callJson(client, "load_colocated_remote_bundles", {
+      url: ROOT_URL,
+    })) as {
+      url: string;
+      bundles: Array<{ id: string; concepts: number; readOnly: boolean }>;
+      agentsGuide?: string;
+    };
+    assert.equal(result.url, ROOT_URL);
+    assert.deepEqual(
+      result.bundles.map((b) => [b.id, b.concepts, b.readOnly]),
+      [
+        ["acme", 1, true],
+        ["ops", 1, true],
+      ],
+    );
+    // Instructions are fixed at initialization, so the guide travels in the
+    // tool result instead.
+    assert.equal(result.agentsGuide, "# Guide\n\n- acme: schema tables.\n");
+    assert.ok(!client.getInstructions()?.includes("schema tables"));
+
+    // Mounted bundles are queryable and writable tools reject them.
+    const concept = (await callJson(client, "get_concept", {
+      bundle: "acme",
+      id: "tables/orders",
+    })) as { frontmatter: { title: string } };
+    assert.equal(concept.frontmatter.title, "Orders");
+    const write = await callTool(client, "write_concept", {
+      bundle: "ops",
+      path: "new.md",
+      frontmatter: { type: "Note" },
+      body: "nope",
+    });
+    assert.equal(write.isError, true);
+    assert.match(textContent(write), /read-only/);
+  });
+
+  it("load_colocated_remote_bundles surfaces discovery errors as tool errors", async () => {
+    const store = new OkfStore([], { fetchImpl: fakeGitHub(FILES) });
+    const client = await connectClient(store);
+    const result = await callTool(client, "load_colocated_remote_bundles", {
+      url: ROOT_URL,
+      only: ["nope"],
+    });
+    assert.equal(result.isError, true);
+    assert.match(textContent(result), /no bundle subdirectory named "nope"/);
+  });
+
+  it("mounted siblings derive cross-bundle edges from ../ links", async () => {
+    const store = new OkfStore([], {
+      fetchImpl: fakeGitHub({
+        "kb/acme/note.md":
+          "---\ntype: Note\n---\n\nSee [runbook](../ops/runbook.md).\n",
+        "kb/ops/runbook.md": "---\ntype: Note\n---\n\nSteps.\n",
+      }),
+    });
+    const client = await connectClient(store);
+    await callJson(client, "load_colocated_remote_bundles", { url: ROOT_URL });
+    const summary = (await callJson(client, "graph_summary", {
+      bundle: "acme",
+    })) as { crossBundleEdges: number };
+    assert.equal(summary.crossBundleEdges, 1);
+  });
+});

@@ -5,7 +5,11 @@ import { buildBundle } from "./bundle.js";
 import type { BundleDocument } from "./bundle.js";
 import { canonicalUrlPrefixes, parseGitHubTreeUrl } from "./canonical.js";
 import type { GitHubTreeRef } from "./canonical.js";
-import type { LoadedBundle, RemoteBundleConfig } from "./types.js";
+import type {
+  ColocatedRemoteRootConfig,
+  LoadedBundle,
+  RemoteBundleConfig,
+} from "./types.js";
 
 export { parseGitHubTreeUrl } from "./canonical.js";
 export type { GitHubTreeRef } from "./canonical.js";
@@ -335,16 +339,13 @@ function parseZipEntries(buf: Buffer): ArchiveEntry[] {
 }
 
 /**
- * Turn raw archive entries into bundle documents: reject traversal,
- * skip dot files/dirs and mac zip junk, strip the single top-level
- * directory GitHub-style source archives wrap around the tree, keep
- * only `.md` files matching the configured globs, and enforce the
- * same count/byte limits as the GitHub tree path.
+ * Normalize raw archive entries into relative file paths: reject
+ * traversal, skip dot files/dirs and mac zip junk, and strip the single
+ * top-level directory GitHub-style source archives wrap around the tree.
  */
-function archiveDocuments(
+function normalizedArchiveFiles(
   entries: ArchiveEntry[],
-  config: RemoteBundleConfig,
-): BundleDocument[] {
+): { relPath: string; entry: ArchiveEntry }[] {
   const files: { relPath: string; entry: ArchiveEntry }[] = [];
   for (const entry of entries) {
     const raw = entry.path;
@@ -366,13 +367,26 @@ function archiveDocuments(
   const roots = new Set(files.map((file) => file.relPath.split("/", 1)[0]));
   const stripRoot =
     roots.size === 1 && files.every((file) => file.relPath.includes("/"));
+  if (!stripRoot) return files;
+  return files.map((file) => ({
+    relPath: file.relPath.slice(file.relPath.indexOf("/") + 1),
+    entry: file.entry,
+  }));
+}
 
+/**
+ * Turn raw archive entries into bundle documents: normalize paths
+ * (normalizedArchiveFiles), keep only `.md` files matching the configured
+ * globs, and enforce the same count/byte limits as the GitHub tree path.
+ */
+function archiveDocuments(
+  entries: ArchiveEntry[],
+  config: RemoteBundleConfig,
+): BundleDocument[] {
   const selected: { relPath: string; entry: ArchiveEntry }[] = [];
   let totalBytes = 0;
-  for (const file of files) {
-    const relPath = stripRoot
-      ? file.relPath.slice(file.relPath.indexOf("/") + 1)
-      : file.relPath;
+  for (const file of normalizedArchiveFiles(entries)) {
+    const relPath = file.relPath;
     if (!relPath.toLowerCase().endsWith(".md")) continue;
     if (!matchesFilters(relPath, config.include, config.exclude)) continue;
     selected.push({ relPath, entry: file.entry });
@@ -402,14 +416,12 @@ function remoteCanonicalUrls(config: RemoteBundleConfig): string[] {
   return [...new Set(urls)];
 }
 
-/** Load a read-only bundle from a tar.gz/tgz/zip archive (URL or local path). */
-async function loadArchiveBundle(
+/** Parse fetched archive bytes into entries (gunzip guarded by the unpacked cap). */
+function parseArchiveEntries(
   kind: ArchiveKind,
-  config: RemoteBundleConfig,
-  fetchImpl: typeof fetch,
-): Promise<LoadedBundle> {
-  const bytes = await fetchArchiveBytes(fetchImpl, config.url);
-  let entries: ArchiveEntry[];
+  bytes: Buffer,
+  url: string,
+): ArchiveEntry[] {
   if (kind === "tar.gz") {
     let tar: Buffer;
     try {
@@ -417,12 +429,21 @@ async function loadArchiveBundle(
         maxOutputLength: MAX_ARCHIVE_UNPACKED_BYTES,
       });
     } catch (err) {
-      throw new Error(`cannot decompress ${config.url}: ${(err as Error).message}`);
+      throw new Error(`cannot decompress ${url}: ${(err as Error).message}`);
     }
-    entries = parseTarEntries(tar);
-  } else {
-    entries = parseZipEntries(bytes);
+    return parseTarEntries(tar);
   }
+  return parseZipEntries(bytes);
+}
+
+/** Load a read-only bundle from a tar.gz/tgz/zip archive (URL or local path). */
+async function loadArchiveBundle(
+  kind: ArchiveKind,
+  config: RemoteBundleConfig,
+  fetchImpl: typeof fetch,
+): Promise<LoadedBundle> {
+  const bytes = await fetchArchiveBytes(fetchImpl, config.url);
+  const entries = parseArchiveEntries(kind, bytes, config.url);
   return buildBundle(config.id, config.url, archiveDocuments(entries, config), {
     readOnly: true,
     keepSources: true,
@@ -462,4 +483,164 @@ export async function loadRemoteBundle(
     keepSources: true,
     canonicalUrls: remoteCanonicalUrls(config),
   });
+}
+
+/** Result of mounting a colocated remote root (loadColocatedRemoteBundles). */
+export interface ColocatedRemoteMount {
+  /** One read-only bundle per subdirectory, in folder-name order. */
+  bundles: LoadedBundle[];
+  /** Content of the root's loose AGENTS.md (the bundle guide), when present. */
+  agentsGuide?: string;
+}
+
+/** One markdown file under a colocated root, addressed root-relative. */
+interface RootFile {
+  relPath: string;
+  size: number;
+  read: () => Promise<string>;
+}
+
+/** List every markdown file under the root tree (no filters, one walk). */
+async function listTreeRootFiles(
+  fetchImpl: typeof fetch,
+  config: ColocatedRemoteRootConfig,
+): Promise<RootFile[]> {
+  const tree = parseGitHubTreeUrl(config.url);
+  const files = await listMarkdownFiles(fetchImpl, tree, { id: "", url: config.url });
+  return files.map((file) => ({
+    relPath: file.relPath,
+    size: file.size,
+    read: async () => (await fetchOk(fetchImpl, file.downloadUrl)).text(),
+  }));
+}
+
+/** List every markdown entry of the root archive, wrapper dir stripped. */
+async function listArchiveRootFiles(
+  kind: ArchiveKind,
+  config: ColocatedRemoteRootConfig,
+  fetchImpl: typeof fetch,
+): Promise<RootFile[]> {
+  const bytes = await fetchArchiveBytes(fetchImpl, config.url);
+  return normalizedArchiveFiles(parseArchiveEntries(kind, bytes, config.url))
+    .filter((file) => file.relPath.toLowerCase().endsWith(".md"))
+    .map((file) => ({
+      relPath: file.relPath,
+      size: file.entry.size,
+      read: async () => file.entry.data().toString("utf8"),
+    }));
+}
+
+/**
+ * Mount a published colocated root by URL — the remote counterpart of
+ * `--colocated-bundles`. The root (a GitHub tree, or a tar.gz/tgz/zip
+ * archive) is listed once and its markdown partitioned by immediate
+ * subdirectory: each subdirectory containing markdown becomes a read-only
+ * in-memory bundle with `id` = folder basename and `colocatedRoot` = the
+ * root URL, so relative `../sibling/...` links between the mounted bundles
+ * derive cross-bundle edges exactly like local colocated siblings.
+ *
+ * Rules mirror local discovery: dot directories are skipped, loose root
+ * files belong to no bundle (the root AGENTS.md is captured as the mount's
+ * bundle guide), `only` restricts the mount to named subfolders (an unknown
+ * name is an error), and include/exclude globs filter bundle-relative paths
+ * within every bundle. The file-count and byte limits apply across the
+ * whole root, not per bundle, so the safety ceiling stays meaningful.
+ *
+ * Canonical URLs derive per bundle: `<treeUrl>/<folder>` for tree mounts
+ * (expanded to tree/blob/raw prefixes as usual) and `<canonicalUrl>/<folder>`
+ * when the root declares a published URL — the only source for archives,
+ * which have no per-file URLs.
+ */
+export async function loadColocatedRemoteBundles(
+  config: ColocatedRemoteRootConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ColocatedRemoteMount> {
+  const kind = archiveKind(config.url);
+  const files =
+    kind !== null
+      ? await listArchiveRootFiles(kind, config, fetchImpl)
+      : await listTreeRootFiles(fetchImpl, config);
+
+  // Partition by immediate subdirectory; loose root files belong to no
+  // bundle, but the exact name AGENTS.md is the root's bundle guide.
+  const folders = new Map<string, { relPath: string; file: RootFile }[]>();
+  let agents: RootFile | undefined;
+  for (const file of files) {
+    const slash = file.relPath.indexOf("/");
+    if (slash === -1) {
+      if (file.relPath === "AGENTS.md") agents = file;
+      continue;
+    }
+    const folder = file.relPath.slice(0, slash);
+    const bucket = folders.get(folder) ?? [];
+    bucket.push({ relPath: file.relPath.slice(slash + 1), file });
+    folders.set(folder, bucket);
+  }
+
+  let names = [...folders.keys()].sort();
+  if (config.only !== undefined) {
+    names = [...new Set(config.only)].sort();
+    for (const name of names) {
+      if (!folders.has(name)) {
+        throw new Error(
+          `only: no bundle subdirectory named "${name}" under ${config.url}`,
+        );
+      }
+    }
+  }
+
+  const selected = new Map<string, { relPath: string; file: RootFile }[]>();
+  let fileCount = 0;
+  let totalBytes = agents?.size ?? 0;
+  for (const name of names) {
+    const kept = folders
+      .get(name)!
+      .filter(({ relPath }) => matchesFilters(relPath, config.include, config.exclude));
+    if (kept.length === 0) continue;
+    selected.set(name, kept);
+    fileCount += kept.length;
+    if (fileCount > MAX_REMOTE_FILES) throw tooManyFilesError(config.url);
+    for (const { file } of kept) totalBytes += file.size;
+  }
+  if (totalBytes > MAX_REMOTE_BYTES) {
+    throw bundleTooLargeError(config.url, totalBytes);
+  }
+  if (selected.size === 0) {
+    throw new Error(
+      `no bundle subdirectories with markdown under colocated remote root: ${config.url}`,
+    );
+  }
+
+  const rootUrl = config.url.replace(/\/+$/, "");
+  const canonicalRoot = config.canonicalUrl?.replace(/\/+$/, "");
+  const bundles: LoadedBundle[] = [];
+  for (const [folder, entries] of selected) {
+    const documents: BundleDocument[] = [];
+    for (const { relPath, file } of entries) {
+      documents.push({ path: relPath, source: await file.read() });
+    }
+    const canonicalUrls = [
+      ...(kind === null ? canonicalUrlPrefixes(`${rootUrl}/${folder}`) : []),
+      ...(canonicalRoot !== undefined
+        ? canonicalUrlPrefixes(`${canonicalRoot}/${folder}`)
+        : []),
+    ];
+    bundles.push(
+      buildBundle(
+        folder,
+        kind === null ? `${rootUrl}/${folder}` : config.url,
+        documents,
+        {
+          readOnly: true,
+          keepSources: true,
+          canonicalUrls: [...new Set(canonicalUrls)],
+          colocatedRoot: rootUrl,
+        },
+      ),
+    );
+  }
+  return {
+    bundles,
+    ...(agents !== undefined && { agentsGuide: await agents.read() }),
+  };
 }

@@ -117,6 +117,33 @@ export interface RemoteBundleConfig {
   canonicalUrl?: string;
 }
 
+/**
+ * A published colocated root mounted from a remote source: each immediate
+ * subdirectory of the tree (or archive) containing markdown becomes its own
+ * read-only bundle, `id` = folder basename — the remote counterpart of
+ * `--colocated-bundles`.
+ */
+export interface ColocatedRemoteRootConfig {
+  /**
+   * Public GitHub tree URL of the root
+   * (https://github.com/<owner>/<repo>/tree/<ref>[/<path>]), or a
+   * `.tar.gz`/`.tgz`/`.zip` archive — any http(s) URL or local path.
+   */
+  url: string;
+  /** Mount only these immediate subfolders; an unknown name is an error. */
+  only?: string[];
+  /** Glob patterns over bundle-relative paths; when present, only matches load. */
+  include?: string[];
+  /** Glob patterns over bundle-relative paths to skip. */
+  exclude?: string[];
+  /**
+   * Published canonical URL of the root: every bundle derives
+   * `<url>/<folder>`. Tree mounts also derive canonicals from the tree URL
+   * itself; archives have no per-file URLs, so this is their only source.
+   */
+  canonicalUrl?: string;
+}
+
 export interface LoadedBundle {
   id: string;
   /** Absolute path to the bundle root, or the source URL for remote bundles. */

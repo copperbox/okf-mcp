@@ -183,3 +183,117 @@ describe("OkfStore remote bundles", () => {
     }
   });
 });
+
+describe("OkfStore colocated remote roots", () => {
+  const DOC = "---\ntype: Table\n---\n\nRows.\n";
+  const ROOT_URL = "https://github.com/acme/kb/tree/main/kb";
+  const FILES = {
+    "kb/AGENTS.md": "# Guide\n",
+    "kb/acme/note.md": DOC,
+    "kb/ops/runbook.md": DOC,
+  };
+
+  it("mounts each subdirectory at startup and reports the mount", async () => {
+    const store = new OkfStore([], {
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: fakeGitHub(FILES),
+    });
+    await store.load();
+    assert.deepEqual(
+      store.bundles().map((b) => [b.id, b.readOnly]),
+      [
+        ["acme", true],
+        ["ops", true],
+      ],
+    );
+    assert.deepEqual(store.colocatedRemoteRootMounts(), [
+      { url: ROOT_URL, bundleIds: ["acme", "ops"], agentsGuide: "# Guide\n" },
+    ]);
+  });
+
+  it("rejects a discovered id colliding with another mount, naming the root", async () => {
+    const store = new OkfStore([], {
+      remotes: [{ id: "acme", url: "https://github.com/acme/kb/tree/main/kb/acme" }],
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: fakeGitHub(FILES),
+    });
+    await assert.rejects(
+      store.load(),
+      /duplicate bundle id: acme.*--colocated-remote-bundles https:\/\/github\.com\/acme\/kb\/tree\/main\/kb/,
+    );
+  });
+
+  it("addColocatedRemoteBundles mounts at runtime and rejects a repeated root", async () => {
+    const store = new OkfStore([], { fetchImpl: fakeGitHub(FILES) });
+    await store.load();
+    const mount = await store.addColocatedRemoteBundles({ url: ROOT_URL });
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["acme", "ops"]);
+    assert.equal(mount.agentsGuide, "# Guide\n");
+    assert.equal(store.bundle("ops").readOnly, true);
+    await assert.rejects(
+      store.addColocatedRemoteBundles({ url: ROOT_URL }),
+      /already mounted/,
+    );
+    // A later per-bundle remote mount cannot shadow a colocated bundle.
+    await assert.rejects(
+      store.addRemoteBundle({ id: "ops", url: `${ROOT_URL}/ops` }),
+      /duplicate bundle id: ops.*--colocated-remote-bundles/,
+    );
+  });
+
+  it("a failed runtime mount leaves the store unchanged", async () => {
+    const store = new OkfStore([], { fetchImpl: fakeGitHub(FILES) });
+    await store.load();
+    await assert.rejects(
+      store.addColocatedRemoteBundles({ url: ROOT_URL, only: ["nope"] }),
+      /no bundle subdirectory named "nope"/,
+    );
+    assert.deepEqual(store.bundles(), []);
+    assert.deepEqual(store.colocatedRemoteRootMounts(), []);
+    // The root is free to mount again with a valid selection.
+    const mount = await store.addColocatedRemoteBundles({ url: ROOT_URL, only: ["ops"] });
+    assert.deepEqual(mount.bundles.map((b) => b.id), ["ops"]);
+  });
+
+  it("reloadBundles refetches the root once and tracks appeared/vanished folders", async () => {
+    let files: Record<string, string> = FILES;
+    const store = new OkfStore([], {
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: ((...params: Parameters<typeof fetch>) =>
+        fakeGitHub(files)(...params)) as typeof fetch,
+    });
+    await store.load();
+
+    files = {
+      "kb/acme/note.md": DOC,
+      "kb/acme/extra.md": DOC,
+      "kb/docs/guide.md": DOC,
+    };
+    const stats = await store.reloadBundles();
+    assert.deepEqual(stats, [
+      { bundle: "acme", concepts: 2, problems: 0, added: ["extra"], removed: [], changed: [] },
+      { bundle: "ops", concepts: 0, problems: 0, added: [], removed: ["runbook"], changed: [] },
+      { bundle: "docs", concepts: 1, problems: 0, added: ["guide"], removed: [], changed: [] },
+    ]);
+    assert.deepEqual(
+      store.bundles().map((b) => b.id).sort(),
+      ["acme", "docs"],
+    );
+  });
+
+  it("reloading one colocated bundle by id refetches the whole root", async () => {
+    let files: Record<string, string> = FILES;
+    const store = new OkfStore([], {
+      colocatedRemoteRoots: [{ url: ROOT_URL }],
+      fetchImpl: ((...params: Parameters<typeof fetch>) =>
+        fakeGitHub(files)(...params)) as typeof fetch,
+    });
+    await store.load();
+
+    files = { ...FILES, "kb/ops/extra.md": DOC };
+    const bundle = await store.reloadBundle("acme");
+    assert.equal(bundle.id, "acme");
+    // The sibling picked up the upstream change too.
+    assert.equal(store.bundle("ops").concepts.size, 2);
+  });
+});

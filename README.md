@@ -183,7 +183,7 @@ okf-mcp --colocated-bundles /path/to/knowledge \
         --canonical-url https://github.com/acme/knowledge/tree/main
 ```
 
-Each colocated bundle derives `canonicalUrl = <rootUrl>/<folder>` (here `…/tree/main/acme`, `…/tree/main/ops`), and the derived URLs get the same tree/blob/raw prefix expansion as explicitly declared ones. A bare URL works when exactly one colocated root is configured; with several, name the root: `--canonical-url /path/to/knowledge=<url>`. An explicit per-bundle `--canonical-url id=<url>` still overrides the derived value. Non-GitHub root URLs work too — the folder name is appended to the literal prefix. Consumers are unaffected by the layout: they can still mount an individual bundle straight from its subdirectory tree URL (`--remote-bundle acme=https://github.com/acme/knowledge/tree/main/acme`) as before.
+Each colocated bundle derives `canonicalUrl = <rootUrl>/<folder>` (here `…/tree/main/acme`, `…/tree/main/ops`), and the derived URLs get the same tree/blob/raw prefix expansion as explicitly declared ones. A bare URL works when exactly one colocated root is configured; with several, name the root: `--canonical-url /path/to/knowledge=<url>`. An explicit per-bundle `--canonical-url id=<url>` still overrides the derived value. Non-GitHub root URLs work too — the folder name is appended to the literal prefix. Consumers can still mount an individual bundle straight from its subdirectory tree URL (`--remote-bundle acme=https://github.com/acme/knowledge/tree/main/acme`) — or mount the whole published root by one URL with [`--colocated-remote-bundles`](#consuming-a-published-colocated-root-by-one-url).
 
 #### Root `AGENTS.md`: the bundle guide
 
@@ -202,6 +202,18 @@ npm run dev -- \
 ```
 
 `--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are not supported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The same thing is available at runtime through the `load_remote_bundle` tool (`{ id, url, include?, exclude?, canonicalUrl? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded, with the tree or archive URL as the source.
+
+### Consuming a published colocated root by one URL
+
+A [colocated root](#colocated-bundles-vault-as-monorepo) published as a single repo can be mounted whole — each subfolder becoming its own read-only bundle — instead of repeating `--remote-bundle` per subdirectory tree URL:
+
+```bash
+okf-mcp --colocated-remote-bundles https://github.com/acme/knowledge/tree/main inspect
+```
+
+The same discovery rules as local `--colocated-bundles` apply: every immediate subdirectory containing markdown mounts as a bundle with the folder name as its id (a collision with another mount is an error naming the root), dot directories are skipped, and loose root files belong to no bundle. The mounted bundles declare the root URL as their shared colocated root, so relative `../sibling/...` links inside the published repo derive [cross-bundle edges](#cross-bundle-awareness) between the remote siblings — a repo mounted by URL stays as coherent as a local clone, with no rewrite step. Tree mounts derive each bundle's canonical URL as `<treeUrl>/<folder>` automatically (tree/blob/raw forms all match); `.tar.gz`/`.tgz`/`.zip` roots (any http(s) URL, or a local path; entries are partitioned by first path segment after the wrapper directory) have no per-file URLs, so they derive canonicals only from an explicit root `canonicalUrl`. The flag is repeatable, `--only <folder,folder,...>` restricts the mount to named subfolders exactly as for local roots, and the 500-file / 10 MiB ceilings apply across the whole root — not per bundle — so mounting a root is never more expensive than mounting one big bundle.
+
+A root `AGENTS.md` travels with the mount: the CLI fetches it and appends it to the server instructions as a [bundle guide](#root-agentsmd-the-bundle-guide), same as a local colocated root. The runtime counterpart is the `load_colocated_remote_bundles` tool (`{ url, only?, include?, exclude?, canonicalUrl? }`) — MCP instructions are fixed at initialization, so the tool returns the `AGENTS.md` content in its result (`agentsGuide`) instead, and the agent still receives the guide. Reloading any mounted bundle refetches the whole root, tracking subfolders that appeared or vanished upstream.
 
 Remote bundles are strictly read-only and sandboxed:
 
@@ -258,6 +270,7 @@ Read tools:
 | `list_bundles` | Configured bundles with concept counts, read-only flags, and each bundle's declared `description` |
 | `reload_bundles` | Re-read bundles (disk, remote tree, or archive) to pick up external edits; reports added/removed/changed concepts |
 | `load_remote_bundle` | Index a read-only bundle from a public GitHub tree URL or a `.tar.gz`/`.tgz`/`.zip` archive, in memory only |
+| `load_colocated_remote_bundles` | Mount a published colocated root by URL — every subfolder becomes its own read-only bundle — returning the root `AGENTS.md` guide inline in the result |
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs and declared `description`s |
 | `list_concepts` | Concept metadata (including the `resource` URI when set), filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
@@ -297,8 +310,8 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 
 ```
 okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
-        [--remote-bundle id=<url>] [--canonical-url [id=]<url>]
-        [--writable] [--watch] [command]
+        [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
+        [--canonical-url [id=]<url>] [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
@@ -316,7 +329,7 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
 okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
 
-`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
+`--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo). `--colocated-remote-bundles <url>` (repeatable) does the same for a published root — a GitHub tree URL or `.tar.gz`/`.tgz`/`.zip` archive — mounting each subfolder as a read-only bundle; see [consuming a published colocated root](#consuming-a-published-colocated-root-by-one-url).
 
 `--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness); with a colocated root's path as the id — or a bare URL when exactly one colocated root is configured — every bundle under the root derives `<url>/<folder>`, with explicit per-bundle flags taking precedence.
 
