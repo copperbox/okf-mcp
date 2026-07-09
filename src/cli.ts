@@ -23,7 +23,7 @@ const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
   okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
-          [--remote-bundle id=<url>] [--canonical-url id=<url>]
+          [--remote-bundle id=<url>] [--canonical-url [id=]<url>]
           [--writable] [--watch] [command]
 
 Commands:
@@ -53,10 +53,15 @@ Options:
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
                           repeatable, indexed in memory at startup.
-  --canonical-url id=url  Canonical published URL of a bundle's root (e.g. its
+  --canonical-url [id=]url
+                          Canonical published URL of a bundle's root (e.g. its
                           GitHub tree URL); repeatable. Citations and external
                           links under it resolve to that bundle's concepts as
-                          derived cross-bundle graph edges.
+                          derived cross-bundle graph edges. With a colocated
+                          root's path as the id — or a bare url when exactly
+                          one --colocated-bundles root is configured — every
+                          bundle under the root derives <url>/<folder>; an
+                          explicit per-bundle id=url still overrides.
   --out <file>            pack only: output archive path ending in .tar.gz,
                           .tgz, or .zip; defaults to <bundle>.tar.gz
   --include <glob>        pack only: pack matching bundle-relative paths only;
@@ -98,23 +103,57 @@ function parseRemoteBundleFlags(values: string[]): RemoteBundleConfig[] {
 }
 
 /**
- * Attach `--canonical-url id=url` values to the matching local or remote
- * bundle config (mutating in place). Unknown IDs are an error — a typo would
- * otherwise silently disable cross-bundle matching.
+ * Attach `--canonical-url` values to the matching bundle configs (mutating in
+ * place). `id=url` targets a local or remote bundle; a colocated root's path
+ * as the id — or a bare URL when exactly one root is configured — declares
+ * the root's published URL, and every bundle discovered under it derives
+ * `<rootUrl>/<folder>` (a GitHub tree URL stays a tree URL, so the derived
+ * value expands to tree/blob/raw prefixes like any other). An explicit
+ * per-bundle `id=url` beats the derived value regardless of flag order.
+ * Unknown IDs are an error — a typo would otherwise silently disable
+ * cross-bundle matching.
  */
 function applyCanonicalUrlFlags(
   values: string[],
   configs: BundleConfig[],
   remotes: RemoteBundleConfig[],
+  colocatedRoots: string[],
 ): void {
+  const rootUrls = new Map<string, string>();
   for (const value of values) {
+    if (/^https?:\/\//i.test(value)) {
+      const roots = [...new Set(colocatedRoots.map((r) => path.resolve(r)))];
+      if (roots.length !== 1) {
+        throw new Error(
+          "--canonical-url without id= requires exactly one --colocated-bundles " +
+            `root (found ${roots.length}); use --canonical-url <root>=<url>`,
+        );
+      }
+      rootUrls.set(roots[0]!, value);
+      continue;
+    }
     const [id, url] = splitIdFlag("--canonical-url", "id=<url>", value);
     const config =
       configs.find((c) => c.id === id) ?? remotes.find((r) => r.id === id);
-    if (config === undefined) {
-      throw new Error(`--canonical-url names an unknown bundle: ${id}`);
+    if (config !== undefined) {
+      config.canonicalUrl = url;
+      continue;
     }
-    config.canonicalUrl = url;
+    const root = colocatedRoots.find((r) => path.resolve(r) === path.resolve(id));
+    if (root === undefined) {
+      throw new Error(
+        `--canonical-url names an unknown bundle or colocated root: ${id}`,
+      );
+    }
+    rootUrls.set(path.resolve(root), url);
+  }
+  for (const config of configs) {
+    if (config.canonicalUrl !== undefined || config.colocatedRoot === undefined) {
+      continue;
+    }
+    const rootUrl = rootUrls.get(path.resolve(config.colocatedRoot));
+    if (rootUrl === undefined) continue;
+    config.canonicalUrl = `${rootUrl.replace(/\/+$/, "")}/${config.id}`;
   }
 }
 
@@ -195,7 +234,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     configs.push(...discovered);
   }
   const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
-  applyCanonicalUrlFlags(values["canonical-url"] ?? [], configs, remotes);
+  try {
+    applyCanonicalUrlFlags(
+      values["canonical-url"] ?? [],
+      configs,
+      remotes,
+      values["colocated-bundles"] ?? [],
+    );
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return 2;
+  }
   if (configs.length === 0 && remotes.length === 0) {
     console.error(
       "error: at least one --bundle, --colocated-bundles, or --remote-bundle is required\n",

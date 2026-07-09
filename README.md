@@ -176,6 +176,15 @@ okf-mcp --colocated-bundles /path/to/knowledge --only acme,ops
 
 Only the named subfolders are mounted; everything else in the root is ignored entirely — not discovered, not listed — which keeps startup light and stops irrelevant bundles from diluting search results, type/tag vocabularies, and `graph_summary` sweeps. A name that doesn't exist as a subdirectory of the root (or exists but contains no markdown) is a startup error rather than a silent skip, and passing `--only` without `--colocated-bundles` is an error too.
 
+When the root is published as one repo, every bundle's canonical URL is mechanical — the repo's tree URL plus the folder name — so one flag declares them all for [cross-bundle awareness](#cross-bundle-awareness):
+
+```bash
+okf-mcp --colocated-bundles /path/to/knowledge \
+        --canonical-url https://github.com/acme/knowledge/tree/main
+```
+
+Each colocated bundle derives `canonicalUrl = <rootUrl>/<folder>` (here `…/tree/main/acme`, `…/tree/main/ops`), and the derived URLs get the same tree/blob/raw prefix expansion as explicitly declared ones. A bare URL works when exactly one colocated root is configured; with several, name the root: `--canonical-url /path/to/knowledge=<url>`. An explicit per-bundle `--canonical-url id=<url>` still overrides the derived value. Non-GitHub root URLs work too — the folder name is appended to the literal prefix. Consumers are unaffected by the layout: they can still mount an individual bundle straight from its subdirectory tree URL (`--remote-bundle acme=https://github.com/acme/knowledge/tree/main/acme`) as before.
+
 #### Root `AGENTS.md`: the bundle guide
 
 If the colocated root holds an `AGENTS.md` (exact name), its content is appended to the MCP server instructions under a `Bundle guide (from AGENTS.md):` delimiter, so every session starts knowing which bundles exist and which matter for what kind of work — and passes explicit `bundle` arguments instead of sweeping everything. Write it as a short registry for an agent deciding where to look: a line or two per bundle, what it covers, when to reach for it. It doubles as a readable vault-root note in Obsidian and travels with the repo.
@@ -210,6 +219,7 @@ OKF §5 deliberately has no cross-bundle link syntax, but the server knows every
 
 - GitHub tree mounts get their canonical location automatically (the `tree`, `blob`, and `raw.githubusercontent.com` forms of the tree URL all match).
 - Local clones and archives have no inherent URL: give them one with `--canonical-url id=<url>` (or `canonicalUrl` on `load_remote_bundle`), e.g. the GitHub tree URL of the shared bundle's published location, so citations to it resolve even when it is mounted from a local checkout.
+- [Colocated bundles](#colocated-bundles-vault-as-monorepo) published as one repo need only a root-level `--canonical-url <rootUrl>`: each bundle derives `<rootUrl>/<folder>`, and explicit per-bundle flags override.
 - `graph_summary` reports `crossBundleEdges`; `get_neighbors` and `find_path` traverse derived edges when called with `crossBundle: true` (node IDs become `bundle:concept` and carry the target's bundle); `export_graph` with `crossBundle: true` emits one namespaced multi-bundle graph with derived edges rendered dashed in `dot`/`mermaid`.
 
 ## The bundle (your "OKF brain")
@@ -285,7 +295,7 @@ The automatic log entry from a concept write, update, delete, or rename goes to 
 
 ```
 okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
-        [--remote-bundle id=<url>] [--canonical-url id=<url>]
+        [--remote-bundle id=<url>] [--canonical-url [id=]<url>]
         [--writable] [--watch] [command]
 
   mcp                 Start the stdio MCP server (default)
@@ -306,7 +316,7 @@ okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts
 
 `--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
 
-`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness).
+`--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness); with a colocated root's path as the id — or a bare URL when exactly one colocated root is configured — every bundle under the root derives `<url>/<folder>`, with explicit per-bundle flags taking precedence.
 
 `--watch` (mcp only) auto-reloads local bundles when `.md` files change on disk, debounced so an editor save burst triggers one reload; `.obsidian/` and other dot directories are ignored. Remote bundles still reload only via the `reload_bundles` tool. Where recursive `fs.watch` is unsupported, the server logs a note to stderr and continues without watching.
 

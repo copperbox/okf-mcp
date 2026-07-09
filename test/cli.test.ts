@@ -34,6 +34,130 @@ function runCli(args: string[]): Promise<CliResult> {
   });
 }
 
+describe("cli --canonical-url for colocated roots", () => {
+  let root: string;
+
+  /** crossBundleEdges reported for one bundle in `inspect` output. */
+  function crossBundleEdges(stdout: string, bundle: string): number {
+    const match = new RegExp(
+      `"bundle": "${bundle}"[\\s\\S]*?"crossBundleEdges": (\\d+)`,
+    ).exec(stdout);
+    assert.ok(match, `no summary for bundle ${bundle} in: ${stdout}`);
+    return Number(match[1]);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-canonical-"));
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Note\ntitle: Runbook\n---\n\nSteps.\n",
+    );
+    await fs.mkdir(path.join(root, "acme"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("derives per-bundle canonical URLs from a bare GitHub root URL", async () => {
+    // acme cites ops via the blob form of <rootUrl>/ops — proving the derived
+    // URL flowed through canonicalUrlPrefixes' tree/blob/raw expansion.
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\n" +
+        "See [runbook](https://github.com/acme/kb/blob/main/vault/ops/runbook.md).\n",
+    );
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "--canonical-url",
+      "https://github.com/acme/kb/tree/main/vault",
+      "inspect",
+    ]);
+    assert.equal(code, 0);
+    assert.equal(crossBundleEdges(stdout, "acme"), 1);
+  });
+
+  it("accepts the root's path as the flag id and path-appends non-GitHub URLs", async () => {
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\n" +
+        "See [runbook](https://kb.example.com/vault/ops/runbook.md).\n",
+    );
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "--canonical-url",
+      `${root}=https://kb.example.com/vault`,
+      "inspect",
+    ]);
+    assert.equal(code, 0);
+    assert.equal(crossBundleEdges(stdout, "acme"), 1);
+  });
+
+  it("lets an explicit per-bundle --canonical-url override the derived URL", async () => {
+    // Two source concepts: only the override URL should resolve, so exactly
+    // one edge — two would mean the derived URL survived the override.
+    await fs.writeFile(
+      path.join(root, "acme", "derived.md"),
+      "---\ntype: Note\ntitle: Derived\n---\n\n" +
+        "See [runbook](https://kb.example.com/vault/ops/runbook.md).\n",
+    );
+    await fs.writeFile(
+      path.join(root, "acme", "override.md"),
+      "---\ntype: Note\ntitle: Override\n---\n\n" +
+        "See [runbook](https://kb.example.com/other/runbook.md).\n",
+    );
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "--canonical-url",
+      `${root}=https://kb.example.com/vault`,
+      "--canonical-url",
+      "ops=https://kb.example.com/other",
+      "inspect",
+    ]);
+    assert.equal(code, 0);
+    assert.equal(crossBundleEdges(stdout, "acme"), 1);
+  });
+
+  it("rejects a bare URL when no colocated root is configured", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "--canonical-url",
+      "https://kb.example.com/vault",
+      "inspect",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /exactly one --colocated-bundles root/);
+  });
+
+  it("rejects a bare URL when several colocated roots are configured", async () => {
+    const second = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-canonical-b-"));
+    await fs.mkdir(path.join(second, "docs"));
+    await fs.writeFile(
+      path.join(second, "docs", "guide.md"),
+      "---\ntype: Note\ntitle: Guide\n---\n\nText.\n",
+    );
+    try {
+      const { code, stderr } = await runCli([
+        "--colocated-bundles",
+        root,
+        "--colocated-bundles",
+        second,
+        "--canonical-url",
+        "https://kb.example.com/vault",
+        "inspect",
+      ]);
+      assert.equal(code, 2);
+      assert.match(stderr, /exactly one --colocated-bundles root/);
+    } finally {
+      await fs.rm(second, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("cli --only", () => {
   let root: string;
 
