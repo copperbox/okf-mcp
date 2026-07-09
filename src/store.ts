@@ -124,14 +124,9 @@ export class OkfStore {
    * through the same reload_bundles path as local bundles.
    */
   async addRemoteBundle(config: RemoteBundleConfig): Promise<LoadedBundle> {
-    if (
-      this.remotes.has(config.id) ||
-      this.configs.some((c) => c.id === config.id)
-    ) {
-      throw duplicateBundleIdError(
-        config.id,
-        this.configs.find((c) => c.id === config.id),
-      );
+    const existing = this.configs.find((c) => c.id === config.id);
+    if (this.remotes.has(config.id) || existing !== undefined) {
+      throw duplicateBundleIdError(config.id, existing);
     }
     const bundle = await loadRemoteBundle(config, this.fetchImpl);
     this.remotes.set(config.id, config);
