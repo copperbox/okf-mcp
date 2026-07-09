@@ -17,7 +17,11 @@ import {
   updateConcept,
   writeConcept,
 } from "./authoring.js";
-import { readBundleDocument } from "./bundle.js";
+import {
+  colocatedSiblings,
+  readBundleDocument,
+  resolveOutsideLink,
+} from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import {
   buildGraph,
@@ -401,7 +405,7 @@ export function createOkfServer(
     {
       title: "Get citations",
       description:
-        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept in the bundle, or missing (a bundle-relative target that does not resolve)",
+        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept (in the bundle, or reached by a relative `../` link into a mounted colocated sibling bundle), or missing (a relative target that does not resolve)",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
@@ -411,8 +415,12 @@ export function createOkfServer(
       const loadedBundle = store.bundle(bundle);
       const concept = store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
-      const { citations } = extractCitations(concept.body, concept.path, (cid) =>
-        loadedBundle.concepts.has(cid),
+      const siblings = colocatedSiblings(loadedBundle, store.bundles());
+      const { citations } = extractCitations(
+        concept.body,
+        concept.path,
+        (cid) => loadedBundle.concepts.has(cid),
+        (path) => resolveOutsideLink(path, siblings) !== undefined,
       );
       return json(citations);
     },
@@ -700,7 +708,11 @@ export function createOkfServer(
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
-      json(await Promise.all(selectBundles(bundle).map(validateBundle))),
+      json(
+        await Promise.all(
+          selectBundles(bundle).map((b) => validateBundle(b, store.bundles())),
+        ),
+      ),
   );
 
   if (options.writable) {

@@ -251,3 +251,66 @@ Also see [the docs](https://example.com/docs).
     assert.match(exportGraph(graph, "mermaid"), /n\d+ -\.-> n\d+/);
   });
 });
+
+describe("colocated cross-bundle links", () => {
+  const acme = (colocatedRoot: string | null = "/vault") =>
+    buildBundle(
+      "acme",
+      "/vault/acme",
+      [{ path: "tables/orders.md", source: "---\ntype: Table\n---\n\nRows.\n" }],
+      colocatedRoot === null ? {} : { colocatedRoot },
+    );
+
+  const ops = (colocatedRoot: string | null = "/vault") =>
+    buildBundle(
+      "ops",
+      "/vault/ops",
+      [
+        {
+          path: "runbooks/freshness.md",
+          source: [
+            "---",
+            "type: Runbook",
+            "---",
+            "",
+            "Check [orders](../../acme/tables/orders.md) and",
+            "[the same, extensionless](../../acme/tables/orders).",
+            "Ignore [a missing sibling concept](../../acme/tables/shipments.md),",
+            "[an unmounted folder](../../lore/tales.md), and",
+            "[an escape](../../../elsewhere/thing.md).",
+          ].join("\n"),
+        },
+      ],
+      colocatedRoot === null ? {} : { colocatedRoot },
+    );
+
+  it("derives edges from ../sibling links between colocated bundles, deduplicated", () => {
+    // The .md and extensionless links to the same concept collapse into one
+    // edge; unresolvable targets derive nothing.
+    assert.deepEqual(deriveCrossBundleEdges([ops(), acme()]), [
+      { from: "ops:runbooks/freshness", to: "acme:tables/orders", kind: "cross-bundle" },
+    ]);
+  });
+
+  it("derives nothing between non-colocated mounts", () => {
+    assert.deepEqual(deriveCrossBundleEdges([ops(null), acme(null)]), []);
+    // A ../ link only reaches bundles declaring the *same* colocated root.
+    assert.deepEqual(deriveCrossBundleEdges([ops("/vault"), acme("/other")]), []);
+    assert.deepEqual(deriveCrossBundleEdges([ops("/vault"), acme(null)]), []);
+  });
+
+  it("carries colocated edges into the multi-bundle graph and the summary", () => {
+    const bundles = [ops(), acme()];
+    const graph = buildMultiGraph(bundles);
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.from === "ops:runbooks/freshness" &&
+          e.to === "acme:tables/orders" &&
+          e.kind === "cross-bundle",
+      ),
+    );
+    assert.equal(graphSummary(bundles[0]!, bundles).crossBundleEdges, 1);
+    assert.equal(graphSummary(bundles[1]!, bundles).crossBundleEdges, 1);
+  });
+});

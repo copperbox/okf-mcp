@@ -228,7 +228,8 @@ export interface Citation {
   target: string;
   /**
    * external: the target has a URI scheme; concept: it resolves to a
-   * concept in the bundle; missing: bundle-relative but unresolved.
+   * concept in the bundle (or, through `outsideResolves`, to a colocated
+   * sibling bundle's concept); missing: bundle-relative but unresolved.
    */
   kind: "external" | "concept" | "missing";
 }
@@ -247,11 +248,15 @@ const CITATION_ENTRY = /^\[(\d+)\][ \t]+(\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")
  * heading (spec §8). Targets are classified like body links, with
  * bundle-relative targets resolved through `conceptExists`; unresolved
  * ones are `missing`, never an error (consistent with §9 tolerance).
+ * `outsideResolves` lets callers resolve `../` targets that leave the
+ * bundle root (e.g. into a mounted colocated sibling — see
+ * resolveOutsideLink); a resolving one classifies as `concept`.
  */
 export function extractCitations(
   body: string,
   conceptPath: string,
   conceptExists: (id: string) => boolean,
+  outsideResolves: (path: string) => boolean = () => false,
 ): ExtractedCitations {
   const citations: Citation[] = [];
   const malformed: string[] = [];
@@ -277,7 +282,7 @@ export function extractCitations(
       index: Number(entry[1]),
       text: link.text,
       target: link.target,
-      kind: citationKind(link, conceptExists),
+      kind: citationKind(link, conceptExists, outsideResolves),
     });
   }
   return { citations, malformed };
@@ -286,12 +291,20 @@ export function extractCitations(
 function citationKind(
   link: ConceptLink,
   conceptExists: (id: string) => boolean,
+  outsideResolves: (path: string) => boolean,
 ): Citation["kind"] {
   if (link.kind === "external") return "external";
   if (
     link.kind === "concept" &&
     link.path !== undefined &&
     conceptExists(conceptIdFromPath(link.path))
+  ) {
+    return "concept";
+  }
+  if (
+    link.kind === "outside" &&
+    link.path !== undefined &&
+    outsideResolves(link.path)
   ) {
     return "concept";
   }

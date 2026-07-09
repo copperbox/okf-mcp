@@ -22,13 +22,20 @@ export type {
 } from "./authoring.js";
 export {
   buildBundle,
+  colocatedSiblings,
   declaredDescription,
   declaredOkfVersion,
   discoverColocatedBundles,
   loadBundle,
+  outsideLinkDangles,
   readBundleDocument,
+  resolveOutsideLink,
 } from "./bundle.js";
-export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
+export type {
+  BuildBundleOptions,
+  BundleDocument,
+  OutsideLinkTarget,
+} from "./bundle.js";
 export { canonicalUrlPrefixes, resolveUrlToConcept } from "./canonical.js";
 export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
 export type {

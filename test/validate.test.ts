@@ -281,3 +281,88 @@ describe("validateBundle okf_version (spec §11)", () => {
     }
   });
 });
+
+describe("validateBundle colocated `../` links", () => {
+  const sibling = () =>
+    buildBundle(
+      "acme",
+      "/vault/acme",
+      [
+        { path: "tables/orders.md", source: "---\ntype: Table\n---\n\nRows.\n" },
+        { path: "tables/index.md", source: "# Tables\n" },
+      ],
+      { keepSources: true, colocatedRoot: "/vault" },
+    );
+
+  const opsWith = (body: string, colocatedRoot: string | null = "/vault") =>
+    buildBundle(
+      "ops",
+      "/vault/ops",
+      [{ path: "runbook.md", source: `---\ntype: Runbook\n---\n\n${body}\n` }],
+      { keepSources: true, ...(colocatedRoot !== null && { colocatedRoot }) },
+    );
+
+  const danglingWarnings = (result: ValidationReport) =>
+    result.warnings.filter((p) => p.message.includes("colocated"));
+
+  it("warns for a dangling ../ link into a mounted colocated sibling", async () => {
+    const result = await validateBundle(
+      opsWith("See [gone](../acme/tables/shipments.md)."),
+      [sibling()],
+    );
+    const dangling = danglingWarnings(result);
+    assert.equal(dangling.length, 1);
+    assert.equal(dangling[0]!.path, "runbook.md");
+    assert.match(dangling[0]!.message, /\.\.\/acme\/tables\/shipments\.md/);
+    assert.equal(result.conformant, true); // a warning, never an error (spec §5.3)
+  });
+
+  it("stays silent for a ../ link that resolves into a mounted sibling", async () => {
+    const result = await validateBundle(
+      opsWith("See [orders](../acme/tables/orders.md) and [bare](../acme/tables/orders)."),
+      [sibling()],
+    );
+    assert.deepEqual(danglingWarnings(result), []);
+  });
+
+  it("applies the in-bundle exemptions inside the sibling (assets, directories, reserved files)", async () => {
+    const result = await validateBundle(
+      opsWith(
+        [
+          "An [asset](../acme/assets/logo.png), a [directory](../acme/tables),",
+          "and a [reserved file](../acme/tables/index).",
+        ].join("\n"),
+      ),
+      [sibling()],
+    );
+    assert.deepEqual(danglingWarnings(result), []);
+  });
+
+  it("stays silent for ../ links outside any mounted sibling or without colocation", async () => {
+    // Unmounted first segment and escape from the colocated root: unjudgeable.
+    const unjudgeable = await validateBundle(
+      opsWith("See [loose](../README.md) and [escape](../../elsewhere/x.md)."),
+      [sibling()],
+    );
+    assert.deepEqual(danglingWarnings(unjudgeable), []);
+    // No declared colocation: today's silence is preserved.
+    const uncolocated = await validateBundle(
+      opsWith("See [gone](../acme/tables/shipments.md).", null),
+      [sibling()],
+    );
+    assert.deepEqual(danglingWarnings(uncolocated), []);
+  });
+
+  it("stops reporting citations with resolving ../ targets as missing", async () => {
+    const body = [
+      "# Citations",
+      "",
+      "[1] [Orders](../acme/tables/orders.md)",
+      "[2] [Gone](../acme/tables/shipments.md)",
+    ].join("\n");
+    const result = await validateBundle(opsWith(body), [sibling()]);
+    const citations = result.warnings.filter((p) => p.message.includes("citation"));
+    assert.equal(citations.length, 1);
+    assert.match(citations[0]!.message, /\[2\]/);
+  });
+});

@@ -126,6 +126,13 @@ export interface LoadedBundle {
   problems: BundleProblem[];
   /** Read-only bundles are rejected by all authoring paths (remote bundles). */
   readOnly: boolean;
+  /**
+   * Absolute path of the shared `--colocated-bundles` root the bundle was
+   * discovered under, when it was. Bundles sharing the value are declared
+   * siblings: relative `../<sibling>/...` links between them resolve as
+   * derived cross-bundle edges. Declared, never inferred from disk paths.
+   */
+  colocatedRoot?: string;
   /** OKF version declared by the bundle-root index.md frontmatter (spec §11). */
   okfVersion?: string;
   /** One-line bundle purpose declared by the bundle-root index.md frontmatter. */

@@ -166,7 +166,7 @@ Instead of repeating `--bundle` for each subdirectory, mount them all with one f
 okf-mcp --colocated-bundles /path/to/knowledge
 ```
 
-Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles.
+Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles. Relative `../sibling/...` links between colocated bundles derive [cross-bundle graph edges](#cross-bundle-awareness), resolve citations, and are checked by `validate`.
 
 ## Remote bundles (knowledge exchange)
 
@@ -191,6 +191,8 @@ Remote bundles are strictly read-only and sandboxed:
 ### Cross-bundle awareness
 
 OKF §5 deliberately has no cross-bundle link syntax, but the server knows every mounted bundle's canonical location and can *derive* cross-bundle relationships from spec-clean data. When a concept's §8 citation target, external link, or frontmatter `resource` URL points under another mounted bundle's canonical location, the graph tools record a derived `kind: "cross-bundle"` edge to that concept — read-only, no new syntax in documents.
+
+[Colocated bundles](#colocated-bundles-vault-as-monorepo) get the same treatment without any URL: an ordinary relative link like `[orders](../acme/tables/orders.md)` — which Obsidian resolves natively when the colocated root is opened as one vault — derives a `kind: "cross-bundle"` edge when its first path segment names a mounted sibling (a bundle declaring the same colocated root) and the remainder resolves to one of its concepts (`.md` optional, like body links). Citations through such a link classify as `concept` instead of `missing`, and `validate` warns when a `../` link points into a mounted sibling at a concept it does not have (dangling); links to unmounted folders or loose root files stay silent — colocation is declared, never inferred from disk.
 
 - GitHub tree mounts get their canonical location automatically (the `tree`, `blob`, and `raw.githubusercontent.com` forms of the tree URL all match).
 - Local clones and archives have no inherent URL: give them one with `--canonical-url id=<url>` (or `canonicalUrl` on `load_remote_bundle`), e.g. the GitHub tree URL of the shared bundle's published location, so citations to it resolve even when it is mounted from a local checkout.
@@ -233,7 +235,7 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs and declared `description`s |
 | `list_concepts` | Concept metadata (including the `resource` URI when set), filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
-| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing` |
+| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing`; `../` targets resolving into a colocated sibling count as `concept` |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; an exact-`resource` filter maps an asset URI to its concept; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
@@ -245,7 +247,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 

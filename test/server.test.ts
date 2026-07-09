@@ -1447,6 +1447,80 @@ describe("cross-bundle graph tools", () => {
   });
 });
 
+describe("colocated cross-bundle tools", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-colocated-server-test-"));
+    await fs.mkdir(path.join(root, "acme", "tables"), { recursive: true });
+    await fs.mkdir(path.join(root, "ops"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "acme", "tables", "orders.md"),
+      "---\ntype: Table\ntitle: Orders\n---\n\nRows.\n",
+    );
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      [
+        "---",
+        "type: Runbook",
+        "---",
+        "",
+        "See [orders](../acme/tables/orders.md) and [gone](../acme/tables/shipments.md).",
+        "",
+        "# Citations",
+        "",
+        "[1] [Orders](../acme/tables/orders.md)",
+        "[2] [Gone](../acme/tables/shipments.md)",
+      ].join("\n"),
+    );
+    const store = new OkfStore([
+      { id: "acme", root: path.join(root, "acme"), colocatedRoot: root },
+      { id: "ops", root: path.join(root, "ops"), colocatedRoot: root },
+    ]);
+    client = await connectClient(store);
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("graph_summary counts edges derived from ../sibling links", async () => {
+    const summaries = (await callJson(client, "graph_summary", {})) as Array<{
+      bundle: string;
+      crossBundleEdges: number;
+    }>;
+    for (const summary of summaries) {
+      assert.equal(summary.crossBundleEdges, 1, summary.bundle);
+    }
+  });
+
+  it("get_citations classifies a resolving ../sibling citation as concept", async () => {
+    const citations = (await callJson(client, "get_citations", {
+      bundle: "ops",
+      id: "runbook",
+    })) as Array<{ index: number; kind: string }>;
+    assert.deepEqual(
+      citations.map((c) => c.kind),
+      ["concept", "missing"],
+    );
+  });
+
+  it("validate_bundle warns on dangling ../sibling links only", async () => {
+    const reports = (await callJson(client, "validate_bundle", {
+      bundle: "ops",
+    })) as Array<{ warnings: Array<{ message: string }> }>;
+    const colocated = reports[0]!.warnings.filter((w) =>
+      w.message.includes("colocated"),
+    );
+    // The dangling body link and the dangling citation entry's own link
+    // both warn; the resolving links to tables/orders stay silent.
+    assert.equal(colocated.length, 2);
+    for (const warning of colocated) {
+      assert.match(warning.message, /shipments\.md/);
+    }
+  });
+});
+
 describe("README tool documentation", () => {
   it("documents every registered tool in a table row", async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);

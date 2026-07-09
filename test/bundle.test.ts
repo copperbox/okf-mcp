@@ -202,6 +202,16 @@ describe("discoverColocatedBundles", () => {
     const configs = await discoverColocatedBundles(root);
     assert.deepEqual(configs.map((c) => c.id), ["acme"]);
   });
+
+  it("loadBundle carries the discovered colocatedRoot onto the loaded bundle", async () => {
+    await write("acme/note.md", "---\ntype: Note\n---\n\nBody.\n");
+    await write("solo/note.md", "---\ntype: Note\n---\n\nBody.\n");
+    const [config] = await discoverColocatedBundles(root);
+    const colocated = await loadBundle(config!);
+    assert.equal(colocated.colocatedRoot, path.resolve(root));
+    const independent = await loadBundle({ id: "solo", root: path.join(root, "solo") });
+    assert.equal(independent.colocatedRoot, undefined);
+  });
 });
 
 describe("validateBundle", () => {

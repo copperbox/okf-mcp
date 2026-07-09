@@ -1,5 +1,10 @@
 import { isCuratedIndex } from "./authoring.js";
-import { readBundleDocument } from "./bundle.js";
+import {
+  colocatedSiblings,
+  outsideLinkDangles,
+  readBundleDocument,
+  resolveOutsideLink,
+} from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import { extractCitations } from "./parser.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
@@ -201,15 +206,20 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
  * of spec §9.3 (every index.md follows §6, every log.md follows §7,
  * and index.md frontmatter is only permitted at the bundle root per
  * §11), recommended-frontmatter warnings (spec §4.1), and citation
- * hygiene warnings (spec §8).
+ * hygiene warnings (spec §8). Given the other mounted bundles, `../`
+ * links from a colocated bundle are judged against its mounted
+ * siblings: resolving ones are fine (and count as resolving citation
+ * targets), dangling ones warn.
  */
 export async function validateBundle(
   bundle: LoadedBundle,
+  allBundles: LoadedBundle[] = [],
 ): Promise<ValidationReport> {
   const problems: BundleProblem[] = [
     ...bundle.problems,
     ...checkDeclaredVersion(bundle),
   ];
+  const siblings = colocatedSiblings(bundle, allBundles);
 
   // Recommended-field and citation problems are soft, consistent with
   // §9's tolerance of imperfect documents.
@@ -220,10 +230,20 @@ export async function validateBundle(
     if (raw !== null) {
       problems.push(...checkRecommendedFrontmatter(concept.path, raw));
     }
+    for (const link of concept.links) {
+      if (link.kind !== "outside" || link.path === undefined) continue;
+      if (!outsideLinkDangles(link.path, siblings)) continue;
+      problems.push({
+        severity: "warning",
+        path: concept.path,
+        message: `link does not resolve in the colocated sibling bundle: ${link.target}`,
+      });
+    }
     const { citations, malformed } = extractCitations(
       concept.body,
       concept.path,
       (id) => bundle.concepts.has(id),
+      (path) => resolveOutsideLink(path, siblings) !== undefined,
     );
     for (const line of malformed) {
       problems.push({

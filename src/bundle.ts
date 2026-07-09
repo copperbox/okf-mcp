@@ -92,6 +92,8 @@ export interface BuildBundleOptions {
   keepSources?: boolean;
   /** Expanded canonical URL prefixes of the bundle root (canonicalUrlPrefixes). */
   canonicalUrls?: string[];
+  /** Shared colocated root the bundle was discovered under (LoadedBundle.colocatedRoot). */
+  colocatedRoot?: string;
 }
 
 /**
@@ -155,6 +157,9 @@ export function buildBundle(
     }),
     ...(options.canonicalUrls !== undefined &&
       options.canonicalUrls.length > 0 && { canonicalUrls: options.canonicalUrls }),
+    ...(options.colocatedRoot !== undefined && {
+      colocatedRoot: options.colocatedRoot,
+    }),
   };
 }
 
@@ -195,6 +200,9 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
   return buildBundle(config.id, root, documents, {
     ...(config.canonicalUrl !== undefined && {
       canonicalUrls: canonicalUrlPrefixes(config.canonicalUrl),
+    }),
+    ...(config.colocatedRoot !== undefined && {
+      colocatedRoot: path.resolve(config.colocatedRoot),
     }),
   });
 }
@@ -283,4 +291,89 @@ function targetsMissingConcept(
   if (path.posix.basename(linkPath).includes(".")) return false;
   if (reservedPaths.has(`${linkPath}.md`)) return false;
   return !directories.has(linkPath);
+}
+
+/**
+ * The colocated siblings of a bundle: the other mounted bundles declaring
+ * the same colocated root. Colocation is declared (`--colocated-bundles`),
+ * never inferred from disk paths, so bundles without a colocatedRoot have
+ * no siblings.
+ */
+export function colocatedSiblings(
+  bundle: LoadedBundle,
+  all: LoadedBundle[],
+): LoadedBundle[] {
+  if (bundle.colocatedRoot === undefined) return [];
+  return all.filter(
+    (b) => b.id !== bundle.id && b.colocatedRoot === bundle.colocatedRoot,
+  );
+}
+
+/** Sibling concept an outside link resolves to (resolveOutsideLink). */
+export interface OutsideLinkTarget {
+  bundle: LoadedBundle;
+  conceptId: string;
+}
+
+/**
+ * The path under the colocated root named by an outside link's normalized
+ * `../…` path, or undefined when the link steps past the root. A bundle root
+ * is an immediate subdirectory of its colocated root, so exactly one leading
+ * `../` lands in the root; any further `..` escapes it.
+ */
+function pathUnderColocatedRoot(linkPath: string): string | undefined {
+  if (!linkPath.startsWith("../")) return undefined;
+  const inside = linkPath.slice(3);
+  return inside === ".." || inside.startsWith("../") ? undefined : inside;
+}
+
+/**
+ * Resolve an `outside` link (a normalized `../…` path) from a colocated
+ * bundle into a sibling concept: the first segment under the colocated root
+ * names the sibling bundle (folder name = bundle id), the remainder maps to
+ * a concept id with the `.md` suffix optional, like body links. Undefined
+ * when the path escapes the colocated root, names no mounted sibling, or the
+ * sibling has no such concept.
+ */
+export function resolveOutsideLink(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): OutsideLinkTarget | undefined {
+  const inside = pathUnderColocatedRoot(linkPath);
+  if (inside === undefined) return undefined;
+  const slash = inside.indexOf("/");
+  if (slash <= 0) return undefined;
+  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
+  if (sibling === undefined) return undefined;
+  const conceptId = conceptIdFromPath(inside.slice(slash + 1));
+  if (conceptId === "" || !sibling.concepts.has(conceptId)) return undefined;
+  return { bundle: sibling, conceptId };
+}
+
+/**
+ * Whether an outside link from a colocated bundle dangles: it points into a
+ * mounted sibling at a concept the sibling does not have. Judged only inside
+ * mounted siblings — loose files at the colocated root, unmounted folders,
+ * and paths escaping the root are unjudgeable and stay silent — with the
+ * same exemptions as in-bundle broken links (trailing-slash directory links,
+ * non-md extensions, extensionless targets naming a sibling directory or
+ * reserved file).
+ */
+export function outsideLinkDangles(
+  linkPath: string,
+  siblings: LoadedBundle[],
+): boolean {
+  const inside = pathUnderColocatedRoot(linkPath);
+  if (inside === undefined) return false;
+  const slash = inside.indexOf("/");
+  if (slash <= 0) return false;
+  const sibling = siblings.find((b) => b.id === inside.slice(0, slash));
+  if (sibling === undefined) return false;
+  const rest = inside.slice(slash + 1);
+  if (rest === "" || sibling.concepts.has(conceptIdFromPath(rest))) return false;
+  return targetsMissingConcept(
+    rest,
+    knownDirectories(sibling.concepts, sibling.reserved),
+    new Set(sibling.reserved.map((file) => file.path)),
+  );
 }

@@ -198,7 +198,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     case "validate": {
       let failed = false;
       for (const bundle of store.bundles()) {
-        const report = await validateBundle(bundle);
+        const report = await validateBundle(bundle, store.bundles());
         console.log(JSON.stringify(report, null, 2));
         if (!report.conformant) failed = true;
       }

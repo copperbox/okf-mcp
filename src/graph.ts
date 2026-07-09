@@ -1,3 +1,4 @@
+import { colocatedSiblings, resolveOutsideLink } from "./bundle.js";
 import { resolveUrlToConcept } from "./canonical.js";
 import type { Concept, LoadedBundle } from "./types.js";
 
@@ -19,8 +20,9 @@ export interface GraphEdge {
   /** Link text, when it carries meaning beyond the target title. */
   label?: string;
   /**
-   * "cross-bundle" marks an edge derived from a citation/external-link/
-   * resource URL matching another mounted bundle's canonical location.
+   * "cross-bundle" marks a derived edge: a citation/external-link/resource
+   * URL matching another mounted bundle's canonical location, or a relative
+   * `../sibling/...` link between bundles sharing a declared colocated root.
    * Absent on ordinary in-bundle link edges.
    */
   kind?: "cross-bundle";
@@ -106,20 +108,31 @@ interface DerivedCrossEdges {
 }
 
 /**
- * Derive cross-bundle edges: a citation target, external link, or frontmatter
- * `resource` URL that points under the canonical location of a *different*
- * mounted bundle becomes a `kind: "cross-bundle"` edge to that concept. OKF
- * §5 has no cross-bundle link syntax; these edges are read-only derivations
- * from spec-clean URLs, never new document semantics.
+ * Derive cross-bundle edges, read-only and never new document semantics (OKF
+ * §5 has no cross-bundle link syntax):
+ * - a citation target, external link, or frontmatter `resource` URL that
+ *   points under the canonical location of a *different* mounted bundle;
+ * - a relative `../sibling/...` body link between bundles declaring the same
+ *   colocated root (the layout Obsidian resolves natively when the root is
+ *   opened as one vault).
+ * Each becomes a `kind: "cross-bundle"` edge to the resolved concept.
  */
 function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
   const targets = bundles.filter((b) => (b.canonicalUrls?.length ?? 0) > 0);
   const edges: GraphEdge[] = [];
   const seen = new Set<string>();
   const matched = new Set<string>();
+  const derive = (from: string, link: string, bundleId: string, conceptId: string) => {
+    matched.add(`${from}\0${link}`);
+    const to = qualifyNodeId(bundleId, conceptId);
+    if (seen.has(`${from}\0${to}`)) return;
+    seen.add(`${from}\0${to}`);
+    edges.push({ from, to, kind: "cross-bundle" });
+  };
   for (const source of bundles) {
     const candidates = targets.filter((target) => target.id !== source.id);
-    if (candidates.length === 0) continue;
+    const siblings = colocatedSiblings(source, bundles);
+    if (candidates.length === 0 && siblings.length === 0) continue;
     for (const concept of source.concepts.values()) {
       const from = qualifyNodeId(source.id, concept.id);
       const urls = concept.links
@@ -134,12 +147,14 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
             target.concepts.has(cid),
           );
           if (id === undefined) continue;
-          matched.add(`${from}\0${url}`);
-          const to = qualifyNodeId(target.id, id);
-          if (seen.has(`${from}\0${to}`)) continue;
-          seen.add(`${from}\0${to}`);
-          edges.push({ from, to, kind: "cross-bundle" });
+          derive(from, url, target.id, id);
         }
+      }
+      for (const link of concept.links) {
+        if (link.kind !== "outside" || link.path === undefined) continue;
+        const resolved = resolveOutsideLink(link.path, siblings);
+        if (resolved === undefined) continue;
+        derive(from, link.target, resolved.bundle.id, resolved.conceptId);
       }
     }
   }
