@@ -120,7 +120,7 @@ export function requireConcept(
  * suffix of the source (it always is for LF documents), returns 0 so callers
  * treat the whole source as the body and offsets stay valid.
  */
-function bodyStartOffset(source: string): number {
+export function bodyStartOffset(source: string): number {
   const { body } = splitFrontmatter(source);
   return source.endsWith(body) ? source.length - body.length : 0;
 }

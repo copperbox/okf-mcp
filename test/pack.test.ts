@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { loadBundle } from "../src/bundle.js";
 import { packBundle } from "../src/pack.js";
 import { loadRemoteBundle } from "../src/remote.js";
+import type { BundleConfig } from "../src/types.js";
 
 const ORDERS = "---\ntype: Table\ntitle: Orders\n---\n\nSee [customers](./customers.md).\n";
 const CUSTOMERS = "---\ntype: Table\ndescription: Customer master data\n---\n\nRows.\n";
@@ -154,6 +155,109 @@ describe("packBundle", () => {
     const { loaded } = await roundTrip(bundle);
 
     assert.ok(loaded.concepts.has(`${dir}/${"b".repeat(60)}`));
+  });
+
+  describe("colocated citation rewriting", () => {
+    // From alpha/notes/, two ../ escape the bundle root into the shared root.
+    const CITED =
+      "---\ntype: Note\ntitle: Cited\n---\n\n" +
+      "See [orders](../../beta/tables/orders) and [rows](../../beta/tables/orders.md#rows).\n\n" +
+      "# Citations\n\n[1] [Orders](../../beta/tables/orders.md)\n";
+    const BETA_URL = "https://github.com/acme/kb/tree/main/beta";
+    const BLOB = "https://github.com/acme/kb/blob/main/beta/tables/orders.md";
+
+    /** Write a colocated root and load its alpha/beta bundles as siblings. */
+    async function loadColocated(
+      files: Record<string, string>,
+      overrides: Partial<BundleConfig> = {},
+    ) {
+      const root = await writeBundleDir(files);
+      const alpha = await loadBundle({
+        id: "alpha",
+        root: path.join(root, "alpha"),
+        colocatedRoot: root,
+      });
+      const beta = await loadBundle({
+        id: "beta",
+        root: path.join(root, "beta"),
+        colocatedRoot: root,
+        ...overrides,
+      });
+      return { root, alpha, beta };
+    }
+
+    it("rewrites resolving ../sibling targets to canonical blob URLs in the archive only", async () => {
+      const { root, alpha, beta } = await loadColocated(
+        { "alpha/notes/cited.md": CITED, "beta/tables/orders.md": ORDERS },
+        { canonicalUrl: BETA_URL },
+      );
+      const { loaded } = await roundTrip(alpha, { allBundles: [alpha, beta] });
+
+      // Every span rewrites (extensionless gains .md, the fragment survives);
+      // all bytes outside the three targets are untouched.
+      assert.equal(
+        loaded.sources!.get("notes/cited.md"),
+        CITED.replace("../../beta/tables/orders)", `${BLOB})`)
+          .replace("../../beta/tables/orders.md#rows", `${BLOB}#rows`)
+          .replace("../../beta/tables/orders.md)", `${BLOB})`),
+      );
+      // The archive round-trips into ordinary external links...
+      const kinds = loaded.concepts.get("notes/cited")!.links.map((l) => l.kind);
+      assert.deepEqual(kinds, ["external", "external", "external"]);
+      // ...while the source file on disk is untouched.
+      assert.equal(
+        await fs.readFile(path.join(root, "alpha/notes/cited.md"), "utf8"),
+        CITED,
+      );
+    });
+
+    it("appends the concept path to a non-GitHub canonical URL literally", async () => {
+      const { alpha, beta } = await loadColocated(
+        { "alpha/notes/cited.md": CITED, "beta/tables/orders.md": ORDERS },
+        { canonicalUrl: "https://kb.example.com/beta/" },
+      );
+      const { loaded } = await roundTrip(alpha, { allBundles: [alpha, beta] });
+      assert.match(
+        loaded.sources!.get("notes/cited.md")!,
+        /\(https:\/\/kb\.example\.com\/beta\/tables\/orders\.md#rows\)/,
+      );
+    });
+
+    it("leaves non-resolving outside links and unlisted siblings verbatim", async () => {
+      const body =
+        "---\ntype: Note\n---\n\n" +
+        "[gone](../../beta/tables/nope.md) and [loose](../../README.md) stay.\n";
+      const { alpha, beta } = await loadColocated(
+        { "alpha/notes/cited.md": body, "beta/tables/orders.md": ORDERS },
+        { canonicalUrl: BETA_URL },
+      );
+      const withSiblings = await roundTrip(alpha, { allBundles: [alpha, beta] });
+      assert.equal(withSiblings.loaded.sources!.get("notes/cited.md"), body);
+
+      // Without allBundles nothing is a sibling, so resolving links stay too.
+      const { alpha: alpha2 } = await loadColocated(
+        { "alpha/notes/cited.md": CITED, "beta/tables/orders.md": ORDERS },
+        { canonicalUrl: BETA_URL },
+      );
+      const alone = await roundTrip(alpha2);
+      assert.equal(alone.loaded.sources!.get("notes/cited.md"), CITED);
+    });
+
+    it("fails when a resolving link's sibling has no canonical URL", async () => {
+      const { alpha, beta } = await loadColocated({
+        "alpha/notes/cited.md": CITED,
+        "beta/tables/orders.md": ORDERS,
+      });
+      await assert.rejects(
+        packBundle(alpha, { allBundles: [alpha, beta] }),
+        (err: Error) => {
+          assert.match(err.message, /notes\/cited\.md/);
+          assert.match(err.message, /\.\.\/beta\/tables\/orders/);
+          assert.match(err.message, /--canonical-url beta=/);
+          return true;
+        },
+      );
+    });
   });
 
   it("re-exports a read-only archive bundle", async () => {

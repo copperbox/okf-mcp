@@ -166,7 +166,7 @@ Instead of repeating `--bundle` for each subdirectory, mount them all with one f
 okf-mcp --colocated-bundles /path/to/knowledge
 ```
 
-Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles. Relative `../sibling/...` links between colocated bundles derive [cross-bundle graph edges](#cross-bundle-awareness), resolve citations, and are checked by `validate`.
+Every **immediate subdirectory** of the root that contains at least one markdown file is mounted as its own bundle, with the folder name as its bundle id (the same default-id rule `--bundle <path>` uses). Dot directories (`.obsidian`, `.git`) are skipped, and loose files at the root (`README.md`, `AGENTS.md`) belong to no bundle. The flag is repeatable and combines with `--bundle` / `--remote-bundle`; a discovered id colliding with another mount is a startup error naming the colocated root. Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot` on each discovered bundle's config), so features that reason about colocated siblings can tell them apart from independently mounted bundles. Relative `../sibling/...` links between colocated bundles derive [cross-bundle graph edges](#cross-bundle-awareness), resolve citations, are checked by `validate`, and are rewritten to the sibling's canonical URL by [`pack`](#cli).
 
 When the root holds many bundles but the current project only needs a few, `--only <folder,folder,...>` is the escape hatch for scoped mounting:
 
@@ -315,6 +315,8 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
 ```bash
 okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts/**'
 ```
+
+Relative `../<sibling>/...` links into [colocated](#colocated-bundles-vault-as-monorepo) siblings only mean something while the shared layout holds, so the archived copy carries the sibling's canonical concept URL instead (its blob form for GitHub canonicals) — a spec §8 citation form that resolves anywhere; only the link targets change, every other byte travels verbatim, and the source files stay untouched. A resolving link whose sibling has no canonical URL (explicit or derived from a root-level `--canonical-url`) fails the pack rather than shipping a dead link.
 
 `--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo).
 

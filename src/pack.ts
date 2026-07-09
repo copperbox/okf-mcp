@@ -1,7 +1,14 @@
 import zlib from "node:zlib";
 
-import { isCuratedIndex, renderIndexes, withPreservedFrontmatter } from "./authoring.js";
-import { readBundleDocument } from "./bundle.js";
+import {
+  bodyStartOffset,
+  isCuratedIndex,
+  renderIndexes,
+  withPreservedFrontmatter,
+} from "./authoring.js";
+import { colocatedSiblings, readBundleDocument, resolveOutsideLink } from "./bundle.js";
+import { citationPrefix } from "./canonical.js";
+import { extractLinks } from "./parser.js";
 import { matchesFilters } from "./remote.js";
 import type { ArchiveKind } from "./remote.js";
 import type { LoadedBundle } from "./types.js";
@@ -15,6 +22,12 @@ export interface PackOptions {
   exclude?: string[];
   /** Archive format to emit. Defaults to "tar.gz". */
   format?: ArchiveKind;
+  /**
+   * Every mounted bundle, so relative `../` links into colocated siblings can
+   * be rewritten to the sibling's canonical concept URL in the archived copy.
+   * Defaults to none: outside links then travel verbatim.
+   */
+  allBundles?: LoadedBundle[];
 }
 
 export interface PackResult {
@@ -36,6 +49,12 @@ export interface PackResult {
  * applies, selecting concepts and logs; regenerated indexes are always
  * emitted, describing only what was packed. Read-only (remote) bundles pack
  * too — nothing is ever written to the source bundle.
+ *
+ * Relative `../<sibling>/...` links into colocated siblings (given
+ * `allBundles`) only mean something while the on-disk layout holds, so the
+ * archived copy carries the sibling's canonical concept URL instead (spec §8
+ * citation form); a resolving link whose sibling has no canonical URL is an
+ * error — silently packing it would ship a dead link.
  */
 export async function packBundle(
   bundle: LoadedBundle,
@@ -43,6 +62,7 @@ export async function packBundle(
 ): Promise<PackResult> {
   const { include, exclude } = options;
   const format = options.format ?? "tar.gz";
+  const siblings = colocatedSiblings(bundle, options.allBundles ?? []);
 
   const concepts = new Map(
     [...bundle.concepts].filter(([, c]) => matchesFilters(c.path, include, exclude)),
@@ -50,7 +70,8 @@ export async function packBundle(
 
   const documents = new Map<string, string>();
   for (const concept of concepts.values()) {
-    documents.set(concept.path, await readBundleDocument(bundle, concept.path));
+    const source = await readBundleDocument(bundle, concept.path);
+    documents.set(concept.path, rewriteColocatedLinks(source, concept.path, siblings));
   }
   for (const file of bundle.reserved) {
     if (file.kind !== "log") continue;
@@ -90,6 +111,53 @@ export async function packBundle(
   const bytes =
     format === "zip" ? buildZip(entries) : zlib.gzipSync(buildTar(entries));
   return { bytes, format, files };
+}
+
+/**
+ * Rewrite the `../` link targets in a concept document that resolve into a
+ * mounted colocated sibling (resolveOutsideLink) to the sibling's canonical
+ * concept URL — the citationPrefix (blob) form, with the `.md` path made
+ * explicit and any #fragment/?query suffix carried over. Edits splice the
+ * raw source at the parser's preserved target spans, so every byte outside
+ * the rewritten targets is intact. Throws when a resolving link's sibling
+ * has no canonical URL: the relative form is dead outside the layout and
+ * there is nothing portable to rewrite it to.
+ */
+function rewriteColocatedLinks(
+  source: string,
+  conceptPath: string,
+  siblings: LoadedBundle[],
+): string {
+  if (siblings.length === 0) return source;
+  const bodyStart = bodyStartOffset(source);
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const link of extractLinks(source.slice(bodyStart), conceptPath)) {
+    if (link.kind !== "outside" || link.path === undefined) continue;
+    const resolved = resolveOutsideLink(link.path, siblings);
+    if (resolved === undefined) continue;
+    const prefixes = resolved.bundle.canonicalUrls;
+    if (prefixes === undefined || prefixes.length === 0) {
+      throw new Error(
+        `${conceptPath}: link "${link.target}" resolves into colocated sibling ` +
+          `bundle "${resolved.bundle.id}", which has no canonical URL to rewrite ` +
+          `it to — pass --canonical-url ${resolved.bundle.id}=<url> (or the ` +
+          `colocated root's --canonical-url) before packing`,
+      );
+    }
+    const targetPath = resolved.bundle.concepts.get(resolved.conceptId)!.path;
+    const pathPart = link.target.split("#")[0]!.split("?")[0]!;
+    const suffix = link.target.slice(pathPart.length);
+    edits.push({
+      start: bodyStart + link.targetStart,
+      end: bodyStart + link.targetEnd,
+      replacement: `${citationPrefix(prefixes)}/${targetPath}${suffix}`,
+    });
+  }
+  let updated = source;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    updated = updated.slice(0, edit.start) + edit.replacement + updated.slice(edit.end);
+  }
+  return updated;
 }
 
 interface PackEntry {

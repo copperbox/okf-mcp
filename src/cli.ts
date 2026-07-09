@@ -368,6 +368,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         include: values.include,
         exclude: values.exclude,
         format,
+        allBundles: store.bundles(),
       });
       await fs.writeFile(out, result.bytes);
       console.log(`${bundle.id}: packed ${result.files.length} files to ${out}`);
