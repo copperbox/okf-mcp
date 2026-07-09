@@ -61,6 +61,13 @@ function duplicateBundleIdError(
   return new Error(message);
 }
 
+/** Error for a bundle id colliding with one discovered under a colocated remote root. */
+function duplicateColocatedRemoteIdError(id: string, rootUrl: string): Error {
+  return new Error(
+    `duplicate bundle id: ${id} (discovered under --colocated-remote-bundles ${rootUrl})`,
+  );
+}
+
 export interface OkfStoreOptions {
   /** Read-only remote bundles (GitHub trees or archives) fetched on load(). */
   remotes?: RemoteBundleConfig[];
@@ -149,9 +156,7 @@ export class OkfStore {
         this.remotes.has(bundle.id) ||
         this.configs.some((c) => c.id === bundle.id);
       if (taken) {
-        throw new Error(
-          `duplicate bundle id: ${bundle.id} (discovered under --colocated-remote-bundles ${url})`,
-        );
+        throw duplicateColocatedRemoteIdError(bundle.id, url);
       }
     }
     for (const id of previousIds) this.loaded.delete(id);
@@ -231,9 +236,7 @@ export class OkfStore {
     const existing = this.configs.find((c) => c.id === config.id);
     const rootUrl = this.colocatedRootOf(config.id);
     if (rootUrl !== undefined) {
-      throw new Error(
-        `duplicate bundle id: ${config.id} (discovered under --colocated-remote-bundles ${rootUrl})`,
-      );
+      throw duplicateColocatedRemoteIdError(config.id, rootUrl);
     }
     if (this.remotes.has(config.id) || existing !== undefined) {
       throw duplicateBundleIdError(config.id, existing);

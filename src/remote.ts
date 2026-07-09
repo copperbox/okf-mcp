@@ -105,7 +105,7 @@ async function fetchOk(
 async function listMarkdownFiles(
   fetchImpl: typeof fetch,
   tree: GitHubTreeRef,
-  config: RemoteBundleConfig,
+  config: Pick<RemoteBundleConfig, "url" | "include" | "exclude">,
 ): Promise<RemoteFile[]> {
   const files: RemoteFile[] = [];
   const prefix = tree.path === "" ? "" : `${tree.path}/`;
@@ -506,7 +506,7 @@ async function listTreeRootFiles(
   config: ColocatedRemoteRootConfig,
 ): Promise<RootFile[]> {
   const tree = parseGitHubTreeUrl(config.url);
-  const files = await listMarkdownFiles(fetchImpl, tree, { id: "", url: config.url });
+  const files = await listMarkdownFiles(fetchImpl, tree, { url: config.url });
   return files.map((file) => ({
     relPath: file.relPath,
     size: file.size,
