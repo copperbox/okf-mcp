@@ -375,6 +375,204 @@ describe("cli graph", () => {
   });
 });
 
+describe("cli graph html", () => {
+  let root: string;
+
+  /** Parse the graph data embedded in the exported document. */
+  function embeddedData(html: string): {
+    nodes: { id: string; title?: string; community: string }[];
+    edges: { from: string; to: string; kind?: string }[];
+  } {
+    const match =
+      /<script type="application\/json" id="graph-data">(.*?)<\/script>/s.exec(html);
+    assert.ok(match, `no embedded graph data in: ${html.slice(0, 400)}`);
+    return JSON.parse(match[1]!);
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-graph-html-"));
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\ntags: [alpha]\n---\n\n" +
+        "See [runbook](../ops/runbook.md).\n",
+    );
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.mkdir(path.join(root, "ops", "playbooks"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Note\ntitle: Runbook\n---\n\n" +
+        "See [deploy](/playbooks/deploy.md).\n",
+    );
+    await fs.writeFile(
+      path.join(root, "ops", "playbooks", "deploy.md"),
+      "---\ntype: Runbook\ntitle: Deploy\n---\n\nSteps.\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("exports a merged multi-bundle graph grouped by bundle", async () => {
+    const { code, stdout } = await runCli(["--colocated-bundles", root, "graph", "html"]);
+    assert.equal(code, 0);
+    assert.match(stdout, /^<!doctype html>/);
+    const data = embeddedData(stdout);
+    assert.deepEqual(
+      data.nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["acme:note", "acme"],
+        ["ops:playbooks/deploy", "ops"],
+        ["ops:runbook", "ops"],
+      ],
+    );
+    assert.ok(
+      data.edges.some(
+        (e) => e.from === "acme:note" && e.to === "ops:runbook" && e.kind === "cross-bundle",
+      ),
+      `no cross-bundle edge in: ${JSON.stringify(data.edges)}`,
+    );
+    assert.ok(
+      data.edges.some((e) => e.from === "ops:runbook" && e.to === "ops:playbooks/deploy"),
+      `no in-bundle edge in: ${JSON.stringify(data.edges)}`,
+    );
+  });
+
+  it("groups a single bundle by concept type unless --community overrides", async () => {
+    const bundle = ["--bundle", path.join(root, "ops")];
+    const byType = await runCli([...bundle, "graph", "html"]);
+    assert.equal(byType.code, 0);
+    assert.deepEqual(
+      embeddedData(byType.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["playbooks/deploy", "Runbook"],
+        ["runbook", "Note"],
+      ],
+    );
+
+    const byFolder = await runCli([...bundle, "graph", "html", "--community", "folder"]);
+    assert.equal(byFolder.code, 0);
+    assert.deepEqual(
+      embeddedData(byFolder.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["playbooks/deploy", "playbooks"],
+        ["runbook", "(root)"],
+      ],
+    );
+
+    const byTag = await runCli([
+      "--bundle",
+      path.join(root, "acme"),
+      "graph",
+      "html",
+      "--community",
+      "tag",
+    ]);
+    assert.equal(byTag.code, 0);
+    assert.deepEqual(
+      embeddedData(byTag.stdout).nodes.map((n) => [n.id, n.community]),
+      [["note", "alpha"]],
+    );
+  });
+
+  it("rejects --community for a merged multi-bundle graph (bundle grouping wins)", async () => {
+    const { code, stderr } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "--community",
+      "type",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /groups by bundle/);
+    // Scoping to one bundle makes --community valid again.
+    const scoped = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "ops",
+      "--community",
+      "folder",
+    ]);
+    assert.equal(scoped.code, 0);
+  });
+
+  it("rejects --community with a non-html format and an unknown mode", async () => {
+    const wrongFormat = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "dot",
+      "--community",
+      "type",
+    ]);
+    assert.equal(wrongFormat.code, 2);
+    assert.match(wrongFormat.stderr, /--community requires the html graph format/);
+
+    const unknownMode = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "html",
+      "--community",
+      "detect",
+    ]);
+    assert.equal(unknownMode.code, 2);
+    assert.match(unknownMode.stderr, /unknown --community mode: detect/);
+  });
+
+  it("escapes a </script> in a title so it cannot break out of the document", async () => {
+    await fs.writeFile(
+      path.join(root, "ops", "sneaky.md"),
+      '---\ntype: Note\ntitle: "</script><script>alert(1)</script>"\n---\n\nBody.\n',
+    );
+    const { code, stdout } = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "html",
+    ]);
+    assert.equal(code, 0);
+    assert.doesNotMatch(stdout, /<\/script><script>alert/);
+    const sneaky = embeddedData(stdout).nodes.find((n) => n.id === "sneaky");
+    assert.equal(sneaky?.title, "</script><script>alert(1)</script>");
+  });
+
+  it("writes the document to --out instead of stdout", async () => {
+    const out = path.join(root, "graph.html");
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "--out",
+      out,
+    ]);
+    assert.equal(code, 0);
+    assert.equal(stdout, "");
+    const html = await fs.readFile(out, "utf8");
+    assert.match(html, /^<!doctype html>/);
+    assert.match(html, /"acme:note"/);
+  });
+
+  it("honors --out for the other graph formats too", async () => {
+    const out = path.join(root, "graph.dot");
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "dot",
+      "--out",
+      out,
+    ]);
+    assert.equal(code, 0);
+    assert.equal(stdout, "");
+    assert.match(await fs.readFile(out, "utf8"), /digraph okf/);
+  });
+});
+
 describe("cli --colocated-remote-bundles", () => {
   let dir: string;
   let archive: string;
