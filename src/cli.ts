@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import { generateIndexes } from "./authoring.js";
 import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
-import { buildGraph, exportGraph, graphSummary } from "./graph.js";
+import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
 import { archiveKind } from "./remote.js";
@@ -32,7 +32,11 @@ Commands:
   validate            Report OKF v0.1 conformance errors and warnings
   search <query>      Search concepts
   concept <id>        Print one concept document as JSON
-  graph [format]      Export the link graph (json | dot | mermaid)
+  graph [format] [bundle]
+                      Export the link graph (json | dot | mermaid). With
+                      several bundles mounted and no bundle named, all export
+                      as one merged graph: bundle:concept node IDs plus
+                      derived cross-bundle edges (dashed in dot/mermaid)
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive; indexes are
                       regenerated in-memory, so the source stays untouched
@@ -76,6 +80,9 @@ Options:
                           one --colocated-bundles root is configured — every
                           bundle under the root derives <url>/<folder>; an
                           explicit per-bundle id=url still overrides.
+  --include-external      graph only: include external link targets (https:,
+                          repo:, ...) as opaque nodes; a URL that derived a
+                          cross-bundle edge is not duplicated as one
   --out <file>            pack only: output archive path ending in .tar.gz,
                           .tgz, or .zip; defaults to <bundle>.tar.gz
   --include <glob>        pack only: pack matching bundle-relative paths only;
@@ -209,6 +216,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "colocated-remote-bundles": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
       out: { type: "string" },
+      "include-external": { type: "boolean" },
       include: { type: "string", multiple: true },
       exclude: { type: "string", multiple: true },
       writable: { type: "boolean" },
@@ -384,7 +392,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`error: unknown graph format: ${format}`);
         return 2;
       }
-      console.log(exportGraph(buildGraph(await store.bundle(undefined)), format));
+      const bundleId = rest[1];
+      const options = { includeExternal: values["include-external"] ?? false };
+      // With several bundles mounted and none named, export them all as one
+      // merged graph: bundle:concept node IDs plus derived cross-bundle
+      // edges. A single mounted bundle keeps the unqualified single-bundle
+      // output.
+      const graph =
+        bundleId === undefined && store.bundles().length > 1
+          ? buildMultiGraph(store.bundles(), options)
+          : buildGraph(await store.bundle(bundleId), options);
+      console.log(exportGraph(graph, format));
       return 0;
     }
     case "index": {

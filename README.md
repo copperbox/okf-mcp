@@ -334,10 +334,13 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
   validate            Report conformance errors and warnings (exit 1 on errors)
   search <query>      Search concepts
   concept <id>        Print one concept document as JSON
-  graph [format]      Export the link graph (json | dot | mermaid)
+  graph [format] [bundle]
+                      Export the link graph (json | dot | mermaid)
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive
 ```
+
+`graph` exports the link graph in the named format. With several bundles mounted and no bundle argument, all of them export as one merged graph — node IDs namespaced `bundle:concept`, with derived [cross-bundle edges](#cross-bundle-awareness) included and rendered dashed in `dot`/`mermaid` — so a `--colocated-bundles` root exports whole. Name a bundle to scope the export to it (unqualified node IDs, same as the single-bundle output). `--include-external` adds external link targets as opaque nodes; a URL that derived a cross-bundle edge is not duplicated as one.
 
 `pack` emits a `.tar.gz` (or `.zip`, by `--out` extension) of a mounted bundle for exchange with systems that can't reach its git remote — the counterpart of `--remote-bundle`, which loads such archives back. `index.md` files are regenerated in-memory from the packed concept set so the archive is self-describing, with the bundle root's declared frontmatter (including `okf_version`) preserved and hand-curated indexes (`generated: false`) traveling verbatim; the source bundle is never written, so `pack` needs no `--writable` and read-only remote bundles can be re-exported too. Repeatable `--include`/`--exclude` globs select concepts and logs with the same semantics `load_remote_bundle` uses (regenerated indexes are always emitted and describe only what was packed):
 
