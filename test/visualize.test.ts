@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import type { ConceptGraph, GraphNode } from "../src/graph.js";
 import { communityAssigner, exportGraphHtml } from "../src/visualize.js";
+import { embeddedGraphData } from "./helpers.js";
 
 function node(overrides: Partial<GraphNode> & { id: string }): GraphNode {
   return {
@@ -11,18 +12,6 @@ function node(overrides: Partial<GraphNode> & { id: string }): GraphNode {
     type: "Note",
     ...overrides,
   };
-}
-
-/** Parse the graph data embedded in the exported document. */
-function embeddedData(html: string): {
-  raw: string;
-  nodes: { id: string; title?: string; community: string; external?: boolean }[];
-  edges: { from: string; to: string; kind?: string }[];
-} {
-  const match =
-    /<script type="application\/json" id="graph-data">(.*?)<\/script>/s.exec(html);
-  assert.ok(match, `no embedded graph data in: ${html.slice(0, 400)}`);
-  return { raw: match[1]!, ...JSON.parse(match[1]!) };
 }
 
 describe("communityAssigner", () => {
@@ -66,7 +55,7 @@ describe("exportGraphHtml", () => {
   it("embeds every node and edge with its community", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     assert.match(html, /^<!doctype html>/);
-    const data = embeddedData(html);
+    const data = embeddedGraphData(html);
     assert.deepEqual(
       data.nodes.map((n) => [n.id, n.community]),
       [
@@ -90,7 +79,7 @@ describe("exportGraphHtml", () => {
       warnings: [],
     };
     const html = exportGraphHtml(hostile, { communityOf: communityAssigner("type") });
-    const data = embeddedData(html);
+    const data = embeddedGraphData(html);
     // The embedded JSON carries no raw < at all ...
     assert.doesNotMatch(data.raw, /</);
     // ... yet the title round-trips exactly.

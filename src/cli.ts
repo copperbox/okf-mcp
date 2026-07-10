@@ -429,8 +429,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         if (merged) {
           console.error(
             "error: a merged multi-bundle graph always groups by bundle, so " +
-              "--community does not apply; name a bundle to group it by " +
-              `${community}`,
+              `--community does not apply; name a bundle to group it by ${community}`,
           );
           return 2;
         }

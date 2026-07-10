@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { makeTarGz } from "./archives.js";
+import { embeddedGraphData } from "./helpers.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const CLI = path.join(repoRoot, "src", "cli.ts");
@@ -378,17 +379,6 @@ describe("cli graph", () => {
 describe("cli graph html", () => {
   let root: string;
 
-  /** Parse the graph data embedded in the exported document. */
-  function embeddedData(html: string): {
-    nodes: { id: string; title?: string; community: string }[];
-    edges: { from: string; to: string; kind?: string }[];
-  } {
-    const match =
-      /<script type="application\/json" id="graph-data">(.*?)<\/script>/s.exec(html);
-    assert.ok(match, `no embedded graph data in: ${html.slice(0, 400)}`);
-    return JSON.parse(match[1]!);
-  }
-
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-graph-html-"));
     await fs.mkdir(path.join(root, "acme"));
@@ -417,7 +407,7 @@ describe("cli graph html", () => {
     const { code, stdout } = await runCli(["--colocated-bundles", root, "graph", "html"]);
     assert.equal(code, 0);
     assert.match(stdout, /^<!doctype html>/);
-    const data = embeddedData(stdout);
+    const data = embeddedGraphData(stdout);
     assert.deepEqual(
       data.nodes.map((n) => [n.id, n.community]).sort(),
       [
@@ -443,7 +433,7 @@ describe("cli graph html", () => {
     const byType = await runCli([...bundle, "graph", "html"]);
     assert.equal(byType.code, 0);
     assert.deepEqual(
-      embeddedData(byType.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      embeddedGraphData(byType.stdout).nodes.map((n) => [n.id, n.community]).sort(),
       [
         ["playbooks/deploy", "Runbook"],
         ["runbook", "Note"],
@@ -453,7 +443,7 @@ describe("cli graph html", () => {
     const byFolder = await runCli([...bundle, "graph", "html", "--community", "folder"]);
     assert.equal(byFolder.code, 0);
     assert.deepEqual(
-      embeddedData(byFolder.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      embeddedGraphData(byFolder.stdout).nodes.map((n) => [n.id, n.community]).sort(),
       [
         ["playbooks/deploy", "playbooks"],
         ["runbook", "(root)"],
@@ -470,7 +460,7 @@ describe("cli graph html", () => {
     ]);
     assert.equal(byTag.code, 0);
     assert.deepEqual(
-      embeddedData(byTag.stdout).nodes.map((n) => [n.id, n.community]),
+      embeddedGraphData(byTag.stdout).nodes.map((n) => [n.id, n.community]),
       [["note", "alpha"]],
     );
   });
@@ -536,7 +526,7 @@ describe("cli graph html", () => {
     ]);
     assert.equal(code, 0);
     assert.doesNotMatch(stdout, /<\/script><script>alert/);
-    const sneaky = embeddedData(stdout).nodes.find((n) => n.id === "sneaky");
+    const sneaky = embeddedGraphData(stdout).nodes.find((n) => n.id === "sneaky");
     assert.equal(sneaky?.title, "</script><script>alert(1)</script>");
   });
 

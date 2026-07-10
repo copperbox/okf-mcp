@@ -130,7 +130,7 @@ export function exportGraphHtml(
     const source = byId.get(e.from);
     const target = byId.get(e.to);
     if (!source || !target) continue;
-    edges.push({ source: source, target: target, cross: e.kind === "cross-bundle" });
+    edges.push({ source, target, cross: e.kind === "cross-bundle" });
     source.degree += 1;
     target.degree += 1;
   }
