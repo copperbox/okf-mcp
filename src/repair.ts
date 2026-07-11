@@ -82,16 +82,14 @@ const citationFormat: Fixer = {
     if (normalized === body) return { source, findings: [] };
     const before = body.split("\n");
     const after = normalized.split("\n");
-    const findings = before.flatMap((line, i) =>
-      line === after[i]
-        ? []
-        : [
-            {
-              message: `citation entry "${excerpt(line)}" → "${excerpt(after[i]!)}"`,
-              fixable: true,
-            },
-          ],
-    );
+    const findings: { message: string; fixable: boolean }[] = [];
+    for (const [i, line] of before.entries()) {
+      if (line === after[i]) continue;
+      findings.push({
+        message: `citation entry "${excerpt(line)}" → "${excerpt(after[i]!)}"`,
+        fixable: true,
+      });
+    }
     return { source: source.slice(0, bodyStart) + normalized, findings };
   },
 };
@@ -315,9 +313,9 @@ export async function repairBundle(
     // Fresh from disk, not the loaded snapshot, so edits splice what is
     // actually there even if the file changed since the bundle loaded.
     const original = await readBundleDocument(bundle, concept.path);
+    const context = { path: concept.path, bundle, allBundles };
     let source = original;
     for (const fixer of fixers) {
-      const context = { path: concept.path, bundle, allBundles };
       const result = fixer.repair(source, context);
       source = result.source;
       findings.push(

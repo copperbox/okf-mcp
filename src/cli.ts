@@ -291,16 +291,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   if (command === "repair") {
     try {
-      selectFixers(fixerOnly);
+      const fixers = selectFixers(fixerOnly);
+      if (values.list) {
+        for (const fixer of fixers) {
+          console.log(`${fixer.id}: ${fixer.description}`);
+        }
+        return 0;
+      }
     } catch (err) {
       console.error(`error: ${(err as Error).message}`);
       return 2;
-    }
-    if (values.list) {
-      for (const fixer of selectFixers(fixerOnly)) {
-        console.log(`${fixer.id}: ${fixer.description}`);
-      }
-      return 0;
     }
   }
   for (const root of colocatedRoots) {
