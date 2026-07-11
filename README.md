@@ -334,10 +334,21 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
   validate            Report conformance errors and warnings (exit 1 on errors)
   search <query>      Search concepts
   concept <id>        Print one concept document as JSON
-  graph [format]      Export the link graph (json | dot | mermaid)
+  graph [format] [bundle]
+                      Export the link graph (json | dot | mermaid | html)
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive
 ```
+
+`graph` exports the link graph in the named format. With several bundles mounted and no bundle argument, all of them export as one merged graph — node IDs namespaced `bundle:concept`, with derived [cross-bundle edges](#cross-bundle-awareness) included and rendered dashed in `dot`/`mermaid` — so a `--colocated-bundles` root exports whole. Name a bundle to scope the export to it (unqualified node IDs, same as the single-bundle output). `--include-external` adds external link targets as opaque nodes; a URL that derived a cross-bundle edge is not duplicated as one. `--out <file>` writes the export to a file instead of stdout.
+
+The `html` format renders the graph as **one self-contained interactive page** — embedded data plus a small hand-rolled force simulation on `<canvas>`, no CDN or network access — so the file is shareable and viewable anywhere a browser opens it:
+
+```bash
+okf-mcp --colocated-bundles /path/to/vault graph html --out graph.html
+```
+
+Nodes are colored by *community*, with a legend (click an entry to dim that community): a merged multi-bundle export groups by **bundle** — each bundle reads as a cluster, with cross-bundle edges dashed between them — while a single bundle groups by concept **type** unless `--community folder` (first path segment of the concept ID; top-level concepts group as `(root)`) or `--community tag` (first frontmatter tag; `(untagged)` when absent) overrides. Because bundle grouping always wins for a merged graph, `--community` is rejected there — name a bundle to use it. Node radius scales with degree, hovering shows id/title/description/tags, clicking a node highlights its neighbors, and the view supports node dragging, wheel zoom, and panning; external nodes (`--include-external`) render as muted squares. Titles and descriptions are embedded with `<` escaped, so a `</script>` in a document cannot break out of the page.
 
 `pack` emits a `.tar.gz` (or `.zip`, by `--out` extension) of a mounted bundle for exchange with systems that can't reach its git remote — the counterpart of `--remote-bundle`, which loads such archives back. `index.md` files are regenerated in-memory from the packed concept set so the archive is self-describing, with the bundle root's declared frontmatter (including `okf_version`) preserved and hand-curated indexes (`generated: false`) traveling verbatim; the source bundle is never written, so `pack` needs no `--writable` and read-only remote bundles can be re-exported too. Repeatable `--include`/`--exclude` globs select concepts and logs with the same semantics `load_remote_bundle` uses (regenerated indexes are always emitted and describe only what was packed):
 
@@ -361,6 +372,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `pack.ts` (the `pack` command's archive writer), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `pack.ts` (the `pack` command's archive writer), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `visualize.ts` (the `graph html` self-contained force-directed export), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

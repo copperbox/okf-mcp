@@ -137,5 +137,7 @@ export type {
 } from "./types.js";
 export { validateBundle } from "./validate.js";
 export type { ValidationReport } from "./validate.js";
+export { communityAssigner, exportGraphHtml } from "./visualize.js";
+export type { CommunityMode, ExportGraphHtmlOptions } from "./visualize.js";
 export { DEFAULT_WATCH_DEBOUNCE_MS, watchBundles } from "./watch.js";
 export type { BundleWatcher, WatchBundlesOptions } from "./watch.js";

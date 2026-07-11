@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -57,4 +58,21 @@ export async function initRepo(root: string): Promise<void> {
 export async function commitAll(root: string, message: string): Promise<void> {
   await git(root, "add", "-A");
   await git(root, "commit", "-q", "-m", message);
+}
+
+/** Parse the graph data embedded in a `graph html` export; `raw` is the JSON as it appears in the document. */
+export function embeddedGraphData(html: string): {
+  raw: string;
+  nodes: {
+    id: string;
+    title?: string;
+    community: string;
+    external?: boolean;
+  }[];
+  edges: { from: string; to: string; kind?: string }[];
+} {
+  const match =
+    /<script type="application\/json" id="graph-data">(.*?)<\/script>/s.exec(html);
+  assert.ok(match, `no embedded graph data in: ${html.slice(0, 400)}`);
+  return { raw: match[1]!, ...JSON.parse(match[1]!) };
 }

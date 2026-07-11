@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { makeTarGz } from "./archives.js";
+import { embeddedGraphData } from "./helpers.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const CLI = path.join(repoRoot, "src", "cli.ts");
@@ -209,6 +210,356 @@ describe("cli --only", () => {
     ]);
     assert.equal(code, 2);
     assert.match(stderr, /no bundle subdirectory named "nope"/);
+  });
+});
+
+describe("cli graph", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-graph-"));
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\n" +
+        "See [runbook](../ops/runbook.md) and [docs](https://example.com/docs).\n",
+    );
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Note\ntitle: Runbook\n---\n\nSteps.\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("exports all loaded bundles as one merged graph with cross-bundle edges (json)", async () => {
+    const { code, stdout } = await runCli(["--colocated-bundles", root, "graph"]);
+    assert.equal(code, 0);
+    const graph = JSON.parse(stdout);
+    const ids = graph.nodes.map((n: { id: string }) => n.id).sort();
+    assert.deepEqual(ids, ["acme:note", "ops:runbook"]);
+    assert.deepEqual(graph.edges, [
+      { from: "acme:note", to: "ops:runbook", kind: "cross-bundle" },
+    ]);
+  });
+
+  it("renders cross-bundle edges dashed in dot and mermaid", async () => {
+    const dot = await runCli(["--colocated-bundles", root, "graph", "dot"]);
+    assert.equal(dot.code, 0);
+    assert.match(dot.stdout, /"acme:note" -> "ops:runbook" \[style=dashed\];/);
+
+    const mermaid = await runCli(["--colocated-bundles", root, "graph", "mermaid"]);
+    assert.equal(mermaid.code, 0);
+    assert.match(mermaid.stdout, /n\d+ -\.-> n\d+/);
+  });
+
+  it("keeps single-bundle output unqualified when exactly one bundle is mounted", async () => {
+    const { code, stdout } = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+    ]);
+    assert.equal(code, 0);
+    const graph = JSON.parse(stdout);
+    assert.deepEqual(
+      graph.nodes.map((n: { id: string }) => n.id),
+      ["runbook"],
+    );
+    assert.deepEqual(graph.edges, []);
+  });
+
+  it("scopes the export to a named bundle with unqualified IDs", async () => {
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "json",
+      "ops",
+    ]);
+    assert.equal(code, 0);
+    const graph = JSON.parse(stdout);
+    assert.deepEqual(
+      graph.nodes.map((n: { id: string }) => n.id),
+      ["runbook"],
+    );
+  });
+
+  it("errors on an unknown bundle, listing the available ones", async () => {
+    const { code, stderr } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "json",
+      "nope",
+    ]);
+    assert.equal(code, 1);
+    assert.match(stderr, /unknown bundle "nope" \(available: acme, ops\)/);
+  });
+
+  it("includes external nodes only with --include-external", async () => {
+    const bare = await runCli(["--colocated-bundles", root, "graph"]);
+    assert.equal(bare.code, 0);
+    assert.doesNotMatch(bare.stdout, /example\.com/);
+
+    const withExternal = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "json",
+      "--include-external",
+    ]);
+    assert.equal(withExternal.code, 0);
+    const graph = JSON.parse(withExternal.stdout);
+    const external = graph.nodes.find(
+      (n: { id: string }) => n.id === "https://example.com/docs",
+    );
+    assert.ok(external, `no external node in: ${withExternal.stdout}`);
+    assert.equal(external.external, true);
+
+    const single = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "json",
+      "acme",
+      "--include-external",
+    ]);
+    assert.equal(single.code, 0);
+    assert.match(single.stdout, /https:\/\/example\.com\/docs/);
+  });
+
+  it("does not duplicate a URL matched to a cross-bundle edge as an external node", async () => {
+    // The link targets ops's canonical URL, so it derives a cross-bundle edge;
+    // even with --include-external it must not also appear as an external node.
+    await fs.writeFile(
+      path.join(root, "acme", "cite.md"),
+      "---\ntype: Note\ntitle: Cite\n---\n\n" +
+        "See [runbook](https://kb.example.com/vault/ops/runbook.md).\n",
+    );
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "--canonical-url",
+      `${root}=https://kb.example.com/vault`,
+      "graph",
+      "json",
+      "--include-external",
+    ]);
+    assert.equal(code, 0);
+    const graph = JSON.parse(stdout);
+    assert.ok(
+      graph.edges.some(
+        (e: { from: string; to: string; kind?: string }) =>
+          e.from === "acme:cite" && e.to === "ops:runbook" && e.kind === "cross-bundle",
+      ),
+      `no derived edge in: ${stdout}`,
+    );
+    assert.equal(
+      graph.nodes.some(
+        (n: { id: string }) => n.id === "https://kb.example.com/vault/ops/runbook.md",
+      ),
+      false,
+    );
+  });
+
+  it("rejects an unknown format", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "png",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /unknown graph format: png/);
+  });
+});
+
+describe("cli graph html", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-graph-html-"));
+    await fs.mkdir(path.join(root, "acme"));
+    await fs.writeFile(
+      path.join(root, "acme", "note.md"),
+      "---\ntype: Note\ntitle: Note\ntags: [alpha]\n---\n\n" +
+        "See [runbook](../ops/runbook.md).\n",
+    );
+    await fs.mkdir(path.join(root, "ops"));
+    await fs.mkdir(path.join(root, "ops", "playbooks"));
+    await fs.writeFile(
+      path.join(root, "ops", "runbook.md"),
+      "---\ntype: Note\ntitle: Runbook\n---\n\n" +
+        "See [deploy](/playbooks/deploy.md).\n",
+    );
+    await fs.writeFile(
+      path.join(root, "ops", "playbooks", "deploy.md"),
+      "---\ntype: Runbook\ntitle: Deploy\n---\n\nSteps.\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("exports a merged multi-bundle graph grouped by bundle", async () => {
+    const { code, stdout } = await runCli(["--colocated-bundles", root, "graph", "html"]);
+    assert.equal(code, 0);
+    assert.match(stdout, /^<!doctype html>/);
+    const data = embeddedGraphData(stdout);
+    assert.deepEqual(
+      data.nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["acme:note", "acme"],
+        ["ops:playbooks/deploy", "ops"],
+        ["ops:runbook", "ops"],
+      ],
+    );
+    assert.ok(
+      data.edges.some(
+        (e) => e.from === "acme:note" && e.to === "ops:runbook" && e.kind === "cross-bundle",
+      ),
+      `no cross-bundle edge in: ${JSON.stringify(data.edges)}`,
+    );
+    assert.ok(
+      data.edges.some((e) => e.from === "ops:runbook" && e.to === "ops:playbooks/deploy"),
+      `no in-bundle edge in: ${JSON.stringify(data.edges)}`,
+    );
+  });
+
+  it("groups a single bundle by concept type unless --community overrides", async () => {
+    const bundle = ["--bundle", path.join(root, "ops")];
+    const byType = await runCli([...bundle, "graph", "html"]);
+    assert.equal(byType.code, 0);
+    assert.deepEqual(
+      embeddedGraphData(byType.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["playbooks/deploy", "Runbook"],
+        ["runbook", "Note"],
+      ],
+    );
+
+    const byFolder = await runCli([...bundle, "graph", "html", "--community", "folder"]);
+    assert.equal(byFolder.code, 0);
+    assert.deepEqual(
+      embeddedGraphData(byFolder.stdout).nodes.map((n) => [n.id, n.community]).sort(),
+      [
+        ["playbooks/deploy", "playbooks"],
+        ["runbook", "(root)"],
+      ],
+    );
+
+    const byTag = await runCli([
+      "--bundle",
+      path.join(root, "acme"),
+      "graph",
+      "html",
+      "--community",
+      "tag",
+    ]);
+    assert.equal(byTag.code, 0);
+    assert.deepEqual(
+      embeddedGraphData(byTag.stdout).nodes.map((n) => [n.id, n.community]),
+      [["note", "alpha"]],
+    );
+  });
+
+  it("rejects --community for a merged multi-bundle graph (bundle grouping wins)", async () => {
+    const { code, stderr } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "--community",
+      "type",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /groups by bundle/);
+    // Scoping to one bundle makes --community valid again.
+    const scoped = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "ops",
+      "--community",
+      "folder",
+    ]);
+    assert.equal(scoped.code, 0);
+  });
+
+  it("rejects --community with a non-html format and an unknown mode", async () => {
+    const wrongFormat = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "dot",
+      "--community",
+      "type",
+    ]);
+    assert.equal(wrongFormat.code, 2);
+    assert.match(wrongFormat.stderr, /--community requires the html graph format/);
+
+    const unknownMode = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "html",
+      "--community",
+      "detect",
+    ]);
+    assert.equal(unknownMode.code, 2);
+    assert.match(unknownMode.stderr, /unknown --community mode: detect/);
+  });
+
+  it("escapes a </script> in a title so it cannot break out of the document", async () => {
+    await fs.writeFile(
+      path.join(root, "ops", "sneaky.md"),
+      '---\ntype: Note\ntitle: "</script><script>alert(1)</script>"\n---\n\nBody.\n',
+    );
+    const { code, stdout } = await runCli([
+      "--bundle",
+      path.join(root, "ops"),
+      "graph",
+      "html",
+    ]);
+    assert.equal(code, 0);
+    assert.doesNotMatch(stdout, /<\/script><script>alert/);
+    const sneaky = embeddedGraphData(stdout).nodes.find((n) => n.id === "sneaky");
+    assert.equal(sneaky?.title, "</script><script>alert(1)</script>");
+  });
+
+  it("writes the document to --out instead of stdout", async () => {
+    const out = path.join(root, "graph.html");
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "html",
+      "--out",
+      out,
+    ]);
+    assert.equal(code, 0);
+    assert.equal(stdout, "");
+    const html = await fs.readFile(out, "utf8");
+    assert.match(html, /^<!doctype html>/);
+    assert.match(html, /"acme:note"/);
+  });
+
+  it("honors --out for the other graph formats too", async () => {
+    const out = path.join(root, "graph.dot");
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "graph",
+      "dot",
+      "--out",
+      out,
+    ]);
+    assert.equal(code, 0);
+    assert.equal(stdout, "");
+    assert.match(await fs.readFile(out, "utf8"), /digraph okf/);
   });
 });
 

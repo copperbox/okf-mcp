@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import { generateIndexes } from "./authoring.js";
 import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
-import { buildGraph, exportGraph, graphSummary } from "./graph.js";
+import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
 import { archiveKind } from "./remote.js";
@@ -17,6 +17,8 @@ import type { BundleGuide } from "./server.js";
 import { OkfStore } from "./store.js";
 import type { BundleConfig, RemoteBundleConfig } from "./types.js";
 import { validateBundle } from "./validate.js";
+import { communityAssigner, exportGraphHtml } from "./visualize.js";
+import type { CommunityMode } from "./visualize.js";
 import { watchBundles } from "./watch.js";
 
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
@@ -32,7 +34,16 @@ Commands:
   validate            Report OKF v0.1 conformance errors and warnings
   search <query>      Search concepts
   concept <id>        Print one concept document as JSON
-  graph [format]      Export the link graph (json | dot | mermaid)
+  graph [format] [bundle]
+                      Export the link graph (json | dot | mermaid | html).
+                      With several bundles mounted and no bundle named, all
+                      export as one merged graph: bundle:concept node IDs plus
+                      derived cross-bundle edges (dashed in dot/mermaid).
+                      html is one self-contained interactive page (embedded
+                      data + force-directed canvas, no network access): nodes
+                      colored by community — bundle for a merged graph,
+                      concept type for a single bundle unless --community
+                      overrides
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive; indexes are
                       regenerated in-memory, so the source stays untouched
@@ -76,8 +87,19 @@ Options:
                           one --colocated-bundles root is configured — every
                           bundle under the root derives <url>/<folder>; an
                           explicit per-bundle id=url still overrides.
-  --out <file>            pack only: output archive path ending in .tar.gz,
-                          .tgz, or .zip; defaults to <bundle>.tar.gz
+  --include-external      graph only: include external link targets (https:,
+                          repo:, ...) as opaque nodes; a URL that derived a
+                          cross-bundle edge is not duplicated as one
+  --community mode        graph html only: how a single bundle's nodes group
+                          into communities — type (default; the concept type),
+                          folder (first path segment of the concept ID, (root)
+                          for top-level concepts), or tag (first frontmatter
+                          tag, (untagged) when absent). A merged multi-bundle
+                          graph always groups by bundle, so --community is
+                          rejected there; name a bundle to use it
+  --out <file>            graph: write the export there instead of stdout.
+                          pack: output archive path ending in .tar.gz, .tgz,
+                          or .zip; defaults to <bundle>.tar.gz
   --include <glob>        pack only: pack matching bundle-relative paths only;
                           repeatable, same semantics as load_remote_bundle
   --exclude <glob>        pack only: skip matching bundle-relative paths;
@@ -208,7 +230,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "remote-bundle": { type: "string", multiple: true },
       "colocated-remote-bundles": { type: "string", multiple: true },
       "canonical-url": { type: "string", multiple: true },
+      community: { type: "string" },
       out: { type: "string" },
+      "include-external": { type: "boolean" },
       include: { type: "string", multiple: true },
       exclude: { type: "string", multiple: true },
       writable: { type: "boolean" },
@@ -379,12 +403,55 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     case "graph": {
-      const format = (rest[0] ?? "json") as GraphFormat;
-      if (!["json", "dot", "mermaid"].includes(format)) {
+      const format = rest[0] ?? "json";
+      if (!["json", "dot", "mermaid", "html"].includes(format)) {
         console.error(`error: unknown graph format: ${format}`);
         return 2;
       }
-      console.log(exportGraph(buildGraph(await store.bundle(undefined)), format));
+      const bundleId = rest[1];
+      // With several bundles mounted and none named, export them all as one
+      // merged graph: bundle:concept node IDs plus derived cross-bundle
+      // edges. A single mounted bundle keeps the unqualified single-bundle
+      // output.
+      const merged = bundleId === undefined && store.bundles().length > 1;
+      const community = values.community;
+      if (community !== undefined) {
+        if (format !== "html") {
+          console.error("error: --community requires the html graph format");
+          return 2;
+        }
+        if (!["type", "folder", "tag"].includes(community)) {
+          console.error(
+            `error: unknown --community mode: ${community} (expected type, folder, or tag)`,
+          );
+          return 2;
+        }
+        if (merged) {
+          console.error(
+            "error: a merged multi-bundle graph always groups by bundle, so " +
+              `--community does not apply; name a bundle to group it by ${community}`,
+          );
+          return 2;
+        }
+      }
+      const options = { includeExternal: values["include-external"] ?? false };
+      const graph = merged
+        ? buildMultiGraph(store.bundles(), options)
+        : buildGraph(await store.bundle(bundleId), options);
+      let output: string;
+      if (format === "html") {
+        const mode: CommunityMode = merged
+          ? "bundle"
+          : ((community as CommunityMode | undefined) ?? "type");
+        output = exportGraphHtml(graph, { communityOf: communityAssigner(mode) });
+      } else {
+        output = exportGraph(graph, format as GraphFormat);
+      }
+      if (values.out !== undefined) {
+        await fs.writeFile(values.out, output);
+        return 0;
+      }
+      console.log(output);
       return 0;
     }
     case "index": {
