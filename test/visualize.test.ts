@@ -86,6 +86,23 @@ describe("exportGraphHtml", () => {
     assert.equal(data.nodes[0]!.title, "</script><script>alert(1)</script>");
   });
 
+  it("legend click focuses a single community; edges stay when either endpoint is inside", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Single-select: clicking the active entry clears the focus, clicking
+    // another switches it.
+    assert.match(html, /setFocus\(focused === c \? null : c\)/);
+    // An edge fades only when NEITHER endpoint is in the focused community —
+    // cross-community edges into the focus stay visible.
+    assert.match(html, /e\.source\.community !== focused && e\.target\.community !== focused/);
+    // The active legend entry is visibly highlighted; the old dim toggle and
+    // its styling are gone entirely.
+    assert.match(html, /\.legend-item\.active \{ background/);
+    assert.doesNotMatch(html, /dimmed/);
+    // Clicking the canvas background clears node selection AND legend focus.
+    assert.match(html, /selected = null; setFocus\(null\);/);
+    assert.match(html, /click the legend to focus a community/);
+  });
+
   it("ships a self-contained document with no external resources", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     assert.doesNotMatch(html, /\bsrc=|\bhref=|https?:\/\/cdn/i);

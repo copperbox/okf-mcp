@@ -92,8 +92,9 @@ export function exportGraphHtml(
     border-radius: 8px; padding: 10px 12px; user-select: none; }
   #panel h1 { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: #f0f3f6; }
   #stats { color: #8b949e; font-size: 12px; margin-bottom: 8px; }
-  .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
-  .legend-item.dimmed { opacity: 0.35; }
+  .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 4px; margin: 0 -4px;
+    border-radius: 4px; cursor: pointer; }
+  .legend-item.active { background: rgba(88, 166, 255, 0.25); }
   .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
   #tooltip { position: fixed; display: none; max-width: 300px; pointer-events: none; z-index: 2;
     background: rgba(22, 27, 34, 0.95); border: 1px solid #30363d; border-radius: 8px;
@@ -113,7 +114,7 @@ export function exportGraphHtml(
   <div id="legend"></div>
 </div>
 <div id="tooltip"></div>
-<div id="hint">drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to dim</div>
+<div id="hint">drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to focus a community</div>
 <script type="application/json" id="graph-data">${json}</script>
 <script>
 (() => {
@@ -145,8 +146,6 @@ export function exportGraphHtml(
   communities.forEach((c, i) => {
     colorOf.set(c, c === "(external)" ? "#8a8f98" : "hsl(" + ((i * 137.508) % 360).toFixed(1) + " 62% 58%)");
   });
-  const dimmed = new Set();
-
   // Deterministic start: communities spaced on a ring, members on a golden-
   // angle spiral around theirs, so clusters begin apart and converge fast.
   communities.forEach((c, ci) => {
@@ -241,9 +240,10 @@ export function exportGraphHtml(
 
   let selected = null;
   let hovered = null;
+  let focused = null;
   function fade(n) {
     let a = 1;
-    if (dimmed.has(n.community)) a = 0.12;
+    if (focused !== null && n.community !== focused) a = 0.12;
     if (selected && !neighbors.get(selected).has(n)) a = Math.min(a, 0.15);
     return a;
   }
@@ -255,7 +255,11 @@ export function exportGraphHtml(
     ctx.translate(view.x, view.y);
     ctx.scale(view.k, view.k);
     for (const e of edges) {
-      let a = Math.min(fade(e.source), fade(e.target));
+      // Unlike node fading, an edge survives a legend focus when EITHER
+      // endpoint is in the focused community, so cross-community edges into
+      // the focus stay visible.
+      let a = 1;
+      if (focused !== null && e.source.community !== focused && e.target.community !== focused) a = 0.12;
       if (selected && e.source !== selected && e.target !== selected) a = Math.min(a, 0.1);
       ctx.globalAlpha = 0.55 * a;
       ctx.strokeStyle = e.cross ? "#e0b45c" : "#7d8590";
@@ -345,7 +349,7 @@ export function exportGraphHtml(
   window.addEventListener("mouseup", () => {
     if (!moved) {
       if (pressed) selected = selected === pressed ? null : pressed;
-      else if (panFrom) selected = null;
+      else if (panFrom) { selected = null; setFocus(null); }
     }
     dragging = null;
     pressed = null;
@@ -361,6 +365,11 @@ export function exportGraphHtml(
 
   document.getElementById("stats").textContent = nodes.length + " nodes \\u00b7 " + edges.length + " edges";
   const legend = document.getElementById("legend");
+  const legendItems = new Map();
+  function setFocus(community) {
+    focused = community;
+    for (const [name, el] of legendItems) el.classList.toggle("active", name === focused);
+  }
   for (const c of communities) {
     const item = document.createElement("div");
     item.className = "legend-item";
@@ -370,11 +379,8 @@ export function exportGraphHtml(
     const label = document.createElement("span");
     label.textContent = c;
     item.append(swatch, label);
-    item.addEventListener("click", () => {
-      if (dimmed.has(c)) dimmed.delete(c);
-      else dimmed.add(c);
-      item.classList.toggle("dimmed", dimmed.has(c));
-    });
+    item.addEventListener("click", () => setFocus(focused === c ? null : c));
+    legendItems.set(c, item);
     legend.append(item);
   }
 
