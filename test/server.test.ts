@@ -1806,6 +1806,25 @@ describe("README tool documentation", () => {
   });
 });
 
+describe("entry-point tool _meta", () => {
+  it("marks search_concepts and get_concept anthropic/alwaysLoad, and no other tool", async () => {
+    const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const client = await connectClient(store);
+    const { tools } = await client.listTools();
+
+    const alwaysLoaded = tools
+      .filter((t) => t._meta?.["anthropic/alwaysLoad"] === true)
+      .map((t) => t.name)
+      .sort();
+    assert.deepEqual(alwaysLoaded, ["get_concept", "search_concepts"]);
+
+    // Every other tool stays deferred deliberately — no stray _meta key.
+    const listBundles = tools.find((t) => t.name === "list_bundles");
+    assert.ok(listBundles);
+    assert.equal(listBundles._meta?.["anthropic/alwaysLoad"], undefined);
+  });
+});
+
 describe("colocated remote root tools", () => {
   const DOC = "---\ntype: Table\ntitle: Orders\n---\n\nOrder rows.\n";
   const ROOT_URL = "https://github.com/acme/kb/tree/main/kb";

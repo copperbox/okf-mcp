@@ -278,6 +278,8 @@ Resources: one `text/markdown` resource per document, at `okf://<bundle>/<path>`
 
 The server also declares MCP server-level instructions — a short primer on OKF conventions (concept IDs, link form, reserved files, the read/write tool flow) that clients inject into the agent's context. Authoring guidance is included only when the server runs with `--writable`.
 
+The two entry-point tools, `search_concepts` and `get_concept`, declare `anthropic/alwaysLoad` in their `_meta`, so clients that defer tool loading keep their schemas visible while the rest of the toolset loads on demand.
+
 Read tools:
 
 | Tool | Purpose |
