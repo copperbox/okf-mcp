@@ -62,19 +62,21 @@ export function exportGraphHtml(
   graph: ConceptGraph,
   options: ExportGraphHtmlOptions,
 ): string {
+  // Only what the page renders travels: nodes drop bundle/path, edges drop
+  // label. JSON.stringify omits the fields left undefined here.
   const nodes: EmbeddedNode[] = graph.nodes.map((node) => ({
     id: node.id,
     type: node.type,
     community: options.communityOf(node),
-    ...(node.title !== undefined && { title: node.title }),
-    ...(node.description !== undefined && { description: node.description }),
-    ...(node.tags !== undefined && { tags: node.tags }),
-    ...(node.external !== undefined && { external: node.external }),
+    title: node.title,
+    description: node.description,
+    tags: node.tags,
+    external: node.external,
   }));
   const edges: GraphEdge[] = graph.edges.map((edge) => ({
     from: edge.from,
     to: edge.to,
-    ...(edge.kind !== undefined && { kind: edge.kind }),
+    kind: edge.kind,
   }));
   const json = JSON.stringify({ nodes, edges }).replaceAll("<", "\\u003c");
   return `<!doctype html>
