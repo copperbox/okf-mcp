@@ -282,6 +282,109 @@ describe("validateBundle okf_version (spec §11)", () => {
   });
 });
 
+describe("validateBundle duplicate headings", () => {
+  it("warns on duplicate top-level headings in a concept body", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Citations\n\n# Citations\n\n[1] [Docs](https://example.com)\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const duplicates = result.warnings.filter((p) =>
+      p.message.includes("duplicate top-level heading"),
+    );
+    assert.equal(duplicates.length, 1);
+    assert.equal(duplicates[0]!.path, "note.md");
+    assert.match(duplicates[0]!.message, /# Citations.*2 times/);
+    assert.equal(result.conformant, true); // a warning, never an error
+  });
+
+  it("names the repair fixer only for duplicate Citations headings", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Notes\n\ntext\n\n# Notes\n\nmore\n\n" +
+            "# Citations\n\n# Citations\n\n[1] [Docs](https://example.com)\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const duplicates = result.warnings.filter((p) =>
+      p.message.includes("duplicate top-level heading"),
+    );
+    assert.equal(duplicates.length, 2);
+    const citations = duplicates.find((p) => p.message.includes("# Citations"))!;
+    assert.match(
+      citations.message,
+      /auto-fixable: `okf-mcp repair --only duplicate-citation-headings`/,
+    );
+    const notes = duplicates.find((p) => p.message.includes("# Notes"))!;
+    assert.doesNotMatch(notes.message, /auto-fixable/);
+  });
+
+  it("stays silent for distinct or repeated-at-depth headings", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Schema\n\n## Keys\n\n# Examples\n\n## Keys\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    assert.deepEqual(
+      result.warnings.filter((p) => p.message.includes("duplicate top-level")),
+      [],
+    );
+  });
+});
+
+describe("validateBundle malformed-citation fixer pointers", () => {
+  it("names citation-format only for the auto-fixable ordered-list form", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Citations\n\n" +
+            "1. [Alpha](https://example.com/a)\nplain prose line\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const malformed = result.warnings.filter((p) =>
+      p.message.includes("malformed citation entry"),
+    );
+    assert.equal(malformed.length, 2);
+    const ordered = malformed.find((p) => p.message.includes("[Alpha]"))!;
+    assert.match(
+      ordered.message,
+      /auto-fixable: `okf-mcp repair --only citation-format`/,
+    );
+    const prose = malformed.find((p) => p.message.includes("plain prose"))!;
+    assert.doesNotMatch(prose.message, /auto-fixable/);
+  });
+});
+
 describe("validateBundle colocated `../` links", () => {
   const sibling = () =>
     buildBundle(

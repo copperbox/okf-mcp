@@ -56,6 +56,18 @@ describe("authoring", () => {
     assert.match(concept?.body ?? "", /Sum of order totals/);
   });
 
+  it("normalizes ordered-list citation entries under # Citations at write time", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note" },
+      "# Steps\n\n1. keep this list\n\n# Citations\n\n1. [Example](https://example.com)",
+    );
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /# Citations\n\n\[1\] \[Example\]\(https:\/\/example\.com\)/);
+    assert.match(source, /# Steps\n\n1\. keep this list/);
+  });
+
   it("requires a non-empty type", async () => {
     await assert.rejects(
       writeConcept(root, "x.md", { type: " " }, "Body"),
@@ -287,6 +299,56 @@ describe("authoring", () => {
     const source = await fs.readFile(path.join(root, "x.md"), "utf8");
     assert.match(source, /title: X2/);
     assert.match(source, /# A\n\nNew one\.\n\n# B\n\nTwo\.\n$/);
+  });
+
+  it("strips a leading duplicate heading and normalizes entries when rewriting Citations", async () => {
+    // The issue-78 repair path: an agent "fixes" the section by resending it
+    // with its heading and ordered-list entries; neither may land on disk.
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note" },
+      "# A\n\nOne.\n\n# Citations\n\n1. [Example](https://example.com)",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", {
+      section: {
+        heading: "Citations",
+        content: "# Citations\n\n1. [Example](https://example.com)",
+      },
+    });
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(
+      source,
+      /# A\n\nOne\.\n\n# Citations\n\n\[1\] \[Example\]\(https:\/\/example\.com\)\n$/,
+    );
+    assert.equal(source.match(/# Citations/g)?.length, 1);
+  });
+
+  it("keeps a leading heading that does not repeat the target section's", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# Schema\n\nOld.\n\n# Examples\n\nQ.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", {
+      section: { heading: "Schema", content: "## Keys\n\nPrimary key." },
+    });
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /# Schema\n\n## Keys\n\nPrimary key\.\n\n# Examples/);
+  });
+
+  it("normalizes citation entries introduced by replacing a broader section", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "# Notes\n\nOld.");
+    const bundle = await loadBundle({ id: "t", root });
+
+    await updateConcept(bundle, "x", {
+      section: {
+        heading: "Notes",
+        content: "New.\n\n# Citations\n\n1. [Example](https://example.com)",
+      },
+    });
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /# Citations\n\n\[1\] \[Example\]\(https:\/\/example\.com\)\n$/);
   });
 
   it("rejects an unknown section, listing what is available", async () => {

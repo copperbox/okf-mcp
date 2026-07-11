@@ -635,3 +635,93 @@ describe("cli --colocated-remote-bundles", () => {
     assert.match(stderr, /--only requires --colocated-bundles or --colocated-remote-bundles/);
   });
 });
+
+describe("cli repair", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-repair-"));
+    await fs.writeFile(
+      path.join(root, "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\n# Citations\n\n" +
+        "1. [Alpha](https://example.com/a)\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("--list prints the fixer registry without needing a bundle", async () => {
+    const { code, stdout } = await runCli(["repair", "--list"]);
+    assert.equal(code, 0);
+    assert.match(stdout, /^citation-format: /m);
+    assert.match(stdout, /^duplicate-citation-headings: /m);
+    assert.match(stdout, /^okf-uri-to-canonical: /m);
+  });
+
+  it("dry-runs by default: reports findings, writes nothing", async () => {
+    const before = await fs.readFile(path.join(root, "note.md"), "utf8");
+    const { code, stdout } = await runCli(["--bundle", root, "repair"]);
+    assert.equal(code, 0);
+    const report = JSON.parse(stdout);
+    assert.equal(report.applied, false);
+    assert.equal(report.fixed, 1);
+    assert.deepEqual(report.files, ["note.md"]);
+    assert.equal(await fs.readFile(path.join(root, "note.md"), "utf8"), before);
+  });
+
+  it("--write applies fixes and does the log/index bookkeeping", async () => {
+    const { code, stdout } = await runCli(["--bundle", root, "repair", "--write"]);
+    assert.equal(code, 0);
+    const report = JSON.parse(stdout);
+    assert.equal(report.applied, true);
+    assert.equal(report.log, "log.md");
+    const repaired = await fs.readFile(path.join(root, "note.md"), "utf8");
+    assert.match(repaired, /\[1\] \[Alpha\]\(https:\/\/example\.com\/a\)/);
+    assert.match(
+      await fs.readFile(path.join(root, "log.md"), "utf8"),
+      /Repair sweep .*citation-format \(1 file\)/,
+    );
+  });
+
+  it("--only scopes to the named fixers and rejects unknown ids", async () => {
+    const { code, stdout } = await runCli([
+      "--bundle",
+      root,
+      "repair",
+      "--only",
+      "duplicate-citation-headings",
+    ]);
+    assert.equal(code, 0);
+    const report = JSON.parse(stdout);
+    assert.deepEqual(report.fixers, ["duplicate-citation-headings"]);
+    assert.deepEqual(report.findings, []);
+
+    const bad = await runCli(["--bundle", root, "repair", "--only", "bogus"]);
+    assert.equal(bad.code, 2);
+    assert.match(bad.stderr, /unknown fixer: bogus/);
+  });
+
+  it("skips read-only remote bundles with a note and repairs the rest", async () => {
+    const archive = path.join(root, "remote.tar.gz");
+    await fs.writeFile(
+      archive,
+      makeTarGz({
+        "kb/doc.md":
+          "---\ntype: Note\n---\n\n# Citations\n\n1. [X](https://example.com/x)\n",
+      }),
+    );
+    const { code, stdout, stderr } = await runCli([
+      "--bundle",
+      root,
+      "--remote-bundle",
+      `remote=${archive}`,
+      "repair",
+    ]);
+    assert.equal(code, 0);
+    assert.match(stderr, /remote: skipped \(read-only remote bundle\)/);
+    const report = JSON.parse(stdout);
+    assert.equal(report.bundle, path.basename(root));
+    assert.equal(report.fixed, 1);
+  });
+});

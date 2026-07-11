@@ -12,6 +12,7 @@ import {
   extractCitations,
   extractLinks,
   extractSection,
+  normalizeCitationEntries,
   parseConceptDocument,
   sectionAt,
   sectionSpan,
@@ -397,6 +398,77 @@ describe("extractCitations", () => {
     const body = "# Notes\n\n[1] [Docs](https://example.com)\n\n# Citations\n\n[1] [Real](https://real.example)\n";
     const { citations } = extractCitations(body, "a.md", exists);
     assert.deepEqual(citations.map((c) => c.target), ["https://real.example"]);
+  });
+
+  it("merges duplicate Citations sections so an empty first one cannot mask entries", () => {
+    const body =
+      "# Citations\n\n# Citations\n\n[1] [Example](https://example.com)\n";
+    const { citations, malformed } = extractCitations(body, "a.md", exists);
+    assert.deepEqual(citations.map((c) => c.target), ["https://example.com"]);
+    assert.deepEqual(malformed, []);
+  });
+
+  it("reads entries from every duplicate Citations section", () => {
+    const body = [
+      "# Citations",
+      "",
+      "[1] [A](https://a.example)",
+      "",
+      "# Notes",
+      "",
+      "Prose.",
+      "",
+      "# Citations",
+      "",
+      "[2] [B](https://b.example)",
+      "",
+    ].join("\n");
+    const { citations } = extractCitations(body, "a.md", exists);
+    assert.deepEqual(citations.map((c) => c.index), [1, 2]);
+  });
+});
+
+describe("normalizeCitationEntries", () => {
+  it("rewrites ordered-list entries under # Citations to the [n] form", () => {
+    const body =
+      "# Citations\n\n1. [Docs](https://example.com)\n2) [Guide](/guides/x.md), accessed 2026-07-01\n";
+    assert.equal(
+      normalizeCitationEntries(body),
+      "# Citations\n\n[1] [Docs](https://example.com)\n[2] [Guide](/guides/x.md), accessed 2026-07-01\n",
+    );
+  });
+
+  it("leaves correct entries, prose, and non-link list items alone", () => {
+    const body =
+      "# Citations\n\n[1] [Docs](https://example.com)\n1. no link here\nProse line.\n";
+    assert.equal(normalizeCitationEntries(body), body);
+  });
+
+  it("only touches Citations sections", () => {
+    const body =
+      "# Steps\n\n1. [Open the runbook](/playbooks/x.md)\n\n# Citations\n\n1. [Docs](https://example.com)\n";
+    assert.equal(
+      normalizeCitationEntries(body),
+      "# Steps\n\n1. [Open the runbook](/playbooks/x.md)\n\n# Citations\n\n[1] [Docs](https://example.com)\n",
+    );
+  });
+
+  it("normalizes every duplicate Citations section", () => {
+    const body =
+      "# Citations\n\n1. [A](https://a.example)\n\n# Notes\n\nProse.\n\n# Citations\n\n2. [B](https://b.example)\n";
+    assert.equal(
+      normalizeCitationEntries(body),
+      "# Citations\n\n[1] [A](https://a.example)\n\n# Notes\n\nProse.\n\n# Citations\n\n[2] [B](https://b.example)\n",
+    );
+  });
+
+  it("leaves fenced code inside the Citations section alone", () => {
+    const body =
+      "# Citations\n\n```\n1. [not real](https://example.com)\n```\n\n1. [Docs](https://example.com)\n";
+    assert.equal(
+      normalizeCitationEntries(body),
+      "# Citations\n\n```\n1. [not real](https://example.com)\n```\n\n[1] [Docs](https://example.com)\n",
+    );
   });
 });
 

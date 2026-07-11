@@ -1015,6 +1015,57 @@ describe("authoring tools", () => {
     });
   });
 
+  describe("citation hygiene (issue #78)", () => {
+    it("write_concept normalizes ordered-list citations so get_citations sees them", async () => {
+      const client = await connectLocal({ writable: true });
+      const write = await callTool(client, "write_concept", {
+        path: "notes/sourced.md",
+        frontmatter: { type: "Note" },
+        body: "# Summary\n\nText.\n\n# Citations\n\n1. [Example](https://example.com)",
+      });
+      assert.notEqual(write.isError, true);
+
+      const citations = (await callJson(client, "get_citations", {
+        id: "notes/sourced",
+      })) as Array<{ index: number; target: string }>;
+      assert.deepEqual(
+        citations.map((c) => ({ index: c.index, target: c.target })),
+        [{ index: 1, target: "https://example.com" }],
+      );
+      const reports = (await callJson(client, "validate_bundle", {})) as Array<{
+        warnings: Array<{ message: string }>;
+      }>;
+      assert.deepEqual(
+        reports.flatMap((r) => r.warnings).filter((w) => w.message.includes("malformed citation")),
+        [],
+      );
+    });
+
+    it("update_concept resending the Citations heading does not duplicate it or mask entries", async () => {
+      const client = await connectLocal({ writable: true });
+      await callTool(client, "write_concept", {
+        path: "notes/sourced.md",
+        frontmatter: { type: "Note" },
+        body: "# Citations\n\n[9] [Old](https://old.example)",
+      });
+      const update = await callTool(client, "update_concept", {
+        id: "notes/sourced",
+        section: {
+          heading: "Citations",
+          content: "# Citations\n\n1. [Example](https://example.com)",
+        },
+      });
+      assert.notEqual(update.isError, true);
+
+      const source = await fs.readFile(path.join(root, "notes/sourced.md"), "utf8");
+      assert.equal(source.match(/# Citations/g)?.length, 1);
+      const citations = (await callJson(client, "get_citations", {
+        id: "notes/sourced",
+      })) as Array<{ target: string }>;
+      assert.deepEqual(citations.map((c) => c.target), ["https://example.com"]);
+    });
+  });
+
   describe("delete_concept", () => {
     it("is not registered on a read-only server", async () => {
       const client = await connectLocal();
@@ -1482,6 +1533,7 @@ describe("server instructions", () => {
       "reload_bundles",
       "index.md",
       "log.md",
+      "[n] [text](target)",
     ]) {
       assert.ok(instructions.includes(needle), `instructions should mention ${needle}`);
     }

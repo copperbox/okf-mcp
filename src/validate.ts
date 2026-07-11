@@ -6,7 +6,7 @@ import {
   resolveOutsideLink,
 } from "./bundle.js";
 import { splitFrontmatter } from "./frontmatter.js";
-import { extractCitations } from "./parser.js";
+import { extractCitations, normalizeCitationBlock, splitSections } from "./parser.js";
 import type { BundleProblem, LoadedBundle } from "./types.js";
 import { OKF_VERSION } from "./types.js";
 
@@ -52,6 +52,15 @@ const LINK_BULLET = /^[*+-]\s+\[[^\]]*\]\([^)]*\)/;
 
 function excerpt(line: string): string {
   return line.length > 60 ? `${line.slice(0, 57)}...` : line;
+}
+
+/**
+ * Suffix pointing a warning at its `okf-mcp repair` auto-fixer, so every
+ * validator warning with a safe mechanical fix names the fixer that applies
+ * it (the repair registry stays in sync with these checks).
+ */
+function fixableBy(fixerId: string): string {
+  return ` (auto-fixable: \`okf-mcp repair --only ${fixerId}\`)`;
 }
 
 /** Render a frontmatter value for a warning message. */
@@ -201,15 +210,45 @@ function checkIndexStructure(path: string, source: string): BundleProblem[] {
 }
 
 /**
+ * Warn when a concept body repeats a top-level heading (issue #78: a botched
+ * section repair left two `# Citations` headings, and section readers that
+ * take the first match saw only the empty first copy). Duplicates surface as
+ * warnings so existing damaged documents get repaired instead of silently
+ * losing content.
+ */
+function checkDuplicateTopHeadings(path: string, body: string): BundleProblem[] {
+  const counts = new Map<string, { heading: string; count: number }>();
+  for (const section of splitSections(body)) {
+    if (section.level !== 1) continue;
+    const key = section.heading.toLowerCase();
+    const entry = counts.get(key) ?? { heading: section.heading, count: 0 };
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+  return [...counts.values()]
+    .filter((entry) => entry.count > 1)
+    .map(({ heading, count }) => ({
+      severity: "warning" as const,
+      path,
+      message:
+        `duplicate top-level heading "# ${heading}" appears ${count} times; merge the sections — readers taking the first match miss the rest` +
+        (heading.toLowerCase() === "citations"
+          ? fixableBy("duplicate-citation-headings")
+          : ""),
+    }));
+}
+
+/**
  * Report OKF v0.1 conformance for a loaded bundle. Loading already
  * collects most problems; this adds reserved-file structure checks
  * of spec §9.3 (every index.md follows §6, every log.md follows §7,
  * and index.md frontmatter is only permitted at the bundle root per
- * §11), recommended-frontmatter warnings (spec §4.1), and citation
- * hygiene warnings (spec §8). Given the other mounted bundles, `../`
- * links from a colocated bundle are judged against its mounted
- * siblings: resolving ones are fine (and count as resolving citation
- * targets), dangling ones warn.
+ * §11), recommended-frontmatter warnings (spec §4.1), citation hygiene
+ * warnings (spec §8), and duplicate top-level heading warnings. Given
+ * the other mounted bundles, `../` links from a colocated bundle are
+ * judged against its mounted siblings: resolving ones are fine (and
+ * count as resolving citation targets), dangling ones warn. Warnings
+ * with a safe mechanical fix name their `okf-mcp repair` fixer id.
  */
 export async function validateBundle(
   bundle: LoadedBundle,
@@ -246,10 +285,15 @@ export async function validateBundle(
       (linkPath) => resolveOutsideLink(linkPath, siblings) !== undefined,
     );
     for (const line of malformed) {
+      // The ordered-list form is exactly what the citation-format fixer
+      // rewrites; other malformed lines have no mechanical fix.
+      const autoFixable = normalizeCitationBlock(line) !== line;
       problems.push({
         severity: "warning",
         path: concept.path,
-        message: `malformed citation entry (expected \`[n] [text](target)\`): ${line}`,
+        message:
+          `malformed citation entry (expected \`[n] [text](target)\`): ${line}` +
+          (autoFixable ? fixableBy("citation-format") : ""),
       });
     }
     for (const citation of citations) {
@@ -260,6 +304,7 @@ export async function validateBundle(
         message: `citation [${citation.index}] target does not resolve in the bundle: ${citation.target}`,
       });
     }
+    problems.push(...checkDuplicateTopHeadings(concept.path, concept.body));
   }
 
   for (const file of bundle.reserved) {

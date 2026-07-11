@@ -79,9 +79,12 @@ export {
   extractCitations,
   extractLinks,
   extractSection,
+  normalizeCitationBlock,
+  normalizeCitationEntries,
   parseConceptDocument,
   sectionAt,
   sectionSpan,
+  sectionSpans,
   splitSections,
 } from "./parser.js";
 export type {
@@ -107,6 +110,14 @@ export type {
   ColocatedRemoteMount,
   GitHubTreeRef,
 } from "./remote.js";
+export { FIXERS, repairBundle, selectFixers } from "./repair.js";
+export type {
+  Fixer,
+  FixerContext,
+  RepairBundleOptions,
+  RepairFinding,
+  RepairReport,
+} from "./repair.js";
 export { searchConcepts } from "./search.js";
 export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
 export { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";

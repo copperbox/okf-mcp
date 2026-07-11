@@ -7,6 +7,8 @@ import {
   conceptIdFromPath,
   deriveTitle,
   extractLinks,
+  normalizeCitationBlock,
+  normalizeCitationEntries,
   sectionSpan,
   splitSections,
 } from "./parser.js";
@@ -68,6 +70,9 @@ function withDefaultTimestamp(frontmatter: ConceptFrontmatter): ConceptFrontmatt
  * Write one concept document into a bundle directory. This is the only
  * concept write path; it validates the path and required frontmatter but
  * does not touch the in-memory index — reload the bundle afterwards.
+ * Ordered-list entries under a `# Citations` heading are normalized to the
+ * spec §8 `[n] [text](target)` form so the natural-but-malformed markdown
+ * list form never lands on disk (issue #78).
  */
 export async function writeConcept(
   bundleRoot: string,
@@ -88,7 +93,7 @@ export async function writeConcept(
   await fs.mkdir(path.dirname(absolute), { recursive: true });
   await fs.writeFile(
     absolute,
-    serializeDocument(withDefaultTimestamp(frontmatter), body),
+    serializeDocument(withDefaultTimestamp(frontmatter), normalizeCitationEntries(body)),
     "utf8",
   );
   return { path: safePath, created: !exists };
@@ -143,7 +148,9 @@ export interface UpdateConceptInput {
   /**
    * Replace one body section's content by heading name (case-insensitive,
    * first match, including its subsections). The heading line is kept and the
-   * rest of the body stays byte-for-byte intact.
+   * rest of the body stays byte-for-byte intact; a leading heading in the
+   * content repeating the target's is stripped rather than duplicated, and
+   * Citations entries are normalized to the §8 form (issue #78).
    */
   section?: { heading: string; content: string };
   /**
@@ -241,7 +248,22 @@ export async function updateConcept(
     }
     const before = body.slice(0, span.contentStart);
     const after = body.slice(span.end);
-    const content = input.section.content.trim();
+    let content = input.section.content.trim();
+    // Agents rewriting "the whole section" naturally include its heading;
+    // the document keeps its own heading line, so a leading repeat would
+    // duplicate it (and, for # Citations, an empty first copy used to mask
+    // every entry below — issue #78). Strip the repeat, keep anything else.
+    const repeat = sectionSpan(content, span.heading);
+    if (repeat !== undefined && repeat.start === 0) {
+      content = content.slice(repeat.contentStart).trim();
+    }
+    // Citation entries never land in the malformed ordered-list form,
+    // matching writeConcept: the replaced section's own content when it is
+    // the Citations section, plus any Citations section the content adds.
+    content =
+      span.heading.toLowerCase() === "citations"
+        ? normalizeCitationBlock(content)
+        : normalizeCitationEntries(content);
     // Rebuild only the replaced span, blank-line delimited: terminate the
     // heading line if the body ended without a newline, then the content,
     // then a separator before the next heading (when there is one).

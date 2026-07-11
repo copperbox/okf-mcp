@@ -126,9 +126,12 @@ the rest of the document — over full write_concept rewrites. write_concept,
 update_concept, rename_concept, and delete_concept keep index.md navigation and the
 log.md history current — never edit those reserved files directly. Their auto entries
 go to the nearest existing directory log.md above the concept, falling back to the
-bundle root's. Use append_log_entry for change narrative not tied to a single concept
-write. When knowledge outgrows its bundle (e.g. project → org), promote_concept moves
-it and leaves a citation stub behind. Remote bundles are always read-only.`;
+bundle root's. Cite sources under a # Citations heading as \`[n] [text](target)\`
+entries (spec §8), not as an ordered markdown list; the write tools normalize
+\`1.\`-style entries to that form. Use append_log_entry for change narrative not tied
+to a single concept write. When knowledge outgrows its bundle (e.g. project → org),
+promote_concept moves it and leaves a citation stub behind. Remote bundles are
+always read-only.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
@@ -994,7 +997,11 @@ export function createOkfServer(
             .describe(
               "YAML frontmatter; `type` is required, extra keys are preserved. `timestamp` defaults to the current UTC time when omitted (supply one to backdate)",
             ),
-          body: z.string().describe("Markdown body"),
+          body: z
+            .string()
+            .describe(
+              "Markdown body. Cite sources under a `# Citations` heading as `[n] [text](target)` entries (spec §8); ordered-list entries like `1. [text](target)` are normalized to that form",
+            ),
           logMessage: z
             .string()
             .optional()
@@ -1047,7 +1054,9 @@ export function createOkfServer(
                 ),
               content: z
                 .string()
-                .describe("New markdown content for the section; the heading line is kept"),
+                .describe(
+                  "New markdown content for the section; the existing heading line is kept (a leading heading repeating it is stripped, never duplicated) and Citations entries are normalized to the `[n] [text](target)` form (spec §8)",
+                ),
             })
             .optional()
             .describe("Replace one body section, leaving the rest of the body untouched"),
