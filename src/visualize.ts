@@ -92,6 +92,10 @@ export function exportGraphHtml(
     border-radius: 8px; padding: 10px 12px; user-select: none; }
   #panel h1 { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: #f0f3f6; }
   #stats { color: #8b949e; font-size: 12px; margin-bottom: 8px; }
+  #search { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 4px 8px;
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+    font: inherit; user-select: text; }
+  #search::placeholder { color: #8b949e; }
   .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
   .legend-item.dimmed { opacity: 0.35; }
   .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -110,10 +114,11 @@ export function exportGraphHtml(
 <div id="panel">
   <h1>OKF knowledge graph</h1>
   <div id="stats"></div>
+  <input type="search" id="search" placeholder="Filter concepts&hellip;" autocomplete="off">
   <div id="legend"></div>
 </div>
 <div id="tooltip"></div>
-<div id="hint">drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to dim</div>
+<div id="hint">search filters &middot; drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to dim</div>
 <script type="application/json" id="graph-data">${json}</script>
 <script>
 (() => {
@@ -241,12 +246,26 @@ export function exportGraphHtml(
 
   let selected = null;
   let hovered = null;
+  let query = "";
+  function matchesQuery(n) {
+    return (n.title || "").toLowerCase().includes(query) ||
+      n.id.toLowerCase().includes(query) ||
+      (n.tags || []).some((t) => t.toLowerCase().includes(query));
+  }
+  // Search, legend dimming, and selection compose by taking the minimum
+  // alpha; edges inherit the min of their endpoints, so an edge stays
+  // bright only when both ends match the query.
   function fade(n) {
     let a = 1;
     if (dimmed.has(n.community)) a = 0.12;
     if (selected && !neighbors.get(selected).has(n)) a = Math.min(a, 0.15);
+    if (query && !matchesQuery(n)) a = Math.min(a, 0.13);
     return a;
   }
+  const search = document.getElementById("search");
+  search.addEventListener("input", () => {
+    query = search.value.trim().toLowerCase();
+  });
 
   function draw() {
     const dpr = window.devicePixelRatio || 1;

@@ -86,6 +86,20 @@ describe("exportGraphHtml", () => {
     assert.equal(data.nodes[0]!.title, "</script><script>alert(1)</script>");
   });
 
+  it("includes a search box that filters case-insensitively on id, title, and tags", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // The input lives in the panel, above the legend.
+    assert.match(html, /<input type="search" id="search" placeholder="Filter concepts[^"]*"[^>]*>\s*<div id="legend">/);
+    // Case-insensitive substring match against title, id, and tags.
+    assert.match(html, /\(n\.title \|\| ""\)\.toLowerCase\(\)\.includes\(query\)/);
+    assert.match(html, /n\.id\.toLowerCase\(\)\.includes\(query\)/);
+    assert.match(html, /\(n\.tags \|\| \[\]\)\.some\(\(t\) => t\.toLowerCase\(\)\.includes\(query\)\)/);
+    // Search composes with legend dimming and selection through fade().
+    assert.match(html, /if \(query && !matchesQuery\(n\)\) a = Math\.min\(a, 0\.13\);/);
+    // The hint mentions search.
+    assert.match(html, /<div id="hint">[^<]*search[^<]*<\/div>/);
+  });
+
   it("ships a self-contained document with no external resources", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     assert.doesNotMatch(html, /\bsrc=|\bhref=|https?:\/\/cdn/i);
