@@ -35,7 +35,7 @@
     "sandcastle:loop": "bash scripts/sandcastle-loop.sh"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.18.0",
     "yaml": "^2.8.0",
     "zod": "^3.25.0"
   },
