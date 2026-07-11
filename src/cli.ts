@@ -11,6 +11,7 @@ import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
 import { archiveKind } from "./remote.js";
+import { repairBundle, selectFixers } from "./repair.js";
 import { searchConcepts } from "./search.js";
 import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
 import type { BundleGuide } from "./server.js";
@@ -47,6 +48,13 @@ Commands:
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive; indexes are
                       regenerated in-memory, so the source stays untouched
+  repair [bundle]     Detect known bundle defect classes via a registry of
+                      auto-fixers and report per-fixer findings (dry-run);
+                      --write applies the safe rewrites, appends a log.md
+                      entry, and regenerates indexes. For this command --only
+                      names fixers (--only citation-format,...) and --list
+                      prints the fixer registry. Read-only remote bundles are
+                      skipped
 
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
@@ -63,7 +71,8 @@ Options:
                           --colocated-remote-bundles: mount only the named
                           subfolders (comma-separated); the rest of the root
                           is ignored entirely. A name that is not a bundle
-                          subdirectory of the root is an error.
+                          subdirectory of the root is an error. With the
+                          repair command, names fixers instead.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
@@ -104,6 +113,9 @@ Options:
                           repeatable, same semantics as load_remote_bundle
   --exclude <glob>        pack only: skip matching bundle-relative paths;
                           repeatable
+  --write                 repair only: apply the safe rewrites (repair is a
+                          dry run without it)
+  --list                  repair only: print the fixer registry and exit
   --writable              Enable authoring: write_concept tool and index command
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
@@ -235,6 +247,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "include-external": { type: "boolean" },
       include: { type: "string", multiple: true },
       exclude: { type: "string", multiple: true },
+      write: { type: "boolean" },
+      list: { type: "boolean" },
       writable: { type: "boolean" },
       watch: { type: "boolean" },
       help: { type: "boolean" },
@@ -254,22 +268,45 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     ?.split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
+  // For the repair command --only names fixers, not colocated subfolders.
+  const fixerOnly = command === "repair" ? only : undefined;
+  const folderOnly = command === "repair" ? undefined : only;
   if (only !== undefined) {
-    if (colocatedRoots.length === 0 && remoteRootUrls.length === 0) {
+    if (
+      command !== "repair" &&
+      colocatedRoots.length === 0 &&
+      remoteRootUrls.length === 0
+    ) {
       console.error(
         "error: --only requires --colocated-bundles or --colocated-remote-bundles",
       );
       return 2;
     }
     if (only.length === 0) {
-      console.error("error: --only requires at least one folder name");
+      console.error(
+        `error: --only requires at least one ${command === "repair" ? "fixer id" : "folder name"}`,
+      );
       return 2;
+    }
+  }
+  if (command === "repair") {
+    try {
+      selectFixers(fixerOnly);
+    } catch (err) {
+      console.error(`error: ${(err as Error).message}`);
+      return 2;
+    }
+    if (values.list) {
+      for (const fixer of selectFixers(fixerOnly)) {
+        console.log(`${fixer.id}: ${fixer.description}`);
+      }
+      return 0;
     }
   }
   for (const root of colocatedRoots) {
     let discovered: BundleConfig[];
     try {
-      discovered = await discoverColocatedBundles(root, { only });
+      discovered = await discoverColocatedBundles(root, { only: folderOnly });
     } catch (err) {
       console.error(`error: ${(err as Error).message}`);
       return 2;
@@ -309,7 +346,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     remotes,
     colocatedRemoteRoots: remoteRootUrls.map((url) => ({
       url,
-      ...(only !== undefined && { only }),
+      ...(folderOnly !== undefined && { only: folderOnly }),
     })),
   });
   await store.load();
@@ -487,6 +524,23 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       });
       await fs.writeFile(out, result.bytes);
       console.log(`${bundle.id}: packed ${result.files.length} files to ${out}`);
+      return 0;
+    }
+    case "repair": {
+      const targets =
+        rest[0] !== undefined ? [await store.bundle(rest[0])] : store.bundles();
+      for (const bundle of targets) {
+        if (bundle.readOnly) {
+          console.error(`${bundle.id}: skipped (read-only remote bundle)`);
+          continue;
+        }
+        const report = await repairBundle(bundle, {
+          write: values.write ?? false,
+          only: fixerOnly,
+          allBundles: store.bundles(),
+        });
+        console.log(JSON.stringify(report, null, 2));
+      }
       return 0;
     }
     default:

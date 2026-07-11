@@ -302,7 +302,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, duplicate top-level headings, `index.md` / `log.md` structure checks) |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, duplicate top-level headings, `index.md` / `log.md` structure checks); warnings with a safe mechanical fix name their `okf-mcp repair` fixer id |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 
@@ -338,6 +338,8 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
                       Export the link graph (json | dot | mermaid | html)
   index               Regenerate index.md files (requires --writable)
   pack [bundle]       Publish a bundle as a distributable archive
+  repair [bundle]     Detect and auto-fix known bundle defect classes
+                      (dry-run by default; --write applies)
 ```
 
 `graph` exports the link graph in the named format. With several bundles mounted and no bundle argument, all of them export as one merged graph — node IDs namespaced `bundle:concept`, with derived [cross-bundle edges](#cross-bundle-awareness) included and rendered dashed in `dot`/`mermaid` — so a `--colocated-bundles` root exports whole. Name a bundle to scope the export to it (unqualified node IDs, same as the single-bundle output). `--include-external` adds external link targets as opaque nodes; a URL that derived a cross-bundle edge is not duplicated as one. `--out <file>` writes the export to a file instead of stdout.
@@ -358,6 +360,17 @@ okf-mcp --bundle brain=/path/to/bundle pack --out brain.tar.gz --exclude 'drafts
 
 Relative `../<sibling>/...` links into [colocated](#colocated-bundles-vault-as-monorepo) siblings only mean something while the shared layout holds, so the archived copy carries the sibling's canonical concept URL instead (its blob form for GitHub canonicals) — a spec §8 citation form that resolves anywhere; only the link targets change, every other byte travels verbatim, and the source files stay untouched. A resolving link whose sibling has no canonical URL (explicit or derived from a root-level `--canonical-url`) fails the pack rather than shipping a dead link.
 
+`repair` runs a **registry of named auto-fixers** over the mounted bundles (or one named bundle) — a bundle doctor for defect classes discovered in documents already on disk, each pairing detection with a mechanical, provably-safe splice-based rewrite (human formatting and unknown frontmatter survive byte-for-byte outside the touched spans). It dry-runs by default, printing per-fixer, per-file findings as JSON with `fixed`/`skipped` counts; `--write` applies the safe rewrites, appends a `log.md` entry summarizing the sweep (fixer ids + file counts), and regenerates indexes, matching the authoring tools' bookkeeping. A finding whose rewrite cannot be proven safe is reported instead of guessed at, read-only remote bundles are skipped, and `validate` warnings with a safe auto-fix name their fixer id. `--list` prints the registry; for this command `--only` names fixers, not colocated subfolders:
+
+```bash
+okf-mcp --bundle ./kb repair                              # dry-run: report findings
+okf-mcp --bundle ./kb repair --write                      # apply all fixers
+okf-mcp --bundle ./kb repair --only citation-format --write
+okf-mcp repair --list                                     # show the fixer registry
+```
+
+The initial fixers: **`citation-format`** normalizes ordered-list citation entries (`1. [text](target)`, `1) ...`) under a `# Citations` heading to the spec §8 `[n] [text](target)` form — the same transformation the write paths apply, so repair and write-time prevention cannot drift; **`duplicate-citation-headings`** merges duplicate `# Citations` sections by dropping empty duplicates (the damage pattern where an empty first copy masked every entry from first-match readers), reporting duplicates that each have content for manual merging; **`okf-uri-to-canonical`** rewrites `okf://<bundle>/<path>` citation targets and frontmatter `resource` URIs — the fallback form `promote_concept` writes when the target bundle has no canonical URL — to the bundle's canonical URL once one is configured, reporting URIs whose bundle is unmounted or still has none.
+
 `--colocated-bundles <root>` (repeatable) mounts every immediate subdirectory of a shared root as its own bundle; `--only <folder,folder,...>` restricts the mount to the named subfolders — see [colocated bundles](#colocated-bundles-vault-as-monorepo). `--colocated-remote-bundles <url>` (repeatable) does the same for a published root — a GitHub tree URL or `.tar.gz`/`.tgz`/`.zip` archive — mounting each subfolder as a read-only bundle; see [consuming a published colocated root](#consuming-a-published-colocated-root-by-one-url).
 
 `--canonical-url id=url` (repeatable) declares a bundle's published canonical URL for [cross-bundle awareness](#cross-bundle-awareness); with a colocated root's path as the id — or a bare URL when exactly one colocated root is configured — every bundle under the root derives `<url>/<folder>`, with explicit per-bundle flags taking precedence.
@@ -372,6 +385,6 @@ npm test            # node:test via tsx
 npm run build       # emit dist/
 ```
 
-Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `pack.ts` (the `pack` command's archive writer), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `visualize.ts` (the `graph html` self-contained force-directed export), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
+Source layout: `frontmatter.ts` / `parser.ts` (document parsing, link extraction, and body sections), `bundle.ts` / `store.ts` (loading and the in-memory index), `remote.ts` (read-only bundles from public GitHub trees and tar.gz/zip archives), `pack.ts` (the `pack` command's archive writer), `repair.ts` (the `repair` command's auto-fixer registry), `canonical.ts` (canonical-URL matching for derived cross-bundle edges), `graph.ts` / `search.ts` (traversal, structured search, and vocabulary listings), `visualize.ts` (the `graph html` self-contained force-directed export), `validate.ts` (conformance), `git.ts` (history/diff via the bundle's git repo), `suggest.ts` (concept placement suggestions), `authoring.ts` (the only write path), `watch.ts` (the `--watch` file watcher), `server.ts` (MCP wiring), `cli.ts` (entry point).
 
 Without `--watch` there is no file watcher: call `reload_bundles` after editing bundle files outside the server (e.g. in Obsidian). Concepts written through `write_concept` refresh the index immediately.

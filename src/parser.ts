@@ -186,25 +186,34 @@ export interface SectionSpan {
 }
 
 /**
+ * Locate every section in a body with the raw offsets of its whole subtree —
+ * everything up to the next heading of the same or a shallower level — in
+ * document order, so callers can splice several sections without regenerating
+ * the body. Subtree spans of nested sections overlap their ancestors'.
+ */
+export function sectionSpans(body: string): SectionSpan[] {
+  const bounds = sectionBounds(body);
+  return bounds.map((b, i) => {
+    const next = bounds.slice(i + 1).find((n) => n.level <= b.level);
+    return {
+      heading: b.heading,
+      level: b.level,
+      start: b.start,
+      contentStart: b.contentStart,
+      end: next?.start ?? body.length,
+    };
+  });
+}
+
+/**
  * Locate a section by heading name (case-insensitive, first match wins),
  * returning the raw offsets of its whole subtree — everything up to the next
  * heading of the same or a shallower level — so callers can splice the body
  * without regenerating it.
  */
 export function sectionSpan(body: string, name: string): SectionSpan | undefined {
-  const bounds = sectionBounds(body);
   const wanted = name.trim().toLowerCase();
-  const index = bounds.findIndex((b) => b.heading.toLowerCase() === wanted);
-  if (index === -1) return undefined;
-  const target = bounds[index]!;
-  const next = bounds.slice(index + 1).find((b) => b.level <= target.level);
-  return {
-    heading: target.heading,
-    level: target.level,
-    start: target.start,
-    contentStart: target.contentStart,
-    end: next?.start ?? body.length,
-  };
+  return sectionSpans(body).find((s) => s.heading.toLowerCase() === wanted);
 }
 
 /**
