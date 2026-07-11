@@ -232,10 +232,9 @@ function checkDuplicateTopHeadings(path: string, body: string): BundleProblem[] 
  * and index.md frontmatter is only permitted at the bundle root per
  * §11), recommended-frontmatter warnings (spec §4.1), citation hygiene
  * warnings (spec §8), and duplicate top-level heading warnings. Given
- * the other mounted bundles, `../`
- * links from a colocated bundle are judged against its mounted
- * siblings: resolving ones are fine (and count as resolving citation
- * targets), dangling ones warn.
+ * the other mounted bundles, `../` links from a colocated bundle are
+ * judged against its mounted siblings: resolving ones are fine (and
+ * count as resolving citation targets), dangling ones warn.
  */
 export async function validateBundle(
   bundle: LoadedBundle,

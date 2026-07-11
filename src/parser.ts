@@ -274,7 +274,7 @@ const ORDERED_CITATION_ENTRY = new RegExp(
  * fenced code — pass through untouched.
  */
 export function normalizeCitationBlock(content: string): string {
-  let fence: { char: string; length: number } | null = null;
+  let fence: FenceState | null = null;
   return content
     .split("\n")
     .map((line) => {

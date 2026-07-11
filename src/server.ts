@@ -130,8 +130,8 @@ bundle root's. Cite sources under a # Citations heading as \`[n] [text](target)\
 entries (spec §8), not as an ordered markdown list; the write tools normalize
 \`1.\`-style entries to that form. Use append_log_entry for change narrative not tied
 to a single concept write. When knowledge outgrows its bundle (e.g. project → org),
-promote_concept moves
-it and leaves a citation stub behind. Remote bundles are always read-only.`;
+promote_concept moves it and leaves a citation stub behind. Remote bundles are
+always read-only.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
