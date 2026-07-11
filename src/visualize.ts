@@ -261,14 +261,39 @@ export function exportGraphHtml(
       let a = 1;
       if (focused !== null && e.source.community !== focused && e.target.community !== focused) a = 0.12;
       if (selected && e.source !== selected && e.target !== selected) a = Math.min(a, 0.1);
-      ctx.globalAlpha = 0.55 * a;
-      ctx.strokeStyle = e.cross ? "#e0b45c" : "#7d8590";
-      ctx.lineWidth = 1 / view.k;
+      // Cross-bundle edges are the connective tissue between clusters, so
+      // they get the d3 reference treatment: bright gold, more opaque, and
+      // wider than intra-bundle links.
+      const color = e.cross ? "#f2b705" : "#7d8590";
+      ctx.globalAlpha = (e.cross ? 0.9 : 0.55) * a;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (e.cross ? 1.6 : 1) / view.k;
       ctx.setLineDash(e.cross ? [5 / view.k, 4 / view.k] : []);
       ctx.beginPath();
       ctx.moveTo(e.source.x, e.source.y);
       ctx.lineTo(e.target.x, e.target.y);
       ctx.stroke();
+      // Direction arrowhead on every edge (cheap next to the O(n^2)
+      // simulation; drop to cross-bundle-only if it ever hurts): a filled
+      // triangle at the target end, backed off by the node radius so it is
+      // not buried under the circle, sized in screen space like the dashes.
+      const dx = e.target.x - e.source.x;
+      const dy = e.target.y - e.source.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const size = 6 / view.k;
+      const back = radius(e.target) + 1 / view.k;
+      if (d <= back + size) continue;
+      const ux = dx / d;
+      const uy = dy / d;
+      const tipX = e.target.x - ux * back;
+      const tipY = e.target.y - uy * back;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - (ux - 0.45 * uy) * size, tipY - (uy + 0.45 * ux) * size);
+      ctx.lineTo(tipX - (ux + 0.45 * uy) * size, tipY - (uy - 0.45 * ux) * size);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.setLineDash([]);
     for (const n of nodes) {

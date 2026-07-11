@@ -103,6 +103,24 @@ describe("exportGraphHtml", () => {
     assert.match(html, /click the legend to focus a community/);
   });
 
+  it("emphasizes cross-bundle edges and draws direction arrowheads", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Cross-bundle edges get the d3 reference treatment: bright gold instead
+    // of the old muted amber, more opaque and wider than intra-bundle links,
+    // keeping the screen-space-constant dash pattern.
+    assert.match(html, /#f2b705/);
+    assert.doesNotMatch(html, /#e0b45c/);
+    assert.match(html, /\(e\.cross \? 0\.9 : 0\.55\) \* a/);
+    assert.match(html, /\(e\.cross \? 1\.6 : 1\) \/ view\.k/);
+    assert.match(html, /\[5 \/ view\.k, 4 \/ view\.k\]/);
+    // Every edge ends in a filled triangle at the target, backed off by the
+    // node radius so it is not buried under the circle, sized in screen
+    // space, and sharing the edge's color and fade alpha.
+    assert.match(html, /arrowhead/i);
+    assert.match(html, /radius\(e\.target\)/);
+    assert.match(html, /ctx\.closePath\(\);\s*ctx\.fill\(\);/);
+  });
+
   it("ships a self-contained document with no external resources", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     assert.doesNotMatch(html, /\bsrc=|\bhref=|https?:\/\/cdn/i);
