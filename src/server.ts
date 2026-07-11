@@ -152,6 +152,10 @@ const bundleParam = z
   .optional()
   .describe("Bundle ID; may be omitted when exactly one bundle is configured");
 
+// Marks an entry-point tool: clients with deferred tool loading keep its
+// schema visible while the rest of the toolset loads on demand.
+const entryPointMeta = { "anthropic/alwaysLoad": true };
+
 function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
   if (bundle.readOnly) {
     throw new Error(
@@ -609,9 +613,7 @@ export function createOkfServer(
             "Body section heading (case-insensitive), e.g. Schema; returns just that section (including its subsections) instead of the full body",
           ),
       },
-      // Entry-point tool: clients with deferred tool loading keep its schema
-      // visible while the rest of the toolset loads on demand.
-      _meta: { "anthropic/alwaysLoad": true },
+      _meta: entryPointMeta,
     },
     async ({ bundle, id, section }) => {
       const concept = await store.getConcept(bundle, id);
@@ -701,9 +703,7 @@ export function createOkfServer(
         limit: z.number().int().positive().max(200).optional(),
         offset: z.number().int().nonnegative().optional(),
       },
-      // Entry-point tool: clients with deferred tool loading keep its schema
-      // visible while the rest of the toolset loads on demand.
-      _meta: { "anthropic/alwaysLoad": true },
+      _meta: entryPointMeta,
     },
     async ({ bundle, ...filters }) =>
       sweepJson(
