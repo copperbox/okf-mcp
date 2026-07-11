@@ -282,6 +282,51 @@ describe("validateBundle okf_version (spec §11)", () => {
   });
 });
 
+describe("validateBundle duplicate headings", () => {
+  it("warns on duplicate top-level headings in a concept body", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Citations\n\n# Citations\n\n[1] [Docs](https://example.com)\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    const duplicates = result.warnings.filter((p) =>
+      p.message.includes("duplicate top-level heading"),
+    );
+    assert.equal(duplicates.length, 1);
+    assert.equal(duplicates[0]!.path, "note.md");
+    assert.match(duplicates[0]!.message, /# Citations.*2 times/);
+    assert.equal(result.conformant, true); // a warning, never an error
+  });
+
+  it("stays silent for distinct or repeated-at-depth headings", async () => {
+    const bundle = buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "note.md",
+          source:
+            "---\ntype: Note\n---\n\n# Schema\n\n## Keys\n\n# Examples\n\n## Keys\n",
+        },
+      ],
+      { keepSources: true },
+    );
+    const result = await validateBundle(bundle);
+    assert.deepEqual(
+      result.warnings.filter((p) => p.message.includes("duplicate top-level")),
+      [],
+    );
+  });
+});
+
 describe("validateBundle colocated `../` links", () => {
   const sibling = () =>
     buildBundle(

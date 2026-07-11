@@ -105,28 +105,45 @@ interface SectionBounds {
   contentStart: number;
 }
 
+interface FenceState {
+  char: string;
+  length: number;
+}
+
+/**
+ * Advance fenced-code-block state by one line. `skip` is true when the line
+ * is a fence delimiter or fenced content, i.e. not markdown structure.
+ */
+function stepFence(
+  fence: FenceState | null,
+  line: string,
+): { fence: FenceState | null; skip: boolean } {
+  const match = FENCE.exec(line);
+  if (fence !== null) {
+    const closes =
+      match !== null &&
+      match[1]![0] === fence.char &&
+      match[1]!.length >= fence.length &&
+      match[2]!.trim() === "";
+    return { fence: closes ? null : fence, skip: true };
+  }
+  if (match !== null) {
+    return { fence: { char: match[1]![0]!, length: match[1]!.length }, skip: true };
+  }
+  return { fence: null, skip: false };
+}
+
 /** Locate every markdown heading in a body, skipping fenced code blocks. */
 function sectionBounds(body: string): SectionBounds[] {
   const bounds: SectionBounds[] = [];
-  let fence: { char: string; length: number } | null = null;
+  let fence: FenceState | null = null;
   let offset = 0;
   for (const line of body.split("\n")) {
     const start = offset;
     offset += line.length + 1;
-    const fenceMatch = FENCE.exec(line);
-    if (fence !== null) {
-      const closes =
-        fenceMatch !== null &&
-        fenceMatch[1]![0] === fence.char &&
-        fenceMatch[1]!.length >= fence.length &&
-        fenceMatch[2]!.trim() === "";
-      if (closes) fence = null;
-      continue;
-    }
-    if (fenceMatch !== null) {
-      fence = { char: fenceMatch[1]![0]!, length: fenceMatch[1]!.length };
-      continue;
-    }
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.skip) continue;
     const heading = ATX_HEADING.exec(line);
     if (heading === null) continue;
     bounds.push({
@@ -240,8 +257,57 @@ export interface ExtractedCitations {
   malformed: string[];
 }
 
+// The markdown-link part of a §8 entry, shared by the entry matchers.
+const CITATION_LINK = String.raw`\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")?\)`;
 // A citation entry: `[n]` then a markdown link; trailing prose is allowed.
-const CITATION_ENTRY = /^\[(\d+)\][ \t]+(\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")?\))/;
+const CITATION_ENTRY = new RegExp(String.raw`^\[(\d+)\][ \t]+(${CITATION_LINK})`);
+// The ordered-list form agents naturally write — `n. [text](target)` or
+// `n) [text](target)` — normalized to `[n] ...` by the write paths.
+const ORDERED_CITATION_ENTRY = new RegExp(
+  String.raw`^ {0,3}(\d+)[.)][ \t]+(${CITATION_LINK}.*)$`,
+);
+
+/**
+ * Rewrite ordered-list citation entries (`n. [text](target)`, `n) ...`) in a
+ * Citations section's content to the spec §8 `[n] [text](target)` form.
+ * Lines that are not list-numbered markdown links — correct entries, prose,
+ * fenced code — pass through untouched.
+ */
+export function normalizeCitationBlock(content: string): string {
+  let fence: { char: string; length: number } | null = null;
+  return content
+    .split("\n")
+    .map((line) => {
+      const step = stepFence(fence, line);
+      fence = step.fence;
+      if (step.skip) return line;
+      const entry = ORDERED_CITATION_ENTRY.exec(line);
+      return entry === null ? line : `[${entry[1]}] ${entry[2]}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Normalize the entries of every `# Citations` section in a body (spec §8)
+ * via normalizeCitationBlock, leaving all other sections byte-for-byte
+ * intact — ordered lists outside Citations are content, not citations.
+ */
+export function normalizeCitationEntries(body: string): string {
+  const bounds = sectionBounds(body);
+  let result = body;
+  for (let i = bounds.length - 1; i >= 0; i--) {
+    const b = bounds[i]!;
+    if (b.heading.toLowerCase() !== "citations") continue;
+    // Like splitSections, a section's entries end at the next heading.
+    const end = bounds[i + 1]?.start ?? body.length;
+    const content = body.slice(b.contentStart, end);
+    result =
+      result.slice(0, b.contentStart) +
+      normalizeCitationBlock(content) +
+      result.slice(end);
+  }
+  return result;
+}
 
 /**
  * Extract the numbered citation entries under a concept's `# Citations`
@@ -251,6 +317,8 @@ const CITATION_ENTRY = /^\[(\d+)\][ \t]+(\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")
  * `outsideResolves` lets callers resolve `../` targets that leave the
  * bundle root (e.g. into a mounted colocated sibling — see
  * resolveOutsideLink); a resolving one classifies as `concept`.
+ * Duplicate `# Citations` headings are merged — every same-named section
+ * is read, so an accidental empty duplicate cannot mask the entries.
  */
 export function extractCitations(
   body: string,
@@ -260,12 +328,11 @@ export function extractCitations(
 ): ExtractedCitations {
   const citations: Citation[] = [];
   const malformed: string[] = [];
-  const section = splitSections(body).find(
+  const sections = splitSections(body).filter(
     (s) => s.heading.toLowerCase() === "citations",
   );
-  if (section === undefined) return { citations, malformed };
 
-  for (const rawLine of section.content.split("\n")) {
+  for (const rawLine of sections.flatMap((s) => s.content.split("\n"))) {
     const line = rawLine.trim();
     if (line === "") continue;
     const entry = CITATION_ENTRY.exec(line);

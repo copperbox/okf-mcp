@@ -79,6 +79,8 @@ export {
   extractCitations,
   extractLinks,
   extractSection,
+  normalizeCitationBlock,
+  normalizeCitationEntries,
   parseConceptDocument,
   sectionAt,
   sectionSpan,

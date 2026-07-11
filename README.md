@@ -290,7 +290,7 @@ Read tools:
 | `list_remote_bundles` | Remote bundles currently loaded, with their source URLs and declared `description`s |
 | `list_concepts` | Concept metadata (including the `resource` URI when set), filterable by prefix/type |
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
-| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing`; `../` targets resolving into a colocated sibling count as `concept` |
+| `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing`; `../` targets resolving into a colocated sibling count as `concept`. Duplicate `# Citations` sections are merged, so an accidental empty duplicate cannot mask entries |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
 | `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; an exact-`resource` filter maps an asset URI to its concept; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
@@ -302,7 +302,7 @@ Read tools:
 | `export_graph` | Graph as `json`, `dot`, or `mermaid`; `crossBundle: true` exports all mounted bundles as one namespaced graph with dashed derived edges |
 | `concept_history` | Git commit history for a concept file, newest first, following renames |
 | `concept_diff` | Unified git diff of a concept file against a ref (default: its most recent change) |
-| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, `index.md` / `log.md` structure checks) |
+| `validate_bundle` | OKF v0.1 conformance errors + soft warnings (broken links, dangling `../` links into colocated siblings, malformed recommended frontmatter fields, malformed or unresolved citations, duplicate top-level headings, `index.md` / `log.md` structure checks) |
 
 `concept_history` and `concept_diff` require the bundle to live inside a git work tree; on non-git bundles they return a `not a git repository` result instead of failing.
 
@@ -310,8 +310,8 @@ Write tools (only with `--writable`):
 
 | Tool | Purpose |
 |---|---|
-| `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files |
-| `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte. `timestamp` refreshes to the write time like `write_concept` (a concept without one gains it in its spec-order slot) unless the patch names it or `keepTimestamp: true` pins it; log + reindex |
+| `write_concept` | Create/update a concept (defaulting `timestamp` to the write time), append a `log.md` entry, regenerate `index.md` files. Ordered-list entries under `# Citations` (`1. [text](target)`) are normalized to the spec §8 `[n] [text](target)` form |
+| `update_concept` | Partial update: shallow frontmatter patch (an explicit `null` deletes a key) and/or replace one body section by heading — everything else, YAML comments and formatting included, survives byte-for-byte. `timestamp` refreshes to the write time like `write_concept` (a concept without one gains it in its spec-order slot) unless the patch names it or `keepTimestamp: true` pins it. Section content may include the heading — a leading repeat of it is stripped, never duplicated — and `# Citations` entries are normalized like `write_concept`; log + reindex |
 | `delete_concept` | Delete a concept (optionally refusing while inbound links exist), log it, regenerate indexes |
 | `rename_concept` | Move a concept to a new path, rewriting inbound links across the bundle, log it, regenerate indexes |
 | `promote_concept` | Move a concept into another writable bundle (explicit `toPath`, or `suggest_concept_path`-style placement), leaving a citation stub at the old path that points at the promoted copy (relative `../<bundle>/<path>` link between colocated siblings, canonical location otherwise) — or `stub: false` to just report dangling inbound links; logs and reindexes both bundles |
