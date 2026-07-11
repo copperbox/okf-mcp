@@ -62,19 +62,21 @@ export function exportGraphHtml(
   graph: ConceptGraph,
   options: ExportGraphHtmlOptions,
 ): string {
+  // Only what the page renders travels: nodes drop bundle/path, edges drop
+  // label. JSON.stringify omits the fields left undefined here.
   const nodes: EmbeddedNode[] = graph.nodes.map((node) => ({
     id: node.id,
     type: node.type,
     community: options.communityOf(node),
-    ...(node.title !== undefined && { title: node.title }),
-    ...(node.description !== undefined && { description: node.description }),
-    ...(node.tags !== undefined && { tags: node.tags }),
-    ...(node.external !== undefined && { external: node.external }),
+    title: node.title,
+    description: node.description,
+    tags: node.tags,
+    external: node.external,
   }));
   const edges: GraphEdge[] = graph.edges.map((edge) => ({
     from: edge.from,
     to: edge.to,
-    ...(edge.kind !== undefined && { kind: edge.kind }),
+    kind: edge.kind,
   }));
   const json = JSON.stringify({ nodes, edges }).replaceAll("<", "\\u003c");
   return `<!doctype html>
@@ -92,8 +94,13 @@ export function exportGraphHtml(
     border-radius: 8px; padding: 10px 12px; user-select: none; }
   #panel h1 { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: #f0f3f6; }
   #stats { color: #8b949e; font-size: 12px; margin-bottom: 8px; }
-  .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
-  .legend-item.dimmed { opacity: 0.35; }
+  #search { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 4px 8px;
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+    font: inherit; user-select: text; }
+  #search::placeholder { color: #8b949e; }
+  .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 4px; margin: 0 -4px;
+    border-radius: 4px; cursor: pointer; }
+  .legend-item.active { background: rgba(88, 166, 255, 0.25); }
   .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
   #tooltip { position: fixed; display: none; max-width: 300px; pointer-events: none; z-index: 2;
     background: rgba(22, 27, 34, 0.95); border: 1px solid #30363d; border-radius: 8px;
@@ -110,10 +117,11 @@ export function exportGraphHtml(
 <div id="panel">
   <h1>OKF knowledge graph</h1>
   <div id="stats"></div>
+  <input type="search" id="search" placeholder="Filter concepts&hellip;" autocomplete="off">
   <div id="legend"></div>
 </div>
 <div id="tooltip"></div>
-<div id="hint">drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to dim</div>
+<div id="hint">search filters &middot; drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to focus a community</div>
 <script type="application/json" id="graph-data">${json}</script>
 <script>
 (() => {
@@ -145,8 +153,6 @@ export function exportGraphHtml(
   communities.forEach((c, i) => {
     colorOf.set(c, c === "(external)" ? "#8a8f98" : "hsl(" + ((i * 137.508) % 360).toFixed(1) + " 62% 58%)");
   });
-  const dimmed = new Set();
-
   // Deterministic start: communities spaced on a ring, members on a golden-
   // angle spiral around theirs, so clusters begin apart and converge fast.
   communities.forEach((c, ci) => {
@@ -241,12 +247,27 @@ export function exportGraphHtml(
 
   let selected = null;
   let hovered = null;
+  let focused = null;
+  let query = "";
+  function matchesQuery(n) {
+    return (n.title || "").toLowerCase().includes(query) ||
+      n.id.toLowerCase().includes(query) ||
+      (n.tags || []).some((t) => t.toLowerCase().includes(query));
+  }
+  // Legend focus, selection, and the search query compose by taking the
+  // minimum alpha; edges inherit the min of their endpoints for the query,
+  // so an edge stays bright only when both ends match.
   function fade(n) {
     let a = 1;
-    if (dimmed.has(n.community)) a = 0.12;
+    if (focused !== null && n.community !== focused) a = 0.12;
     if (selected && !neighbors.get(selected).has(n)) a = Math.min(a, 0.15);
+    if (query && !matchesQuery(n)) a = Math.min(a, 0.13);
     return a;
   }
+  const search = document.getElementById("search");
+  search.addEventListener("input", () => {
+    query = search.value.trim().toLowerCase();
+  });
 
   function draw() {
     const dpr = window.devicePixelRatio || 1;
@@ -255,16 +276,47 @@ export function exportGraphHtml(
     ctx.translate(view.x, view.y);
     ctx.scale(view.k, view.k);
     for (const e of edges) {
-      let a = Math.min(fade(e.source), fade(e.target));
+      // Unlike node fading, an edge survives a legend focus when EITHER
+      // endpoint is in the focused community, so cross-community edges into
+      // the focus stay visible. The search query, however, requires BOTH
+      // endpoints to match — an edge is only bright when both ends do.
+      let a = 1;
+      if (focused !== null && e.source.community !== focused && e.target.community !== focused) a = 0.12;
       if (selected && e.source !== selected && e.target !== selected) a = Math.min(a, 0.1);
-      ctx.globalAlpha = 0.55 * a;
-      ctx.strokeStyle = e.cross ? "#e0b45c" : "#7d8590";
-      ctx.lineWidth = 1 / view.k;
+      if (query && (!matchesQuery(e.source) || !matchesQuery(e.target))) a = Math.min(a, 0.13);
+      // Cross-bundle edges are the connective tissue between clusters, so
+      // they get the d3 reference treatment: bright gold, more opaque, and
+      // wider than intra-bundle links.
+      const color = e.cross ? "#f2b705" : "#7d8590";
+      ctx.globalAlpha = (e.cross ? 0.9 : 0.55) * a;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (e.cross ? 1.6 : 1) / view.k;
       ctx.setLineDash(e.cross ? [5 / view.k, 4 / view.k] : []);
       ctx.beginPath();
       ctx.moveTo(e.source.x, e.source.y);
       ctx.lineTo(e.target.x, e.target.y);
       ctx.stroke();
+      // Direction arrowhead on every edge (cheap next to the O(n^2)
+      // simulation; drop to cross-bundle-only if it ever hurts): a filled
+      // triangle at the target end, backed off by the node radius so it is
+      // not buried under the circle, sized in screen space like the dashes.
+      const dx = e.target.x - e.source.x;
+      const dy = e.target.y - e.source.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const size = 6 / view.k;
+      const back = radius(e.target) + 1 / view.k;
+      if (d <= back + size) continue;
+      const ux = dx / d;
+      const uy = dy / d;
+      const tipX = e.target.x - ux * back;
+      const tipY = e.target.y - uy * back;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - (ux - 0.45 * uy) * size, tipY - (uy + 0.45 * ux) * size);
+      ctx.lineTo(tipX - (ux + 0.45 * uy) * size, tipY - (uy - 0.45 * ux) * size);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.setLineDash([]);
     for (const n of nodes) {
@@ -345,7 +397,7 @@ export function exportGraphHtml(
   window.addEventListener("mouseup", () => {
     if (!moved) {
       if (pressed) selected = selected === pressed ? null : pressed;
-      else if (panFrom) selected = null;
+      else if (panFrom) { selected = null; setFocus(null); }
     }
     dragging = null;
     pressed = null;
@@ -361,6 +413,11 @@ export function exportGraphHtml(
 
   document.getElementById("stats").textContent = nodes.length + " nodes \\u00b7 " + edges.length + " edges";
   const legend = document.getElementById("legend");
+  const legendItems = new Map();
+  function setFocus(community) {
+    focused = community;
+    for (const [name, el] of legendItems) el.classList.toggle("active", name === focused);
+  }
   for (const c of communities) {
     const item = document.createElement("div");
     item.className = "legend-item";
@@ -370,11 +427,8 @@ export function exportGraphHtml(
     const label = document.createElement("span");
     label.textContent = c;
     item.append(swatch, label);
-    item.addEventListener("click", () => {
-      if (dimmed.has(c)) dimmed.delete(c);
-      else dimmed.add(c);
-      item.classList.toggle("dimmed", dimmed.has(c));
-    });
+    item.addEventListener("click", () => setFocus(focused === c ? null : c));
+    legendItems.set(c, item);
     legend.append(item);
   }
 
