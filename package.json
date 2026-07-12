@@ -40,7 +40,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@copperbox/sandcastle-workflow": "^0.3.0",
+    "@copperbox/sandcastle-workflow": "^0.4.2",
     "@types/node": "^24.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.8.0"
