@@ -246,9 +246,9 @@ function checkDuplicateTopHeadings(path: string, body: string): BundleProblem[] 
  * §11), recommended-frontmatter warnings (spec §4.1), citation hygiene
  * warnings (spec §8), duplicate top-level heading warnings, and warnings
  * for bundle-absolute (leading-`/`) body links, which GitHub resolves
- * from the repository root. Given
- * the other mounted bundles, `../` links from a colocated bundle are
- * judged against its mounted siblings: resolving ones are fine (and
+ * from the repository root. Given the other mounted bundles, `../`
+ * links from a colocated bundle are judged against its mounted
+ * siblings: resolving ones are fine (and
  * count as resolving citation targets), dangling ones warn. Warnings
  * with a safe mechanical fix name their `okf-mcp repair` fixer id.
  */

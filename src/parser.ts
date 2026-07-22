@@ -45,7 +45,7 @@ const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/dg;
  * `/` are bundle-relative; other non-URI targets are relative to the
  * document's directory. Broken links are tolerated, never an error. Link
  * syntax inside fenced code blocks is code, not a cross-link — the same
- * fence rule sectionBounds applies to headings.
+ * fence rule sectionBounds uses for headings.
  * Each link records the offsets of its raw target within `body`, so callers
  * can rewrite targets by slicing without regenerating the document.
  */
