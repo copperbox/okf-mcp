@@ -244,7 +244,9 @@ function checkDuplicateTopHeadings(path: string, body: string): BundleProblem[] 
  * of spec §9.3 (every index.md follows §6, every log.md follows §7,
  * and index.md frontmatter is only permitted at the bundle root per
  * §11), recommended-frontmatter warnings (spec §4.1), citation hygiene
- * warnings (spec §8), and duplicate top-level heading warnings. Given
+ * warnings (spec §8), duplicate top-level heading warnings, and warnings
+ * for bundle-absolute (leading-`/`) body links, which GitHub resolves
+ * from the repository root. Given
  * the other mounted bundles, `../` links from a colocated bundle are
  * judged against its mounted siblings: resolving ones are fine (and
  * count as resolving citation targets), dangling ones warn. Warnings
@@ -270,6 +272,18 @@ export async function validateBundle(
       problems.push(...checkRecommendedFrontmatter(concept.path, raw));
     }
     for (const link of concept.links) {
+      // Unconditional (even for bundles without a canonical URL or colocated
+      // root): the form is portability-hostile regardless, and the check
+      // stays identical to the repair fixer's detection so they cannot drift.
+      if (link.kind === "concept" && link.target.startsWith("/")) {
+        problems.push({
+          severity: "warning",
+          path: concept.path,
+          message:
+            `bundle-absolute link "${link.target}" resolves from the repository root on GitHub and will break when the bundle is published as a subdirectory; prefer a document-relative link` +
+            fixableBy("absolute-links-to-relative"),
+        });
+      }
       if (link.kind !== "outside" || link.path === undefined) continue;
       if (!outsideLinkDangles(link.path, siblings)) continue;
       problems.push({

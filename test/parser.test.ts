@@ -184,6 +184,26 @@ describe("extractLinks", () => {
     const links = extractLinks("![diagram](./diagram.png)", "a.md");
     assert.equal(links.length, 0);
   });
+
+  it("skips links inside fenced code blocks", () => {
+    const body =
+      "See [real](/tables/orders.md).\n\n```md\n[example](/tables/orders.md)\n```\n\n" +
+      "~~~\n[also code](./code.md)\n~~~\n\nAnd [after](./after.md).";
+    const links = extractLinks(body, "playbooks/x.md");
+    assert.deepEqual(
+      links.map((l) => l.target),
+      ["/tables/orders.md", "./after.md"],
+    );
+    // Offsets still slice back to the raw targets around the skipped fences.
+    for (const link of links) {
+      assert.equal(body.slice(link.targetStart, link.targetEnd), link.target);
+    }
+  });
+
+  it("treats links inside an unclosed fence as code to the end of the body", () => {
+    const links = extractLinks("```\n[code](/a.md)\n", "x.md");
+    assert.equal(links.length, 0);
+  });
 });
 
 describe("parseConceptDocument", () => {

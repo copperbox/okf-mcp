@@ -469,3 +469,52 @@ describe("validateBundle colocated `../` links", () => {
     assert.match(citations[0]!.message, /\[2\]/);
   });
 });
+
+describe("validateBundle bundle-absolute links", () => {
+  const withBody = (body: string) =>
+    buildBundle(
+      "mem",
+      "/mem",
+      [
+        {
+          path: "playbooks/x.md",
+          source: `---\ntype: Runbook\n---\n\n${body}\n`,
+        },
+        { path: "tables/orders.md", source: "---\ntype: Table\n---\n\nRows.\n" },
+      ],
+      { keepSources: true },
+    );
+
+  const absoluteWarnings = (result: ValidationReport) =>
+    result.warnings.filter((p) => p.message.includes("bundle-absolute"));
+
+  it("warns on leading-slash link targets, naming the repair fixer", async () => {
+    const result = await validateBundle(
+      withBody("See [orders](/tables/orders.md)."),
+    );
+    const warnings = absoluteWarnings(result);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0]!.path, "playbooks/x.md");
+    assert.match(warnings[0]!.message, /"\/tables\/orders\.md"/);
+    assert.match(warnings[0]!.message, /repository root/);
+    assert.match(
+      warnings[0]!.message,
+      /okf-mcp repair --only absolute-links-to-relative/,
+    );
+    assert.equal(result.conformant, true); // a warning, never an error (spec §5.3)
+  });
+
+  it("warns even when the target does not resolve — the form is the problem", async () => {
+    const result = await validateBundle(withBody("See [gone](/tables/gone.md)."));
+    assert.equal(absoluteWarnings(result).length, 1);
+  });
+
+  it("stays quiet for document-relative, external, and anchor links", async () => {
+    const result = await validateBundle(
+      withBody(
+        "See [orders](../tables/orders.md), [ext](https://example.com/), and [top](#top).",
+      ),
+    );
+    assert.deepEqual(absoluteWarnings(result), []);
+  });
+});

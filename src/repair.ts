@@ -14,7 +14,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { appendLogEntry, bodyStartOffset, generateIndexes } from "./authoring.js";
+import {
+  appendLogEntry,
+  bodyStartOffset,
+  generateIndexes,
+  renderTarget,
+} from "./authoring.js";
 import { readBundleDocument } from "./bundle.js";
 import { citationPrefix } from "./canonical.js";
 import { patchFrontmatter, splitFrontmatter } from "./frontmatter.js";
@@ -234,11 +239,70 @@ const okfUriToCanonical: Fixer = {
   },
 };
 
+/**
+ * Rewrite bundle-absolute (leading-`/`) link targets to the document-relative
+ * form (issue #85, the repair half of #84's guidance change): GitHub resolves
+ * a leading-`/` link from the repository root, so intra-bundle links break
+ * whenever the bundle is published as a repo subfolder. The parser normalizes
+ * both forms to the same bundle-relative path, so the rewrite is provably
+ * safe without checking that the target resolves — a broken link stays
+ * equally broken (spec §5.3) — and rename_concept keeps relative targets
+ * relative afterward, so repaired links stay repaired.
+ */
+const absoluteLinksToRelative: Fixer = {
+  id: "absolute-links-to-relative",
+  description:
+    "rewrite bundle-absolute (leading-/) link targets to the document-relative " +
+    "form, which resolves on GitHub wherever the bundle is published",
+  repair(source, { path: docPath }) {
+    const bodyStart = bodyStartOffset(source);
+    const fromDir = path.posix.dirname(docPath);
+    const findings: { message: string; fixable: boolean }[] = [];
+    const edits: Array<{ start: number; end: number; replacement: string }> = [];
+    for (const link of extractLinks(source.slice(bodyStart), docPath)) {
+      if (
+        link.kind !== "concept" ||
+        link.path === undefined ||
+        !link.target.startsWith("/")
+      ) {
+        continue;
+      }
+      const rendered = renderTarget(
+        link.target.slice(1),
+        link.path,
+        fromDir === "." ? "" : fromDir,
+      );
+      // A link to the document's own directory renders as an empty path;
+      // write `.` so the target survives as a link.
+      const replacement =
+        rendered === "" || rendered.startsWith("#") || rendered.startsWith("?")
+          ? `.${rendered}`
+          : rendered;
+      edits.push({
+        start: bodyStart + link.targetStart,
+        end: bodyStart + link.targetEnd,
+        replacement,
+      });
+      findings.push({
+        message: `link target ${link.target} → ${replacement}`,
+        fixable: true,
+      });
+    }
+    let repaired = source;
+    for (const edit of edits.sort((a, b) => b.start - a.start)) {
+      repaired =
+        repaired.slice(0, edit.start) + edit.replacement + repaired.slice(edit.end);
+    }
+    return { source: repaired, findings };
+  },
+};
+
 /** The fixer registry, in the order fixers run over each document. */
 export const FIXERS: readonly Fixer[] = [
   citationFormat,
   duplicateCitationHeadings,
   okfUriToCanonical,
+  absoluteLinksToRelative,
 ];
 
 /** Resolve `--only` fixer ids against the registry, in registry order. */
