@@ -104,8 +104,11 @@ function serverInstructions(options: ServerOptions): string {
   const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
 concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
 A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
-Relationships are ordinary markdown links in the body; prefer the bundle-absolute form,
-e.g. [Orders](/tables/orders.md). index.md and log.md are reserved, generated files.
+Relationships are ordinary markdown links in the body; prefer document-relative
+links, e.g. [Orders](../tables/orders.md) — they render correctly everywhere the
+bundle is published (GitHub resolves a leading-/ link from the repository root, so
+bundle-absolute links break when the bundle is a repo subfolder).
+index.md and log.md are reserved, generated files.
 
 Reading: orient with graph_summary and list_types / list_tags, narrow with
 search_concepts (text plus type/tag/path/link filters), then read specific concepts

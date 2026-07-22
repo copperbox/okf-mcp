@@ -657,6 +657,7 @@ describe("cli repair", () => {
     assert.match(stdout, /^citation-format: /m);
     assert.match(stdout, /^duplicate-citation-headings: /m);
     assert.match(stdout, /^okf-uri-to-canonical: /m);
+    assert.match(stdout, /^absolute-links-to-relative: /m);
   });
 
   it("dry-runs by default: reports findings, writes nothing", async () => {

@@ -43,14 +43,20 @@ const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/dg;
 /**
  * Extract cross-links from a concept body (spec §5). Targets beginning with
  * `/` are bundle-relative; other non-URI targets are relative to the
- * document's directory. Broken links are tolerated, never an error.
+ * document's directory. Broken links are tolerated, never an error. Link
+ * syntax inside fenced code blocks is code, not a cross-link — the same
+ * fence rule sectionBounds uses for headings.
  * Each link records the offsets of its raw target within `body`, so callers
  * can rewrite targets by slicing without regenerating the document.
  */
 export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
   const links: ConceptLink[] = [];
   const fromDir = path.posix.dirname(conceptPath);
+  const fenced = fencedSpans(body);
   for (const match of body.matchAll(MARKDOWN_LINK)) {
+    if (fenced.some((s) => match.index! >= s.start && match.index! < s.end)) {
+      continue;
+    }
     const text = match[1] ?? "";
     const rawTarget = match[2] ?? "";
     const [targetStart, targetEnd] = match.indices![2]!;
@@ -131,6 +137,29 @@ function stepFence(
     return { fence: { char: match[1]![0]!, length: match[1]!.length }, skip: true };
   }
   return { fence: null, skip: false };
+}
+
+/**
+ * Character spans of fenced code blocks within a body, delimiter lines
+ * included; an unclosed fence runs to the end of the body.
+ */
+function fencedSpans(body: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let fence: FenceState | null = null;
+  let spanStart = 0;
+  let offset = 0;
+  for (const line of body.split("\n")) {
+    const lineStart = offset;
+    offset += line.length + 1;
+    const step = stepFence(fence, line);
+    if (fence === null && step.fence !== null) spanStart = lineStart;
+    if (fence !== null && step.fence === null) {
+      spans.push({ start: spanStart, end: Math.min(offset, body.length) });
+    }
+    fence = step.fence;
+  }
+  if (fence !== null) spans.push({ start: spanStart, end: body.length });
+  return spans;
 }
 
 /** Locate every markdown heading in a body, skipping fenced code blocks. */
