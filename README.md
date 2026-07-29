@@ -70,7 +70,7 @@ Alternatively, point at a local checkout you built yourself (`npm run build`):
 
 ## Teaching your agent to maintain the brain
 
-The server is deliberately not opinionated about *when* knowledge gets captured: its built-in instructions teach connected agents the OKF conventions and the write flow (`suggest_concept_path` → `write_concept`), but nothing tells an agent to record what it learns as a side effect of ordinary work. Capture policy belongs in your agent's own configuration — `CLAUDE.md`, `AGENTS.md`, or the system prompt, whichever your client reads.
+The server is deliberately not opinionated about *when* knowledge gets captured: its built-in instructions teach connected agents the OKF conventions and the write flow (`suggest_concept_path` → `write_concept`), but nothing tells an agent to record what it learns as a side effect of ordinary work. Capture policy belongs in your agent's own configuration — `CLAUDE.md`, `AGENTS.md`, or the system prompt, whichever your client reads. The same is true in the other direction: nothing tells an agent to re-check existing concepts after changing what they describe — capture without reconciliation produces a brain that grows and rots at the same time.
 
 The server also performs no git sync. If the bundle is shared — mounted from a local clone of a team repository — it is only as fresh as the clone's last `git pull`, and concepts written through `write_concept` reach teammates only after an out-of-band commit and push. Keeping a shared bundle in sync is your (or your agent's) responsibility, so it belongs in the same standing instructions.
 
@@ -102,6 +102,32 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
 ```
 
 This works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, navigation indexes, and log.
+
+Capture keeps the brain growing; reconciliation keeps it true. A change that falsifies a concept is worse than a missing concept — the next agent is told to trust the brain, so a stale claim misleads more than a gap. The complementary standing instruction, for the end of any task that changed the project:
+
+```markdown
+## Knowledge reconciliation (OKF brain)
+
+Capture keeps the brain growing; reconciliation keeps it true.
+
+- Before ending any task that changed the project, collect two small sets:
+  the concepts you read while working, and the concepts that describe what
+  you changed (`search_concepts` for the paths, symbols, and feature names
+  in your diff).
+- For each concept in either set, do exactly one of:
+  - **Update** it (`update_concept`) if any claim is now false. Watch
+    especially for claims that invert silently: "X does not exist" when
+    your change created X, and any open-status flag your work closed.
+  - **Verify** it: you checked and it still holds.
+  - **Explain**: if you leave a concept untouched that names something you
+    changed, say why when you report your work.
+- Keep it bounded: only concepts intersecting your work, never a
+  bundle-wide audit.
+- If the bundle is not mounted `--writable`, report the needed updates
+  instead of editing.
+```
+
+The claims that rot fastest are the ones no diff ever touches: absence claims and status flags are falsified by changes that create something new, so no file the concept cites is ever modified — which is why the instruction names them explicitly. Two optional refinements: bundles can adopt a `verified: <ISO date>` frontmatter key to record when a concept was last checked against reality (unknown frontmatter keys round-trip untouched, so this works today; `timestamp` records the last *edit*, which is a different thing), and teams can escalate the "explain" branch from convention to gate once tooling can compute which concepts a diff intersects.
 
 ## Multi-bundle setups (org brain + project brain)
 
