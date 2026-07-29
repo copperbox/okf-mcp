@@ -6,15 +6,21 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { loadBundle } from "../src/bundle.js";
 import { canonicalUrlPrefixes } from "../src/canonical.js";
-import { extractCitations } from "../src/parser.js";
+import { extractCitations, extractLinks } from "../src/parser.js";
 import { FIXERS, repairBundle, selectFixers } from "../src/repair.js";
 import type { LoadedBundle } from "../src/types.js";
+import { validateBundle } from "../src/validate.js";
 
 describe("repair fixer registry", () => {
-  it("registers the three initial fixers with descriptions", () => {
+  it("registers the four initial fixers with descriptions", () => {
     assert.deepEqual(
       FIXERS.map((f) => f.id),
-      ["citation-format", "duplicate-citation-headings", "okf-uri-to-canonical"],
+      [
+        "citation-format",
+        "duplicate-citation-headings",
+        "okf-uri-to-canonical",
+        "absolute-links-to-relative",
+      ],
     );
     for (const fixer of FIXERS) {
       assert.ok(fixer.description.length > 0, `${fixer.id} has a description`);
@@ -198,6 +204,111 @@ describe("repairBundle", () => {
       /"bare" has no canonical URL configured/,
     );
     assert.deepEqual(report.files, []);
+  });
+
+  it("rewrites bundle-absolute links to document-relative (absolute-links-to-relative)", async () => {
+    await write(
+      "playbooks/freshness.md",
+      "---\ntype: Runbook\ntitle: Freshness # keep me\n---\n\n" +
+        "Check [orders](/tables/orders.md) and [totals](/tables/orders#totals),\n" +
+        "then [self](/playbooks/freshness.md) and [peer](./peer.md).\n",
+    );
+    await write("tables/orders.md", "---\ntype: Table\n---\n\nRows.\n");
+    const report = await repairBundle(await bundle(), {
+      write: true,
+      only: ["absolute-links-to-relative"],
+    });
+    assert.equal(report.fixed, 3);
+    assert.equal(report.skipped, 0);
+    assert.match(
+      report.findings[0]!.message,
+      /\/tables\/orders\.md → \.\.\/tables\/orders\.md/,
+    );
+    const repaired = await read("playbooks/freshness.md");
+    assert.match(repaired, /\[orders\]\(\.\.\/tables\/orders\.md\)/);
+    // Extensionless stays extensionless; the fragment carries over.
+    assert.match(repaired, /\[totals\]\(\.\.\/tables\/orders#totals\)/);
+    assert.match(repaired, /\[self\]\(freshness\.md\)/);
+    // Already-relative links and bytes outside the targets are untouched.
+    assert.match(repaired, /\[peer\]\(\.\/peer\.md\)/);
+    assert.match(repaired, /title: Freshness # keep me/);
+  });
+
+  it("rewrites broken bundle-absolute links too — equally broken relative (spec §5.3)", async () => {
+    await write(
+      "note.md",
+      "---\ntype: Note\n---\n\nSee [gone](/gone/missing.md).\n",
+    );
+    const report = await repairBundle(await bundle(), {
+      write: true,
+      only: ["absolute-links-to-relative"],
+    });
+    assert.equal(report.fixed, 1);
+    assert.equal(report.skipped, 0);
+    assert.match(await read("note.md"), /\[gone\]\(gone\/missing\.md\)/);
+  });
+
+  it("preserves the normalized link path set across the rewrite (round trip)", async () => {
+    const body =
+      "See [a](/x/a.md), [b](/x/b#s), [dir](/docs), and [ext](https://example.com/).\n";
+    await write("docs/note.md", `---\ntype: Note\n---\n\n${body}`);
+    const before = extractLinks(body, "docs/note.md");
+    const report = await repairBundle(await bundle(), {
+      write: true,
+      only: ["absolute-links-to-relative"],
+    });
+    assert.equal(report.fixed, 3);
+    const repaired = await read("docs/note.md");
+    const after = extractLinks(repaired.split("---\n")[2]!, "docs/note.md");
+    assert.deepEqual(
+      after.map((l) => [l.kind, l.path]),
+      before.map((l) => [l.kind, l.path]),
+    );
+    // The whole document, byte for byte: only the three targets changed.
+    assert.equal(
+      repaired,
+      "---\ntype: Note\n---\n\n" +
+        "See [a](../x/a.md), [b](../x/b#s), [dir](.), and [ext](https://example.com/).\n",
+    );
+    // Repaired links stay repaired: a second sweep finds nothing.
+    const again = await repairBundle(await bundle(), {
+      write: true,
+      only: ["absolute-links-to-relative"],
+    });
+    assert.deepEqual(again.findings, []);
+  });
+
+  it("leaves bundle-absolute links inside fenced code blocks alone", async () => {
+    await write(
+      "guide.md",
+      "---\ntype: Note\n---\n\n[real](/a/b.md)\n\n" +
+        "```md\n[example](/a/b.md)\n```\n",
+    );
+    const report = await repairBundle(await bundle(), {
+      write: true,
+      only: ["absolute-links-to-relative"],
+    });
+    assert.equal(report.fixed, 1);
+    const repaired = await read("guide.md");
+    assert.match(repaired, /\[real\]\(a\/b\.md\)/);
+    assert.match(repaired, /```md\n\[example\]\(\/a\/b\.md\)\n```/);
+  });
+
+  it("validate flags bundle-absolute links before repair and is quiet after", async () => {
+    await write("a.md", "---\ntype: Note\n---\n\nSee [b](/b.md).\n");
+    await write("b.md", "---\ntype: Note\n---\n\nBody.\n");
+    const before = await validateBundle(await bundle());
+    assert.ok(
+      before.warnings.some((w) =>
+        w.message.includes("okf-mcp repair --only absolute-links-to-relative"),
+      ),
+    );
+    await repairBundle(await bundle(), { write: true });
+    const after = await validateBundle(await bundle());
+    assert.deepEqual(
+      after.warnings.filter((w) => w.message.includes("bundle-absolute")),
+      [],
+    );
   });
 
   it("scopes the sweep to --only fixers", async () => {

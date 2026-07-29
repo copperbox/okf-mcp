@@ -1521,7 +1521,8 @@ describe("server instructions", () => {
     for (const needle of [
       "concept",
       "frontmatter",
-      "bundle-absolute",
+      "document-relative",
+      "[Orders](../tables/orders.md)",
       "graph_summary",
       "search_concepts",
       "get_concept",
@@ -1537,6 +1538,13 @@ describe("server instructions", () => {
     ]) {
       assert.ok(instructions.includes(needle), `instructions should mention ${needle}`);
     }
+    // A leading-/ link resolves from the repository root on GitHub, so the
+    // bundle-absolute form renders broken for colocated bundles — the
+    // instructions must not recommend it (issue #84).
+    assert.ok(
+      !instructions.includes("prefer the bundle-absolute form"),
+      "instructions should not recommend the bundle-absolute link form",
+    );
     // Instructions cost context in every session — keep them short.
     const lineCount = instructions.split("\n").length;
     assert.ok(

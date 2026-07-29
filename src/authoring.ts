@@ -478,7 +478,7 @@ async function rewriteLinksInFile(
  * (keeping a leading `./` when one was written), an extensionless target
  * stays extensionless, and any #fragment/?query suffix is carried over.
  */
-function renderTarget(rawTarget: string, destPath: string, fromDir: string): string {
+export function renderTarget(rawTarget: string, destPath: string, fromDir: string): string {
   const pathPart = rawTarget.split("#")[0]!.split("?")[0]!;
   const suffix = rawTarget.slice(pathPart.length);
   const dest = pathPart.toLowerCase().endsWith(".md")

@@ -14,4 +14,4 @@ timestamp: 2026-05-28T00:00:00Z
 | `customer_id` | STRING | Unique customer identifier.    |
 | `email`       | STRING | Primary contact email address. |
 
-Referenced by [orders](/tables/orders.md).
+Referenced by [orders](orders.md).
