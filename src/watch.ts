@@ -1,5 +1,5 @@
 import type { FSWatcher } from "node:fs";
-import { watch } from "node:fs";
+import { statSync, watch } from "node:fs";
 import path from "node:path";
 
 import type { BundleReloadStats, OkfStore } from "./store.js";
@@ -83,8 +83,14 @@ export function watchBundles(
 
   const startWatching = (config: BundleConfig): void => {
     try {
+      const root = path.resolve(config.root);
+      // fs.watch on a missing path no longer throws on newer Node (it
+      // silently returns a watcher that never fires), so verify ourselves.
+      if (!statSync(root).isDirectory()) {
+        throw new Error(`bundle root is not a directory: ${root}`);
+      }
       const watcher = watch(
-        path.resolve(config.root),
+        root,
         { recursive: true },
         (_event, filename) => {
           if (isRelevant(filename)) scheduleReload(config.id);
