@@ -161,6 +161,119 @@ describe("searchConcepts", () => {
     assert.ok(snippet.startsWith("…") && snippet.endsWith("…"));
   });
 
+  it("matches multi-keyword queries with each keyword scored independently", () => {
+    const synthetic = makeBundle([
+      {
+        id: "tools/slack-clipboard",
+        type: "Tool",
+        tags: ["slack", "clipboard"],
+        body: "Copy a message from Slack into the clipboard.",
+      },
+      { id: "tools/unrelated", type: "Tool", body: "Nothing relevant here." },
+    ]);
+    const { hits, termMatching } = searchConcepts([synthetic], {
+      query: "slack message clipboard",
+    });
+    assert.deepEqual(hits.map((h) => h.id), ["tools/slack-clipboard"]);
+    assert.equal(termMatching, undefined);
+  });
+
+  it("ranks concepts matching every keyword above partial matches", () => {
+    const synthetic = makeBundle([
+      { id: "notes/partial", type: "Note", body: "Only slack appears here." },
+      {
+        id: "notes/full",
+        type: "Note",
+        body: "Both slack and clipboard appear here.",
+      },
+    ]);
+    const { hits } = searchConcepts([synthetic], { query: "clipboard slack" });
+    assert.equal(hits[0]?.id, "notes/full");
+  });
+
+  it("ranks a verbatim phrase match above the same keywords scattered", () => {
+    const synthetic = makeBundle([
+      { id: "notes/scattered", type: "Note", body: "The slack app and the clipboard tool." },
+      { id: "notes/phrase", type: "Note", body: "Use the slack clipboard integration." },
+    ]);
+    const { hits } = searchConcepts([synthetic], { query: "slack clipboard" });
+    assert.equal(hits[0]?.id, "notes/phrase");
+  });
+
+  it("falls back to any-keyword matching when no concept matches every keyword", () => {
+    const synthetic = makeBundle([
+      {
+        id: "tools/slack-clipboard",
+        type: "Tool",
+        tags: ["slack"],
+        body: "Slack helpers.",
+      },
+    ]);
+    const { hits, termMatching } = searchConcepts([synthetic], {
+      query: "slack clipboard shortcuts",
+    });
+    assert.deepEqual(hits.map((h) => h.id), ["tools/slack-clipboard"]);
+    assert.equal(termMatching, "any");
+  });
+
+  it("does not fall back to any-keyword matching for single-keyword queries", () => {
+    const { hits, termMatching } = searchConcepts(bundles, { query: "nonexistentword" });
+    assert.equal(hits.length, 0);
+    assert.equal(termMatching, undefined);
+  });
+
+  it("scores an exact tag match above a substring tag match", () => {
+    const synthetic = makeBundle([
+      { id: "notes/substring", type: "Note", tags: ["slack-adjacent"] },
+      { id: "notes/exact", type: "Note", tags: ["slack"] },
+    ]);
+    const { hits } = searchConcepts([synthetic], { query: "slack" });
+    assert.equal(hits[0]?.id, "notes/exact");
+    assert.ok((hits[0]?.score ?? 0) > (hits[1]?.score ?? 0));
+  });
+
+  it("anchors the snippet on the earliest matched keyword in the body", () => {
+    const synthetic = makeBundle([
+      {
+        id: "notes/anchor",
+        type: "Note",
+        body: "The clipboard line comes first.\n\nMuch later, slack appears.",
+      },
+    ]);
+    const { hits } = searchConcepts([synthetic], { query: "slack clipboard" });
+    assert.ok(hits[0]?.snippet?.includes("clipboard line comes first"));
+  });
+
+  it("suggests related tags when a query matches nothing", () => {
+    const synthetic = makeBundle([
+      { id: "notes/a", type: "Note", tags: ["slack", "messaging"] },
+      { id: "notes/b", type: "Note", tags: ["slack"] },
+      { id: "notes/c", type: "Note", tags: ["unrelated"] },
+    ]);
+    const { hits, tagHints } = searchConcepts([synthetic], { query: "slacking" });
+    assert.equal(hits.length, 0);
+    assert.deepEqual(tagHints, [{ tag: "slack", count: 2 }]);
+  });
+
+  it("omits tagHints when hits exist or no query is given", () => {
+    const withHits = searchConcepts(bundles, { query: "orders" });
+    assert.equal("tagHints" in withHits, false);
+    const noQuery = searchConcepts(bundles, {});
+    assert.equal("tagHints" in noQuery, false);
+  });
+
+  it("respects structural filters when collecting tag hints", () => {
+    const synthetic = makeBundle([
+      { id: "notes/a", type: "Note", tags: ["slack"] },
+      { id: "tools/b", type: "Tool", tags: ["slack"] },
+    ]);
+    const { tagHints } = searchConcepts([synthetic], {
+      query: "slacking",
+      types: ["Note"],
+    });
+    assert.deepEqual(tagHints, [{ tag: "slack", count: 1 }]);
+  });
+
   it("never splits multi-byte characters when truncating", () => {
     const body = `${"😀".repeat(200)}needle${"😀".repeat(200)}`;
     const { hits } = searchConcepts([makeBundle([{ id: "notes/long", type: "Note", body }])], { query: "needle" });

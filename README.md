@@ -320,7 +320,7 @@ Read tools:
 | `get_concept` | One full document: frontmatter, body, outgoing links, and a `sections` heading list; pass `section` to fetch a single body section |
 | `get_citations` | Numbered `# Citations` entries for a concept (spec §8), each classified `external` / `concept` / `missing`; `../` targets resolving into a colocated sibling count as `concept`. Duplicate `# Citations` sections are merged, so an accidental empty duplicate cannot mask entries |
 | `read_document` | Raw markdown of any bundle document by path, including reserved `index.md` / `log.md`; a missing `index.md` is synthesized from frontmatter (spec §6, marked `synthesized: true`) — the entry point for remote bundles published without index files |
-| `search_concepts` | Text query + type/tag/path/link/orphan filters, paginated; an exact-`resource` filter maps an asset URI to its concept; hits include match locations, a body snippet, and the enclosing section heading |
+| `search_concepts` | Keyword query + type/tag/path/link/orphan filters, paginated; query keywords are matched independently across fields, with all-keyword hits ranked first, a fall back to any-keyword matches (flagged `termMatching: "any"`), and related-tag hints (`tagHints`) when nothing matches; an exact-`resource` filter maps an asset URI to its concept; hits include match locations, a body snippet, and the enclosing section heading |
 | `list_types` | Distinct concept `type` values with usage counts |
 | `list_tags` | Distinct tag values with usage counts |
 | `suggest_concept_path` | Where a new concept should live, ranked by where same-type (and same-tag) concepts already are |

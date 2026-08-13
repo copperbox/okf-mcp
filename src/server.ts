@@ -686,9 +686,14 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        "Structured search over concepts: text query plus type/tag/path/link/resource filters",
+        "Structured search over concepts: text query plus type/tag/path/link/resource filters. The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: \"any\" flags a fallback to partial matches). When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.",
       inputSchema: {
-        query: z.string().optional(),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            "Whitespace-separated keywords, matched case-insensitively; prefer a few short keywords over full sentences",
+          ),
         bundle: bundleParam,
         types: z.array(z.string()).optional(),
         resource: z
