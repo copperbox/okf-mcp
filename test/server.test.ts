@@ -646,6 +646,33 @@ describe("server tools", () => {
     );
   });
 
+  it("search_concepts applies the relevance cutoff and reports omitted hits", async () => {
+    const result = (await callJson(client, "search_concepts", { query: "orders" })) as {
+      hits: Array<{ id: string }>;
+      total: number;
+      omitted?: number;
+    };
+    // Body-only matches score far below the id/title/tag hit and are dropped.
+    assert.deepEqual(result.hits.map((h) => h.id), ["tables/orders"]);
+    assert.ok((result.omitted ?? 0) >= 1);
+  });
+
+  it("search_concepts honors the searchLimit and searchCutoff server options", async () => {
+    const tuned = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]), {
+      searchLimit: 1,
+      searchCutoff: 0,
+    });
+    const result = (await callJson(tuned, "search_concepts", { query: "orders" })) as {
+      hits: Array<{ id: string }>;
+      total: number;
+      omitted?: number;
+    };
+    // Cutoff disabled: weak body matches stay in total; limit 1 pages them.
+    assert.equal(result.hits.length, 1);
+    assert.ok(result.total >= 2);
+    assert.equal(result.omitted, undefined);
+  });
+
   it("get_concept lists body section headings alongside the full body", async () => {
     const concept = (await callJson(client, "get_concept", { id: "tables/orders" })) as {
       body: string;
@@ -1532,6 +1559,8 @@ describe("server instructions", () => {
       "update_concept",
       "append_log_entry",
       "reload_bundles",
+      "next page with `offset`",
+      "`omitted` count",
       "index.md",
       "log.md",
       "[n] [text](target)",

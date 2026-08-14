@@ -16,9 +16,67 @@ describe("searchConcepts", () => {
   });
 
   it("ranks title matches above body-only matches", () => {
-    const { hits } = searchConcepts(bundles, { query: "orders" });
+    const { hits } = searchConcepts(bundles, { query: "orders", cutoffRatio: 0 });
     assert.equal(hits[0]?.id, "tables/orders");
     assert.ok(hits.length >= 2);
+  });
+
+  it("drops low scorers below the relevance cutoff and reports them as omitted", () => {
+    const { hits, total, omitted } = searchConcepts(bundles, { query: "orders" });
+    // tables/orders matches in id/title/resource/tags; body-only matches
+    // elsewhere score far below a quarter of that and are suppressed.
+    assert.deepEqual(hits.map((h) => h.id), ["tables/orders"]);
+    assert.equal(total, 1);
+    assert.ok((omitted ?? 0) >= 1);
+  });
+
+  it("keeps uniformly weak hits — the cutoff is relative, not absolute", () => {
+    const synthetic = makeBundle([
+      { id: "notes/a", type: "Note", body: "slack mentioned in passing" },
+      { id: "notes/b", type: "Note", body: "slack also here" },
+    ]);
+    const { hits, omitted } = searchConcepts([synthetic], { query: "slack" });
+    // Both score 1 (body only); threshold 1 × 0.25 hides neither.
+    assert.equal(hits.length, 2);
+    assert.equal(omitted, undefined);
+  });
+
+  it("disables the cutoff when cutoffRatio is 0", () => {
+    const { hits, omitted } = searchConcepts(bundles, { query: "orders", cutoffRatio: 0 });
+    assert.ok(hits.length >= 2);
+    assert.equal(omitted, undefined);
+  });
+
+  it("applies the cutoff before pagination, so total reflects surviving hits", () => {
+    const specs = Array.from({ length: 15 }, (_, i) => ({
+      id: `notes/weak-${String(i).padStart(2, "0")}`,
+      type: "Note",
+      body: "slack in the body only",
+    }));
+    specs.push({ id: "notes/strong", type: "Note", body: "" });
+    const synthetic = makeBundle(specs);
+    synthetic.concepts.get("notes/strong")!.frontmatter.tags = ["slack"];
+    const { hits, total, omitted } = searchConcepts([synthetic], { query: "slack" });
+    // Strong tag hit (4) sets threshold 1; body-only hits (1) survive it.
+    assert.equal(total, 16);
+    assert.equal(omitted, undefined);
+    assert.equal(hits.length, 10); // default page size
+    assert.equal(hits[0]?.id, "notes/strong");
+  });
+
+  it("defaults to 10 hits per page, pageable via offset", () => {
+    const synthetic = makeBundle(
+      Array.from({ length: 12 }, (_, i) => ({
+        id: `notes/n-${String(i).padStart(2, "0")}`,
+        type: "Note",
+        body: "slack",
+      })),
+    );
+    const first = searchConcepts([synthetic], { query: "slack" });
+    assert.equal(first.hits.length, 10);
+    assert.equal(first.total, 12);
+    const second = searchConcepts([synthetic], { query: "slack", offset: 10 });
+    assert.equal(second.hits.length, 2);
   });
 
   it("filters by type case-insensitively", () => {

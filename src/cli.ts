@@ -28,7 +28,8 @@ const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 Usage:
   okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
           [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
-          [--canonical-url [id=]<url>] [--writable] [--watch] [command]
+          [--canonical-url [id=]<url>] [--writable] [--watch]
+          [--search-limit <n>] [--search-cutoff <ratio>] [command]
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -97,6 +98,13 @@ Options:
                           one --colocated-bundles root is configured — every
                           bundle under the root derives <url>/<folder>; an
                           explicit per-bundle id=url still overrides.
+  --search-limit n        Default hits per search_concepts page (and for the
+                          search command). Default: 10; agents may still pass
+                          a per-call limit up to 200.
+  --search-cutoff ratio   Relevance cutoff for text queries: hits scoring
+                          below <ratio> × the top hit's score are dropped and
+                          counted in the result's \`omitted\` field. 0 disables.
+                          Default: 0.25.
   --include-external      graph only: include external link targets (https:,
                           repo:, ...) as opaque nodes; a URL that derived a
                           cross-bundle edge is not duplicated as one
@@ -134,6 +142,32 @@ function parseBundleFlags(values: string[]): BundleConfig[] {
     const id = value.replace(/\/+$/, "").split("/").pop() || "bundle";
     return { id, root: value };
   });
+}
+
+/** Parse a numeric flag value, rejecting non-numbers and out-of-range values. */
+function parseNumericFlag(
+  flag: string,
+  value: string | undefined,
+  range: { integer?: boolean; min?: number; max?: number },
+): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (
+    Number.isNaN(parsed) ||
+    (range.integer === true && !Number.isInteger(parsed)) ||
+    (range.min !== undefined && parsed < range.min) ||
+    (range.max !== undefined && parsed > range.max)
+  ) {
+    const kind = range.integer === true ? "an integer" : "a number";
+    const bounds = [
+      range.min !== undefined ? `>= ${range.min}` : undefined,
+      range.max !== undefined ? `<= ${range.max}` : undefined,
+    ]
+      .filter((b) => b !== undefined)
+      .join(" and ");
+    throw new Error(`${flag} requires ${kind}${bounds ? ` ${bounds}` : ""}, got: ${value}`);
+  }
+  return parsed;
 }
 
 /** Split an `id=<value>` flag argument, rejecting a missing id or value. */
@@ -252,6 +286,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       list: { type: "boolean" },
       writable: { type: "boolean" },
       watch: { type: "boolean" },
+      "search-limit": { type: "string" },
+      "search-cutoff": { type: "string" },
       help: { type: "boolean" },
     },
     allowPositionals: true,
@@ -263,6 +299,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   const configs = parseBundleFlags(values.bundle ?? []);
   const [command = "mcp", ...rest] = positionals;
+  let searchLimit: number | undefined;
+  let searchCutoff: number | undefined;
+  try {
+    searchLimit = parseNumericFlag("--search-limit", values["search-limit"], {
+      integer: true,
+      min: 1,
+    });
+    searchCutoff = parseNumericFlag("--search-cutoff", values["search-cutoff"], {
+      min: 0,
+      max: 1,
+    });
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return 2;
+  }
   const colocatedRoots = values["colocated-bundles"] ?? [];
   const remoteRootUrls = values["colocated-remote-bundles"] ?? [];
   const only = values.only
@@ -363,6 +414,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const server = createOkfServer(store, {
         writable: values.writable ?? false,
         bundleGuides: guides,
+        ...(searchLimit !== undefined && { searchLimit }),
+        ...(searchCutoff !== undefined && { searchCutoff }),
       });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
@@ -423,7 +476,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error("error: search requires a query");
         return 2;
       }
-      console.log(JSON.stringify(searchConcepts(store.bundles(), { query }), null, 2));
+      console.log(
+        JSON.stringify(
+          searchConcepts(store.bundles(), {
+            query,
+            ...(searchLimit !== undefined && { limit: searchLimit }),
+            ...(searchCutoff !== undefined && { cutoffRatio: searchCutoff }),
+          }),
+          null,
+          2,
+        ),
+      );
       return 0;
     }
     case "concept": {

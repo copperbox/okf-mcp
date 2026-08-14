@@ -25,9 +25,22 @@ export interface SearchFilters {
   linkedFrom?: string;
   /** Only concepts with no resolved links in either direction. */
   orphanOnly?: boolean;
+  /**
+   * Text-query hits scoring below this fraction of the top hit's score are
+   * dropped and counted in `omitted`. 0 disables the cutoff. Default
+   * DEFAULT_CUTOFF_RATIO; ignored without a query.
+   */
+  cutoffRatio?: number;
+  /** Hits per page. Default DEFAULT_SEARCH_LIMIT. */
   limit?: number;
   offset?: number;
 }
+
+/** Default hits per page; page further with `offset`. */
+export const DEFAULT_SEARCH_LIMIT = 10;
+
+/** Default relevance cutoff: drop hits under a quarter of the top score. */
+export const DEFAULT_CUTOFF_RATIO = 0.25;
 
 /** Fields the text query is matched against, in scoring order. */
 export type MatchField = "id" | "title" | "resource" | "description" | "tags" | "body";
@@ -60,7 +73,13 @@ export interface TagHint {
 
 export interface SearchResult {
   hits: SearchHit[];
+  /** Matching concepts after the relevance cutoff; page with limit/offset. */
   total: number;
+  /**
+   * Present only when the relevance cutoff dropped hits: how many concepts
+   * matched the query but scored below cutoffRatio × the top hit's score.
+   */
+  omitted?: number;
   /**
    * Present (as "any") only when no concept matched every query keyword and
    * the hits instead match at least one keyword each.
@@ -326,7 +345,20 @@ export function searchConcepts(
       b.hit.score - a.hit.score ||
       a.hit.id.localeCompare(b.hit.id),
   );
-  const hits = scored.map((s) => s.hit);
+  let hits = scored.map((s) => s.hit);
+
+  // Relative relevance cutoff: with a strong top hit, incidental low scorers
+  // (e.g. body-only matches) are dropped; when every hit is weak, the
+  // threshold drops with them and nothing is hidden.
+  let omitted = 0;
+  const cutoffRatio = filters.cutoffRatio ?? DEFAULT_CUTOFF_RATIO;
+  if (terms.length > 0 && cutoffRatio > 0 && hits.length > 0) {
+    const threshold = hits[0]!.score * cutoffRatio;
+    const kept = hits.filter((hit) => hit.score >= threshold);
+    omitted = hits.length - kept.length;
+    hits = kept;
+  }
+
   const tagHints =
     terms.length > 0 && hits.length === 0
       ? collectTagHints(
@@ -335,10 +367,11 @@ export function searchConcepts(
         )
       : [];
   const offset = filters.offset ?? 0;
-  const limit = filters.limit ?? 50;
+  const limit = filters.limit ?? DEFAULT_SEARCH_LIMIT;
   return {
     hits: hits.slice(offset, offset + limit),
     total: hits.length,
+    ...(omitted > 0 && { omitted }),
     ...(termMatching !== undefined && { termMatching }),
     ...(tagHints.length > 0 && { tagHints }),
   };
