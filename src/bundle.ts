@@ -68,10 +68,37 @@ async function hasMarkdownFile(root: string): Promise<boolean> {
  * (missing, a dot directory, a nested path, or holding no markdown) is an
  * error — a silent no-op would read as "loaded" when it wasn't.
  */
+/**
+ * Assert a mount root exists and is a directory. `describe` names the mount
+ * from the operator's point of view (e.g. `bundle "brain" root`) so the error
+ * says which configuration entry is wrong, not just which path failed.
+ */
+export async function assertMountDirectory(
+  root: string,
+  describe: string,
+  hint?: string,
+): Promise<void> {
+  const suffix = hint === undefined ? "" : ` (${hint})`;
+  let stats;
+  try {
+    stats = await fs.stat(root);
+  } catch {
+    throw new Error(`${describe} does not exist: ${root}${suffix}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`${describe} is not a directory: ${root}${suffix}`);
+  }
+}
+
 export async function discoverColocatedBundles(
   root: string,
-  options: { only?: string[] } = {},
+  options: { only?: string[]; onSkip?: (folder: string) => void } = {},
 ): Promise<BundleConfig[]> {
+  await assertMountDirectory(
+    root,
+    "colocated root",
+    "check the path passed to --colocated-bundles",
+  );
   if (options.only !== undefined) {
     const configs: BundleConfig[] = [];
     // Deduped and codepoint-sorted, matching full discovery's output order.
@@ -98,7 +125,13 @@ export async function discoverColocatedBundles(
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const bundleRoot = path.join(root, entry.name);
-    if (!(await hasMarkdownFile(bundleRoot))) continue;
+    if (!(await hasMarkdownFile(bundleRoot))) {
+      // Skipping is right (vaults hold asset/template folders), but silent
+      // skipping reads as "missing" to whoever just created a fresh folder —
+      // let the caller say what was skipped and why.
+      options.onSkip?.(entry.name);
+      continue;
+    }
     configs.push({ id: entry.name, root: bundleRoot, colocatedRoot: root });
   }
   return configs;

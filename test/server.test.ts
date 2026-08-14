@@ -1825,21 +1825,35 @@ describe("colocated cross-bundle tools", () => {
   });
 });
 
-describe("README tool documentation", () => {
+describe("docs tool documentation", () => {
   it("documents every registered tool in a table row", async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
     const client = await connectClient(store, { writable: true });
     const { tools } = await client.listTools();
     assert.ok(tools.length > 0);
 
-    const readme = await fs.readFile(
-      path.join(import.meta.dirname, "..", "README.md"),
+    const toolsDoc = await fs.readFile(
+      path.join(import.meta.dirname, "..", "docs", "tools.md"),
       "utf8",
     );
     const undocumented = tools
       .map((tool) => tool.name)
-      .filter((name) => !readme.includes(`| \`${name}\` |`));
+      .filter((name) => !toolsDoc.includes(`| \`${name}\` |`));
     assert.deepEqual(undocumented, []);
+  });
+});
+
+describe("server handshake", () => {
+  it("reports the published package version, not a hardcoded one", async () => {
+    const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const client = await connectClient(store);
+    const pkg = JSON.parse(
+      await fs.readFile(
+        path.join(import.meta.dirname, "..", "package.json"),
+        "utf8",
+      ),
+    ) as { version: string };
+    assert.equal(client.getServerVersion()?.version, pkg.version);
   });
 });
 

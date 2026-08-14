@@ -53,26 +53,13 @@ describe("npm packaging", () => {
   });
 });
 
-describe("README agent guidance", () => {
-  // Slice a README section: from its `## ` heading to the next `## ` heading
-  // outside fenced code (embedded CLAUDE.md snippets contain `##` headings).
-  async function readmeSection(heading: string): Promise<string> {
-    const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
-    const start = readme.indexOf(heading);
-    assert.ok(start >= 0, `README section "${heading}" must exist`);
-    const lines = readme.slice(start + heading.length).split("\n");
-    let inFence = false;
-    const sectionLines: string[] = [heading];
-    for (const line of lines) {
-      if (line.startsWith("```")) inFence = !inFence;
-      else if (!inFence && line.startsWith("## ")) break;
-      sectionLines.push(line);
-    }
-    return sectionLines.join("\n");
+describe("docs agent guidance", () => {
+  async function docFile(name: string): Promise<string> {
+    return fs.readFile(path.join(repoRoot, "docs", name), "utf8");
   }
 
   it("covers keeping a shared bundle fresh (git pull + reload_bundles)", async () => {
-    const section = await readmeSection("## Teaching your agent to maintain the brain");
+    const section = await docFile("agent-instructions.md");
 
     // The server does no git sync — the guidance must say so and put
     // pull/reload (and publish-back) into the standing instructions.
@@ -83,7 +70,7 @@ describe("README agent guidance", () => {
   });
 
   it("covers the multi-bundle (org + project) workflow", async () => {
-    const section = await readmeSection("## Multi-bundle setups");
+    const section = await docFile("multi-bundle.md");
 
     // Example config mounts two bundles, with a read-only remote alternative
     // for the org brain.

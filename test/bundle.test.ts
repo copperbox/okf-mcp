@@ -159,6 +159,34 @@ describe("loadBundle", () => {
 });
 
 describe("discoverColocatedBundles", () => {
+  it("reports skipped markdown-less folders through onSkip", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "okf-colocated-skip-"));
+    try {
+      await fs.mkdir(path.join(dir, "real"));
+      await fs.writeFile(path.join(dir, "real", "a.md"), "---\ntype: Note\n---\nx\n");
+      await fs.mkdir(path.join(dir, "empty"));
+      await fs.mkdir(path.join(dir, "assets"));
+      await fs.writeFile(path.join(dir, "assets", "logo.png"), "");
+      const skipped: string[] = [];
+      const configs = await discoverColocatedBundles(dir, {
+        onSkip: (folder) => skipped.push(folder),
+      });
+      assert.deepEqual(configs.map((c) => c.id), ["real"]);
+      assert.deepEqual(skipped, ["assets", "empty"]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a missing root with a message naming the flag", async () => {
+    await assert.rejects(
+      () => discoverColocatedBundles("/nonexistent/vault"),
+      (err: Error) =>
+        err.message.includes("colocated root does not exist") &&
+        err.message.includes("--colocated-bundles"),
+    );
+  });
+
   let root: string;
 
   async function write(relPath: string, content = ""): Promise<void> {

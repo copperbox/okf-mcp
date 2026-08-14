@@ -753,3 +753,56 @@ describe("cli repair", () => {
     assert.equal(report.fixed, 1);
   });
 });
+
+describe("cli invalid configuration errors", () => {
+  it("fails the mount when a --bundle path does not exist, instead of serving empty", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle", "brain=/nonexistent/okf-path", "inspect",
+    ]);
+    assert.equal(code, 1);
+    assert.match(stderr, /bundle "brain": root does not exist/);
+    assert.match(stderr, /create an empty directory first/);
+  });
+
+  it("rejects a --bundle with an empty id", async () => {
+    const { code, stderr } = await runCli(["--bundle", "=somewhere", "inspect"]);
+    assert.equal(code, 2);
+    assert.match(stderr, /--bundle has an empty id/);
+    assert.match(stderr, /id=<path>/);
+  });
+
+  it("rejects a --bundle with an empty path", async () => {
+    const { code, stderr } = await runCli(["--bundle", "brain=", "inspect"]);
+    assert.equal(code, 2);
+    assert.match(stderr, /--bundle has an empty path/);
+  });
+
+  it("rejects a missing --colocated-bundles root with the flag named", async () => {
+    const { code, stderr } = await runCli([
+      "--colocated-bundles", "/nonexistent/vault", "inspect",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /colocated root does not exist/);
+    assert.match(stderr, /--colocated-bundles/);
+  });
+});
+
+describe("cli colocated skip note", () => {
+  it("notes skipped markdown-less folders on stderr and still mounts the rest", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-skip-"));
+    try {
+      await fs.mkdir(path.join(root, "real"));
+      await fs.writeFile(path.join(root, "real", "a.md"), "---\ntype: Note\n---\nx\n");
+      await fs.mkdir(path.join(root, "newbrain"));
+      const { code, stdout, stderr } = await runCli([
+        "--colocated-bundles", root, "inspect",
+      ]);
+      assert.equal(code, 0);
+      assert.match(stderr, /skipped folders without markdown: newbrain/);
+      assert.match(stderr, /add a \.md file/);
+      assert.match(stdout, /"bundle": "real"/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

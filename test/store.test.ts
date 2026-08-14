@@ -13,6 +13,53 @@ async function writeDoc(root: string, relPath: string, frontmatter: string, body
   await fs.writeFile(absolute, `---\n${frontmatter}\n---\n\n${body}\n`);
 }
 
+describe("OkfStore configuration errors", () => {
+  it("load() rejects a bundle root that does not exist, naming the bundle and remedy", async () => {
+    const store = new OkfStore([{ id: "brain", root: "/nonexistent/okf-path" }]);
+    await assert.rejects(
+      () => store.load(),
+      (err: Error) =>
+        err.message.includes('bundle "brain"') &&
+        err.message.includes("does not exist") &&
+        err.message.includes("create an empty directory first"),
+    );
+  });
+
+  it("load() rejects a bundle root that is a file, not a directory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    try {
+      const file = path.join(dir, "notes.md");
+      await fs.writeFile(file, "not a bundle\n");
+      const store = new OkfStore([{ id: "brain", root: file }]);
+      await assert.rejects(
+        () => store.load(),
+        (err: Error) =>
+          err.message.includes('bundle "brain"') &&
+          err.message.includes("is not a directory"),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bundle() before load() says to call load(), not 'unknown bundle'", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    try {
+      await writeDoc(dir, "a.md", "type: Note", "hi");
+      const store = new OkfStore([{ id: "brain", root: dir }]);
+      await assert.rejects(
+        () => store.bundle("brain"),
+        (err: Error) => err.message.includes("load() has not been called"),
+      );
+      await store.load();
+      const bundle = await store.bundle("brain");
+      assert.equal(bundle.concepts.size, 1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("OkfStore.reloadBundles", () => {
   let root: string;
   beforeEach(async () => {
