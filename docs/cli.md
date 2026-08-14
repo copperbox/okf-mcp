@@ -1,9 +1,10 @@
 # CLI
 
 ```
-okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
+okf-mcp [--bundle [id=]<path>] [--colocated-bundles <root> [--only <a,b,c>]]
         [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
         [--canonical-url [id=]<url>] [--writable] [--watch]
+        [--config <file> | --no-config]
         [--search-limit <n>] [--search-cutoff <ratio>] [command]
 
   mcp                 Start the stdio MCP server (default)
@@ -19,7 +20,9 @@ okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
                       (dry-run by default; --write applies)
 ```
 
-Mounting flags are covered in [configuration](configuration.md), [colocated bundles](colocated-bundles.md), and [remote bundles](remote-bundles.md); `--canonical-url` in [cross-bundle awareness](cross-bundle.md).
+Every command reads the same `okf.config.json` layers the MCP server does, so `okf-mcp inspect` with no flags works in a configured project. `--config <file>` uses one file and skips discovery; `--no-config` ignores config files entirely (both also settable as `OKF_CONFIG` / `OKF_NO_CONFIG=1`).
+
+Mounting flags and the config file are covered in [configuration](configuration.md), [colocated bundles](colocated-bundles.md), and [remote bundles](remote-bundles.md); `--canonical-url` in [cross-bundle awareness](cross-bundle.md).
 
 ## graph
 

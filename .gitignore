@@ -2,3 +2,4 @@ node_modules/
 dist/
 .sandcastle/.env
 .sandcastle/logs/**
+okf.config.local.json

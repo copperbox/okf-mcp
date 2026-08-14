@@ -1,6 +1,19 @@
 # Multi-bundle setups (org brain + project brain)
 
-`--bundle` and `--remote-bundle` are repeatable, so one server can mount a shared org-wide brain next to the project's own bundle:
+One server can mount a shared org-wide brain next to the project's own bundle. In an [`okf.config.json`](configuration.md) beside the project:
+
+```json
+{
+  "bundles": {
+    "org": { "path": "~/brains/org", "writable": false },
+    "project": { "path": "brain/", "writable": true }
+  }
+}
+```
+
+Writability is per bundle, so the org brain stays read-only while the project bundle takes writes. Because config files merge across directories, the committed project file can declare only `project` and leave `org` to a config higher up the tree — or to each developer's `~/.config/okf/config.json`, so nobody's local clone path ends up in the repository. With the server [declared once globally](configuration.md), an org brain in the user config is then mounted alongside whatever project you happen to be working in, and each project adds its own.
+
+The same mounts as CLI flags — `--bundle` and `--remote-bundle` are repeatable:
 
 ```json
 {
@@ -18,7 +31,9 @@
 }
 ```
 
-If consuming the org brain is enough, mount it as a read-only GitHub tree instead — no clone to keep fresh, and `reload_bundles` refetches: `"--remote-bundle", "org=https://github.com/your-org/brain/tree/main/bundle"`. Because `--writable` is server-wide, `--remote-bundle` is also how you keep the org brain read-only while the project bundle stays writable.
+`--writable` is server-wide, so with flags alone both bundles are writable; per-bundle control needs the config file.
+
+If consuming the org brain is enough, mount it as a read-only GitHub tree instead — no clone to keep fresh, and `reload_bundles` refetches: `"--remote-bundle", "org=https://github.com/your-org/brain/tree/main/bundle"`, or `"remoteBundles": { "org": "https://github.com/your-org/brain/tree/main/bundle" }` in a config file.
 
 ## Routing
 
