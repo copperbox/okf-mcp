@@ -12,7 +12,7 @@ Tests use Node's built-in `node:test` via tsx (`npm test` = `node --import tsx -
 
 Two complementary styles:
 
-- **Fixture-driven** (read-only behavior): tests read `test/fixtures/acme` — a demo bundle *plus* deliberate defects (`.obsidian/workspace.md` that must be ignored, `notes/no-type.md` missing the required `type`) — or `test/fixtures/malformed`, which exercises [permissive parsing](../decisions/permissive-parsing.md). Note `test/fixtures/acme` is a separate copy from `examples/acme`, not a symlink.
+- **Fixture-driven** (read-only behavior): tests read `test/fixtures/acme` — a demo bundle *plus* deliberate defects (`.obsidian/workspace.md` that must be ignored, `notes/no-type.md` missing the required `type`) — or `test/fixtures/malformed`, which exercises [permissive parsing](../decisions/permissive-parsing.md). (`test/fixtures/acme` is self-contained — the former `examples/acme` demo bundle it once mirrored was replaced by this brain bundle serving as the live example.)
 - **Tmpdir-driven** (anything that writes): `fs.mkdtemp` sandboxes, used heavily by server, cli, and store tests.
 
 Shared infrastructure in `test/`:

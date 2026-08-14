@@ -13,14 +13,16 @@ The knowledge base itself is just a directory of Markdown ("a bundle"). Humans c
 ```bash
 npm install
 npm test
-npm run dev -- --bundle acme=examples/acme inspect
+npm run dev -- --bundle brain=okf-bundle inspect
 ```
+
+`okf-bundle/` is this repository's own knowledge base — the project dogfoods itself, so the example bundle you're inspecting is the real brain the project's agents read and write.
 
 Start the stdio MCP server (the default command):
 
 ```bash
-npm run dev -- --bundle acme=examples/acme            # read-only
-npm run dev -- --bundle acme=examples/acme --writable # + authoring tools
+npm run dev -- --bundle brain=okf-bundle            # read-only
+npm run dev -- --bundle brain=okf-bundle --writable # + authoring tools
 ```
 
 Or build and run the compiled binary:
