@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-08-14
+* **Creation**: Created [Documentation structure and guards](/workflows/documentation-structure.md).
+* Repoint citation: agent guidance moved from README to docs/agent-instructions.md
 * Link capture-policy concept from overview (was orphaned)
 * Drop reserved index.md links from overview hub
 * Move citation-form examples into a fenced block so they don't parse as links
