@@ -10,30 +10,38 @@ The knowledge base is just a directory of Markdown ("a bundle"). Humans browse a
 
 ## Quick start
 
-Add the server to your MCP client, pointing it at a bundle directory (an empty one works — the first write creates the structure):
+Declare the server **once, globally**, in your agent harness — with no arguments:
 
 ```json
 {
   "mcpServers": {
     "okf": {
       "command": "npx",
-      "args": [
-        "-y", "@copperbox/okf-mcp",
-        "--bundle", "brain=/absolute/path/to/your/bundle",
-        "--writable"
-      ]
+      "args": ["-y", "@copperbox/okf-mcp"]
     }
   }
 }
 ```
 
-Omit `--writable` for a read-only server. To make agents capture and maintain knowledge as they work, add standing instructions to your agent config — copy-paste blocks in [teaching your agent](docs/agent-instructions.md).
+Then let each directory decide what it mounts, with an `okf.config.json` beside the project (an empty bundle directory works — the first write creates the structure):
 
-To explore from a checkout instead: `npm install && npm run dev -- --bundle brain=okf-bundle inspect`. `okf-bundle/` is this repository's own knowledge base — the project dogfoods itself, so the example bundle is the real brain the project's agents read and write.
+```json
+{
+  "bundles": {
+    "brain": { "path": "okf-bundle/", "writable": true }
+  }
+}
+```
+
+That file is safe to commit: paths resolve against the config file, and writability is per bundle. Config files merge from your home directory down to the project, so a project commits its own bundle while each developer adds personal ones locally — something a harness config cannot express, since it keys servers by name and has no merge semantics. See [configuration](docs/configuration.md) for the layering rules and the full schema; bundles can still be declared as `--bundle` flags instead when one fixed bundle is all you need.
+
+To make agents capture and maintain knowledge as they work, add standing instructions to your agent config — copy-paste blocks in [teaching your agent](docs/agent-instructions.md).
+
+To explore from a checkout instead: `npm install && npm run dev -- inspect` — this repository has its own `okf.config.json`, so no mount flags are needed. `okf-bundle/` is this repository's own knowledge base — the project dogfoods itself, so the example bundle is the real brain the project's agents read and write.
 
 ## Documentation
 
-- [Configuration](docs/configuration.md) — MCP client setup, flags, read-only vs writable
+- [Configuration](docs/configuration.md) — `okf.config.json` layering, MCP client setup, flags, per-bundle writability
 - [Teaching your agent](docs/agent-instructions.md) — knowledge capture and reconciliation instructions for your agent config
 - [Bundle format](docs/bundle-format.md) — layout, frontmatter, links, generated indexes, Obsidian
 - [MCP tools](docs/tools.md) — every resource, read tool, and write tool

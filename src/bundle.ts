@@ -280,6 +280,9 @@ export function buildBundle(
  */
 export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
   const root = path.resolve(config.root);
+  // Only an explicit `writable: false` marks a local bundle read-only;
+  // undeclared bundles defer to the server-wide --writable gate.
+  const readOnly = config.writable === false;
 
   let files: string[];
   try {
@@ -296,7 +299,7 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
           message: `cannot read bundle root ${root}: ${(err as Error).message}`,
         },
       ],
-      readOnly: false,
+      readOnly,
     };
   }
 
@@ -308,6 +311,7 @@ export async function loadBundle(config: BundleConfig): Promise<LoadedBundle> {
     });
   }
   return buildBundle(config.id, root, documents, {
+    readOnly,
     ...(config.canonicalUrl !== undefined && {
       canonicalUrls: canonicalUrlPrefixes(config.canonicalUrl),
     }),

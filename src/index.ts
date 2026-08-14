@@ -26,6 +26,13 @@ export type {
 } from "./authoring.js";
 export { buildBundle, loadBundle } from "./bundle.js";
 export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
+export { CONFIG_FILENAME, LOCAL_CONFIG_FILENAME, loadOkfConfig, userConfigDir } from "./config.js";
+export type {
+  DiscoverConfigOptions,
+  OkfConfigFile,
+  ResolvedColocatedRoot,
+  ResolvedConfig,
+} from "./config.js";
 export {
   buildGraph,
   exportGraph,

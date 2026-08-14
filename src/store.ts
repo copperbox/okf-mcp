@@ -494,6 +494,14 @@ export class OkfStore {
     }
     if (id === undefined) {
       const ids = [...this.loaded.keys(), ...this.pending.keys()];
+      // Zero is its own case: naming a bundle cannot help, so say what would.
+      if (ids.length === 0) {
+        throw new Error(
+          "no bundles are mounted: declare one in an okf.config.json for this " +
+            "directory, or in the user config (~/.config/okf/config.json) to mount " +
+            "it everywhere",
+        );
+      }
       if (ids.length !== 1) {
         throw new Error(`bundle id required when ${ids.length} bundles are configured`);
       }

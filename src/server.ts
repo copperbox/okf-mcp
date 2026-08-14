@@ -117,7 +117,7 @@ function renderBundleGuide(guide: BundleGuide): string {
  * session (so kept deliberately short): the OKF conventions the tools assume
  * but cannot express individually.
  */
-function serverInstructions(options: ServerOptions): string {
+function serverInstructions(options: ServerOptions, mounted: boolean): string {
   const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
 concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
 A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
@@ -155,12 +155,24 @@ entries (spec §8), not as an ordered markdown list; the write tools normalize
 \`1.\`-style entries to that form. Use append_log_entry for change narrative not tied
 to a single concept write. When knowledge outgrows its bundle (e.g. project → org),
 promote_concept moves it and leaves a citation stub behind. Remote bundles are
-always read-only.`;
+always read-only, and a local bundle may be mounted read-only too — check
+list_bundles' readOnly before planning a write.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
   const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
-  return [shared, authoring, ...guides].join("\n\n");
+  // Say it up front rather than letting the agent infer it from empty sweeps.
+  const empty =
+    mounted === false
+      ? [
+          `No bundles are mounted for this working directory, so every read returns
+nothing. This is configuration, not an error or an empty knowledge base: bundles
+are declared in an okf.config.json beside the project, or in the user config
+(~/.config/okf/config.json) to mount them in every directory. Tell the user that
+rather than reporting the knowledge base as empty.`,
+        ]
+      : [];
+  return [shared, ...empty, authoring, ...guides].join("\n\n");
 }
 
 function json(data: unknown): CallToolResult {
@@ -183,7 +195,8 @@ const entryPointMeta = { "anthropic/alwaysLoad": true };
 function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
   if (bundle.readOnly) {
     throw new Error(
-      `bundle "${bundle.id}" is read-only (remote bundles cannot be modified)`,
+      `bundle "${bundle.id}" is read-only: remote bundles cannot be modified, ` +
+        `and a local bundle is read-only when its config declares "writable": false`,
     );
   }
 }
@@ -227,7 +240,12 @@ export function createOkfServer(
 ): McpServer {
   const server = new McpServer(
     { name: "okf-mcp", version: PACKAGE_VERSION },
-    { instructions: serverInstructions(options) },
+    {
+      instructions: serverInstructions(
+        options,
+        store.bundles().length > 0 || store.discoveredBundles().length > 0,
+      ),
+    },
   );
 
   const selectBundles = async (bundle: string | undefined) =>

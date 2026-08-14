@@ -6,6 +6,8 @@ Index a bundle published in another repository without cloning it, straight from
 okf-mcp --remote-bundle okf=https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf inspect
 ```
 
+In a [config file](configuration.md) the same mount is `{ "remoteBundles": { "okf": "https://github.com/.../tree/main/okf" } }`, with the object form taking `include`, `exclude`, and `canonicalUrl`; published colocated roots go in `colocatedRemoteRoots`.
+
 `--remote-bundle id=url` is repeatable and takes a `https://github.com/<owner>/<repo>/tree/<ref>/<path>` URL (refs containing `/` are unsupported), or a `.tar.gz` / `.tgz` / `.zip` archive detected by extension — any http(s) URL, or a local archive path. The runtime equivalent is the `load_remote_bundle` tool (`{ id, url, include?, exclude?, canonicalUrl? }`, glob filters over bundle-relative paths), which mutates only the in-memory index; `list_remote_bundles` lists what is loaded.
 
 ## Consuming a published colocated root by one URL

@@ -91,4 +91,56 @@ describe("docs agent guidance", () => {
     assert.match(section, /Citations/);
     assert.match(section, /references\//);
   });
+
+  it("leads with declaring the server globally and mounting per directory", async () => {
+    const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
+    const section = await docFile("configuration.md");
+
+    // The recommended shape: one argument-free server declaration in the
+    // harness, bundles chosen per directory by okf.config.json.
+    for (const doc of [readme, section]) {
+      assert.match(doc, /okf\.config\.json/);
+      assert.match(doc, /"args": \["-y", "@copperbox\/okf-mcp"\]/);
+    }
+    assert.match(section, /globally/i);
+    // Why a global declaration is safe: the harness launches the server in the
+    // directory you have open, and one user-level bundle keeps it from
+    // erroring in directories that configure nothing.
+    assert.match(section, /working directory/i);
+    assert.match(section, /~\/\.config\/okf\/config\.json/);
+  });
+
+  it("covers okf.config.json layering, per-bundle writability, and the trust guard", async () => {
+    const section = await docFile("configuration.md");
+
+    // The reason the file layer exists: MCP client configs cannot merge, so
+    // the layering order and the escape hatches have to be spelled out.
+    assert.match(section, /okf\.config\.local\.json/);
+    assert.match(section, /~\/\.config\/okf\/config\.json/);
+    assert.match(section, /--no-config/);
+    assert.match(section, /"root": true/);
+
+    // Per-bundle writability and the guard against a cloned repo granting
+    // itself writes outside its own directory.
+    assert.match(section, /"writable"/);
+    assert.match(section, /read-only with a warning/);
+
+    // Every mount kind is declarable in the file, not just local bundles.
+    for (const key of [
+      "bundles",
+      "colocatedRoots",
+      "remoteBundles",
+      "colocatedRemoteRoots",
+      "searchLimit",
+      "searchCutoff",
+    ]) {
+      assert.match(section, new RegExp(`"${key}"`), `configuration.md must document ${key}`);
+    }
+  });
+
+  it("shows the multi-bundle setup in config-file form too", async () => {
+    const section = await docFile("multi-bundle.md");
+    assert.match(section, /okf\.config\.json/);
+    assert.match(section, /"writable"/);
+  });
 });
