@@ -428,6 +428,33 @@ describe("cli graph html", () => {
     );
   });
 
+  it("links nodes to their canonical blob URL when the bundle has one", async () => {
+    const { code, stdout } = await runCli([
+      "--colocated-bundles",
+      root,
+      "--canonical-url",
+      `${root}=https://github.com/o/r/tree/main/vault`,
+      "graph",
+      "html",
+    ]);
+    assert.equal(code, 0);
+    const byId = new Map(embeddedGraphData(stdout).nodes.map((n) => [n.id, n]));
+    assert.equal(
+      byId.get("acme:note")!.url,
+      "https://github.com/o/r/blob/main/vault/acme/note.md",
+    );
+    assert.equal(
+      byId.get("ops:playbooks/deploy")!.url,
+      "https://github.com/o/r/blob/main/vault/ops/playbooks/deploy.md",
+    );
+  });
+
+  it("omits node URLs when the bundle has no canonical location", async () => {
+    const { code, stdout } = await runCli(["--colocated-bundles", root, "graph", "html"]);
+    assert.equal(code, 0);
+    assert.ok(embeddedGraphData(stdout).nodes.every((n) => !("url" in n)));
+  });
+
   it("groups a single bundle by concept type unless --community overrides", async () => {
     const bundle = ["--bundle", path.join(root, "ops")];
     const byType = await runCli([...bundle, "graph", "html"]);

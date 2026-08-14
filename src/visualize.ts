@@ -41,6 +41,12 @@ export function communityAssigner(mode: CommunityMode): (node: GraphNode) => str
 export interface ExportGraphHtmlOptions {
   /** Community label per node: color, legend entry, and cluster-gravity group. */
   communityOf: (node: GraphNode) => string;
+  /**
+   * Web URL where a node's source can be viewed (e.g. its GitHub blob URL,
+   * built from the owning bundle's canonical location). Nodes without one
+   * simply get no link in the details panel.
+   */
+  urlOf?: (node: GraphNode) => string | undefined;
 }
 
 interface EmbeddedNode {
@@ -51,6 +57,7 @@ interface EmbeddedNode {
   description?: string;
   tags?: string[];
   external?: boolean;
+  url?: string;
 }
 
 /**
@@ -72,6 +79,7 @@ export function exportGraphHtml(
     description: node.description,
     tags: node.tags,
     external: node.external,
+    url: options.urlOf?.(node),
   }));
   const edges: GraphEdge[] = graph.edges.map((edge) => ({
     from: edge.from,
@@ -101,6 +109,14 @@ export function exportGraphHtml(
   .legend-item { display: flex; align-items: center; gap: 7px; padding: 2px 4px; margin: 0 -4px;
     border-radius: 4px; cursor: pointer; }
   .legend-item.active { background: rgba(88, 166, 255, 0.25); }
+  .legend-count { margin-left: auto; padding-left: 8px; color: #8b949e; font-size: 11px; }
+  #details { position: fixed; top: 12px; left: 310px; max-width: 300px;
+    max-height: calc(100% - 24px); overflow-y: auto; display: none;
+    background: rgba(22, 27, 34, 0.92); border: 1px solid #30363d;
+    border-radius: 8px; padding: 10px 12px; }
+  .dt-link { display: inline-block; margin-top: 6px; color: #58a6ff; font-size: 12px;
+    text-decoration: none; }
+  .dt-link:hover { text-decoration: underline; }
   .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
   #tooltip { position: fixed; display: none; max-width: 300px; pointer-events: none; z-index: 2;
     background: rgba(22, 27, 34, 0.95); border: 1px solid #30363d; border-radius: 8px;
@@ -120,8 +136,9 @@ export function exportGraphHtml(
   <input type="search" id="search" placeholder="Filter concepts&hellip;" autocomplete="off">
   <div id="legend"></div>
 </div>
+<div id="details"></div>
 <div id="tooltip"></div>
-<div id="hint">search filters &middot; drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &middot; click the legend to focus a community</div>
+<div id="hint">search filters &middot; drag nodes &middot; wheel zooms &middot; drag background pans &middot; click a node to highlight &amp; show details &middot; click the legend to focus a community</div>
 <script type="application/json" id="graph-data">${json}</script>
 <script>
 (() => {
@@ -363,6 +380,36 @@ export function exportGraphHtml(
   }
   function hideTooltip() { tooltip.style.display = "none"; }
 
+  // Node details panel: sits beside #panel, appears while a node is selected.
+  // Rebuilt with textContent/setAttribute only, so titles and descriptions
+  // stay inert text — same rule as the tooltip.
+  const details = document.getElementById("details");
+  function renderDetails() {
+    details.replaceChildren();
+    if (!selected) { details.style.display = "none"; return; }
+    const n = selected;
+    const add = (cls, text) => {
+      const div = document.createElement("div");
+      div.className = cls;
+      div.textContent = text;
+      details.append(div);
+    };
+    add("tt-title", n.title || n.id);
+    add("tt-id", n.id + " \\u00b7 " + n.type);
+    if (n.description) add("tt-desc", n.description);
+    if (n.tags && n.tags.length) add("tt-tags", n.tags.map((t) => "#" + t).join(" "));
+    if (n.url) {
+      const link = document.createElement("a");
+      link.className = "dt-link";
+      link.href = n.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = (n.url.startsWith("https://github.com/") ? "View on GitHub" : "Open link") + " \\u2197";
+      details.append(link);
+    }
+    details.style.display = "block";
+  }
+
   let pressed = null;
   let panFrom = null;
   let moved = false;
@@ -398,6 +445,7 @@ export function exportGraphHtml(
     if (!moved) {
       if (pressed) selected = selected === pressed ? null : pressed;
       else if (panFrom) { selected = null; setFocus(null); }
+      renderDetails();
     }
     dragging = null;
     pressed = null;
@@ -418,6 +466,8 @@ export function exportGraphHtml(
     focused = community;
     for (const [name, el] of legendItems) el.classList.toggle("active", name === focused);
   }
+  const communitySizes = new Map();
+  for (const n of nodes) communitySizes.set(n.community, (communitySizes.get(n.community) || 0) + 1);
   for (const c of communities) {
     const item = document.createElement("div");
     item.className = "legend-item";
@@ -426,7 +476,10 @@ export function exportGraphHtml(
     swatch.style.background = colorOf.get(c);
     const label = document.createElement("span");
     label.textContent = c;
-    item.append(swatch, label);
+    const count = document.createElement("span");
+    count.className = "legend-count";
+    count.textContent = communitySizes.get(c);
+    item.append(swatch, label, count);
     item.addEventListener("click", () => setFocus(focused === c ? null : c));
     legendItems.set(c, item);
     legend.append(item);
