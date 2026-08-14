@@ -10,6 +10,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { writeConcept } from "../src/authoring.js";
+import { loadOkfConfig } from "../src/config.js";
 import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "../src/server.js";
 import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
@@ -96,16 +97,20 @@ describe("reload_bundles tool", () => {
 
     const result = await client.callTool({ name: "reload_bundles", arguments: {} });
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
-    assert.deepEqual(JSON.parse(text), [
-      {
-        bundle: "t",
-        concepts: 2,
-        problems: 0,
-        added: ["customers"],
-        removed: [],
-        changed: [],
-      },
-    ]);
+    assert.deepEqual(JSON.parse(text), {
+      mounted: [],
+      unmounted: [],
+      bundles: [
+        {
+          bundle: "t",
+          concepts: 2,
+          problems: 0,
+          added: ["customers"],
+          removed: [],
+          changed: [],
+        },
+      ],
+    });
 
     // The externally-added concept is now visible through other tools.
     const get = await client.callTool({
@@ -116,6 +121,102 @@ describe("reload_bundles tool", () => {
       (get.content as Array<{ type: string; text: string }>)[0]!.text,
     );
     assert.equal(concept.frontmatter.type, "Table");
+  });
+
+  it("re-runs config discovery so an okf.config.json added mid-session mounts", async () => {
+    // A project directory that starts with no bundles declared, exactly the
+    // "global server, empty here" state a fresh project opens in.
+    const proj = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-proj-"));
+    const configHome = path.join(proj, "no-user-config");
+    try {
+      const notesDir = path.join(proj, "notes");
+      await fs.mkdir(notesDir);
+      await fs.writeFile(
+        path.join(notesDir, "idea.md"),
+        "---\ntype: Note\n---\n\nAn idea.\n",
+      );
+
+      const store = new OkfStore([], {
+        rediscover: async () =>
+          (await loadOkfConfig({ cwd: proj, configHome })).bundles,
+      });
+      const client = await connectClient(store);
+
+      // No config yet: reload discovers nothing and mounts nothing.
+      assert.deepEqual(await callJson(client, "reload_bundles", {}), {
+        mounted: [],
+        unmounted: [],
+        bundles: [],
+      });
+
+      // The user drops an okf.config.json declaring the bundle.
+      await fs.writeFile(
+        path.join(proj, "okf.config.json"),
+        JSON.stringify({ bundles: { notes: "notes" } }),
+      );
+
+      const result = (await callJson(client, "reload_bundles", {})) as {
+        mounted: string[];
+        unmounted: string[];
+        bundles: Array<Record<string, unknown>>;
+      };
+      assert.deepEqual(result.mounted, ["notes"]);
+      assert.deepEqual(result.unmounted, []);
+      assert.deepEqual(
+        result.bundles.find((s) => s.bundle === "notes")?.added,
+        ["idea"],
+      );
+
+      // The newly mounted bundle is queryable in the same session.
+      const concept = (await callJson(client, "get_concept", {
+        bundle: "notes",
+        id: "idea",
+      })) as { frontmatter: { type: string } };
+      assert.equal(concept.frontmatter.type, "Note");
+
+      // Removing the config unmounts it again on the next reload.
+      await fs.rm(path.join(proj, "okf.config.json"));
+      const after = (await callJson(client, "reload_bundles", {})) as {
+        unmounted: string[];
+      };
+      assert.deepEqual(after.unmounted, ["notes"]);
+      assert.deepEqual(store.bundles(), []);
+    } finally {
+      await fs.rm(proj, { recursive: true, force: true });
+    }
+  });
+
+  it("notes a rediscovered writable bundle a read-only server cannot author yet", async () => {
+    const proj = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-proj-"));
+    const configHome = path.join(proj, "no-user-config");
+    try {
+      const notesDir = path.join(proj, "notes");
+      await fs.mkdir(notesDir);
+      await fs.writeFile(
+        path.join(notesDir, "idea.md"),
+        "---\ntype: Note\n---\n\nAn idea.\n",
+      );
+      await fs.writeFile(
+        path.join(proj, "okf.config.json"),
+        JSON.stringify({ bundles: { notes: { path: "notes", writable: true } } }),
+      );
+
+      const store = new OkfStore([], {
+        rediscover: async () =>
+          (await loadOkfConfig({ cwd: proj, configHome })).bundles,
+      });
+      // Server started read-only (no writable bundle at launch).
+      const client = await connectClient(store, { writable: false });
+
+      const result = (await callJson(client, "reload_bundles", {})) as {
+        mounted: string[];
+        notes?: string[];
+      };
+      assert.deepEqual(result.mounted, ["notes"]);
+      assert.ok(result.notes?.some((n) => /restart/.test(n)), `notes: ${result.notes}`);
+    } finally {
+      await fs.rm(proj, { recursive: true, force: true });
+    }
   });
 
   it("derives resource names from the filename when frontmatter has no title", async () => {
@@ -291,7 +392,11 @@ describe("lazy colocated bundles", () => {
 
   it("reload_bundles ignores unloaded bundles unless one is named", async () => {
     const client = await connectClient(lazyStore());
-    assert.deepEqual(await callJson(client, "reload_bundles", {}), []);
+    assert.deepEqual(await callJson(client, "reload_bundles", {}), {
+      mounted: [],
+      unmounted: [],
+      bundles: [],
+    });
 
     const named = (await callJson(client, "reload_bundles", {
       bundle: "ops",

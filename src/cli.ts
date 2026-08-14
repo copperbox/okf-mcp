@@ -14,7 +14,11 @@ import {
   loadOkfConfig,
   userConfigDir,
 } from "./config.js";
-import type { ResolvedColocatedRoot, ResolvedConfig } from "./config.js";
+import type {
+  DiscoverConfigOptions,
+  ResolvedColocatedRoot,
+  ResolvedConfig,
+} from "./config.js";
 import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
@@ -343,20 +347,24 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   // Config files first, CLI flags on top: a flag replaces the config entry
   // with the same bundle id and adds anything the files did not declare.
+  // The same discovery inputs drive startup and the mid-session re-discovery
+  // the reload_bundles tool runs, so a re-read sees exactly the layers the
+  // launch did (just with whatever the config files say now).
+  const discoverOptions: DiscoverConfigOptions = {
+    ...(values.config !== undefined
+      ? { configPath: values.config }
+      : process.env.OKF_CONFIG
+        ? { configPath: process.env.OKF_CONFIG }
+        : {}),
+    noConfig: values["no-config"] === true || process.env.OKF_NO_CONFIG === "1",
+    ...(process.env.OKF_CONFIG_HOME !== undefined && {
+      configHome: process.env.OKF_CONFIG_HOME,
+    }),
+  };
   let resolved: ResolvedConfig;
   let configs: BundleConfig[];
   try {
-    resolved = await loadOkfConfig({
-      ...(values.config !== undefined
-        ? { configPath: values.config }
-        : process.env.OKF_CONFIG
-          ? { configPath: process.env.OKF_CONFIG }
-          : {}),
-      noConfig: values["no-config"] === true || process.env.OKF_NO_CONFIG === "1",
-      ...(process.env.OKF_CONFIG_HOME !== undefined && {
-        configHome: process.env.OKF_CONFIG_HOME,
-      }),
-    });
+    resolved = await loadOkfConfig(discoverOptions);
     configs = [...resolved.bundles];
     for (const flagConfig of parseBundleFlags(values.bundle ?? [])) {
       const existing = configs.findIndex((c) => c.id === flagConfig.id);
@@ -514,9 +522,56 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 2;
   }
 
+  // The long-lived server re-resolves its local mounts on reload_bundles, so a
+  // config file added or edited mid-session takes effect without a restart. It
+  // re-runs the same local-bundle resolution the launch did (config layers,
+  // --bundle overlays, colocated expansion, canonical URLs); remote and
+  // colocated-remote mounts stay fixed for the process. One-shot commands have
+  // no reload, so they skip it.
+  const rediscover =
+    command === "mcp"
+      ? async (): Promise<BundleConfig[]> => {
+          const fresh = await loadOkfConfig(discoverOptions);
+          const next: BundleConfig[] = [...fresh.bundles];
+          for (const flagConfig of parseBundleFlags(values.bundle ?? [])) {
+            const existing = next.findIndex((c) => c.id === flagConfig.id);
+            if (existing >= 0) next[existing] = flagConfig;
+            else next.push(flagConfig);
+          }
+          const specs = new Map<string, ResolvedColocatedRoot>();
+          for (const spec of fresh.colocatedRoots) specs.set(spec.path, spec);
+          for (const root of values["colocated-bundles"] ?? []) {
+            specs.set(path.resolve(root), { path: path.resolve(root) });
+          }
+          for (const spec of specs.values()) {
+            const discovered = await discoverColocatedBundles(spec.path, {
+              only: spec.only ?? folderOnly,
+            });
+            next.push(
+              ...discovered.map((config) => ({
+                ...config,
+                lazy: true,
+                ...(spec.writable !== undefined && { writable: spec.writable }),
+                ...(spec.canonicalUrl !== undefined && {
+                  canonicalUrl: `${spec.canonicalUrl.replace(/\/+$/, "")}/${config.id}`,
+                }),
+              })),
+            );
+          }
+          applyCanonicalUrlFlags(
+            values["canonical-url"] ?? [],
+            next,
+            remotes,
+            [...specs.keys()],
+          );
+          return next;
+        }
+      : undefined;
+
   const store = new OkfStore(configs, {
     remotes,
     colocatedRemoteRoots: [...remoteRootConfigs.values()],
+    ...(rediscover !== undefined && { rediscover }),
   });
   await store.load();
 

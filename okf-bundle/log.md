@@ -1,6 +1,11 @@
 # Update Log
 
 ## 2026-08-14
+* Give the OkfStore mutable-mounts note its own section
+* Clean the OkfStore Citations section back to citation entries only
+* Note reloadWithRediscovery/hasWritableBundle on the OkfStore concept
+* Link config-file-layering to the new reload re-discovery decision
+* Add decision: reload_bundles re-runs config discovery for local mounts
 * Note the empty-mount instruction block and zero-bundle sweep behaviour
 * Record that nothing-to-mount is a normal state for the mcp command
 * Record the global-declaration deployment shape and its two consequences

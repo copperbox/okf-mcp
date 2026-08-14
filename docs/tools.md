@@ -10,7 +10,7 @@ The server declares MCP server-level instructions — a short primer on OKF conv
 |---|---|
 | `list_bundles` | Configured bundles with concept counts, read-only flags, declared `description`s, and a `loaded` marker for [lazily mounted](colocated-bundles.md#lazy-mounting) bundles |
 | `get_bundle_guide` | Each colocated root's [`AGENTS.md` guide](colocated-bundles.md#root-agentsmd-the-bundle-guide) plus every bundle's `description`; registered only while a colocated root is mounted |
-| `reload_bundles` | Re-read bundles to pick up external edits; reports added/removed/changed. No-arg form covers loaded bundles; naming an unloaded one loads it |
+| `reload_bundles` | Re-read bundles to pick up external edits; reports added/removed/changed. No-arg form also re-runs config discovery, mounting/unmounting bundles as `okf.config.json` files change (`{ mounted, unmounted, bundles }`); naming a bundle reloads just it |
 | `load_remote_bundle` | Index a read-only bundle from a GitHub tree URL or archive, in memory only |
 | `load_colocated_remote_bundles` | Mount a [published colocated root](remote-bundles.md#consuming-a-published-colocated-root-by-one-url) by URL, returning the root `AGENTS.md` inline |
 | `list_remote_bundles` | Loaded remote bundles with source URLs and `description`s |

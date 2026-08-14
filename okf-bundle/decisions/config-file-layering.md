@@ -8,7 +8,7 @@ tags:
   - bundles
   - cli
   - mcp
-timestamp: 2026-08-14T21:18:10.663Z
+timestamp: 2026-08-14T22:24:05.348Z
 ---
 
 MCP client configs (`.mcp.json` and every harness equivalent) key servers **by
@@ -52,6 +52,11 @@ rather than an empty knowledge base. The one-shot commands (`inspect`,
 `validate`, …) keep the usage error, because those were typed deliberately.
 `OkfStore.bundle()` treats zero bundles as its own case for the same reason:
 naming a bundle cannot help, so the message says what would.
+
+Because that empty state is normal, adding an `okf.config.json` to such a
+directory has to be recoverable in-session: the no-argument `reload_bundles`
+[re-runs this discovery](reload-bundles-re-runs-config-discovery.md) and mounts
+what the new config declares, no restart required.
 
 Flags do not disable discovery; they layer above it. Mounting purely through
 flags is unchanged in a directory with no config files, and `--no-config`
