@@ -8,6 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { generateIndexes } from "./authoring.js";
 import { citationPrefix } from "./canonical.js";
 import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
+import { CONFIG_FILENAME, LOCAL_CONFIG_FILENAME, loadOkfConfig } from "./config.js";
+import type { ResolvedColocatedRoot, ResolvedConfig } from "./config.js";
 import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
@@ -26,10 +28,26 @@ import { watchBundles } from "./watch.js";
 const USAGE = `okf-mcp — Open Knowledge Format MCP server and CLI
 
 Usage:
-  okf-mcp --bundle [id=]<path> [--colocated-bundles <root> [--only <a,b,c>]]
+  okf-mcp [--bundle [id=]<path>] [--colocated-bundles <root> [--only <a,b,c>]]
           [--remote-bundle id=<url>] [--colocated-remote-bundles <url>]
           [--canonical-url [id=]<url>] [--writable] [--watch]
+          [--config <file> | --no-config]
           [--search-limit <n>] [--search-cutoff <ratio>] [command]
+
+Bundles may be declared in ${CONFIG_FILENAME} files instead of on the command
+line, which is how a project commits its own mounts while each developer adds
+personal ones locally. Layers apply lowest precedence first: the user config
+(~/.config/okf/config.json), then ${CONFIG_FILENAME} and ${LOCAL_CONFIG_FILENAME}
+in every directory from the filesystem root down to the working directory, then
+these flags. Same-id bundles are replaced by the higher layer; everything else
+unions.
+
+  {
+    "bundles": {
+      "brain": { "path": "okf-bundle/", "writable": true },
+      "team": "../shared/team-brain"
+    }
+  }
 
 Commands:
   mcp                 Start the stdio MCP server (default)
@@ -125,7 +143,17 @@ Options:
   --write                 repair only: apply the safe rewrites (repair is a
                           dry run without it)
   --list                  repair only: print the fixer registry and exit
-  --writable              Enable authoring: write_concept tool and index command
+  --config <file>         Use this config file only, skipping discovery. Also
+                          settable as OKF_CONFIG.
+  --no-config             Ignore every ${CONFIG_FILENAME}; mount only what these
+                          flags declare. Also settable as OKF_NO_CONFIG=1.
+  --writable              Enable authoring: write_concept tool and index
+                          command. Server-wide — every bundle that does not
+                          declare its own "writable" in a config file becomes
+                          writable. A config file's per-bundle "writable": false
+                          keeps that bundle read-only even here, and a bundle
+                          declaring "writable": true enables authoring without
+                          this flag.
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
                           the reload_bundles tool). Lazily mounted colocated
@@ -295,6 +323,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       list: { type: "boolean" },
       writable: { type: "boolean" },
       watch: { type: "boolean" },
+      config: { type: "string" },
+      "no-config": { type: "boolean" },
       "search-limit": { type: "string" },
       "search-cutoff": { type: "string" },
       help: { type: "boolean" },
@@ -306,12 +336,34 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.log(USAGE);
     return 0;
   }
+  // Config files first, CLI flags on top: a flag replaces the config entry
+  // with the same bundle id and adds anything the files did not declare.
+  let resolved: ResolvedConfig;
   let configs: BundleConfig[];
   try {
-    configs = parseBundleFlags(values.bundle ?? []);
+    resolved = await loadOkfConfig({
+      ...(values.config !== undefined
+        ? { configPath: values.config }
+        : process.env.OKF_CONFIG
+          ? { configPath: process.env.OKF_CONFIG }
+          : {}),
+      noConfig: values["no-config"] === true || process.env.OKF_NO_CONFIG === "1",
+      ...(process.env.OKF_CONFIG_HOME !== undefined && {
+        configHome: process.env.OKF_CONFIG_HOME,
+      }),
+    });
+    configs = [...resolved.bundles];
+    for (const flagConfig of parseBundleFlags(values.bundle ?? [])) {
+      const existing = configs.findIndex((c) => c.id === flagConfig.id);
+      if (existing >= 0) configs[existing] = flagConfig;
+      else configs.push(flagConfig);
+    }
   } catch (err) {
     console.error(`error: ${(err as Error).message}`);
     return 2;
+  }
+  for (const warning of resolved.warnings) {
+    console.error(`okf-mcp: ${warning}`);
   }
   const [command = "mcp", ...rest] = positionals;
   let searchLimit: number | undefined;
@@ -329,7 +381,19 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.error(`error: ${(err as Error).message}`);
     return 2;
   }
-  const colocatedRoots = values["colocated-bundles"] ?? [];
+  searchLimit ??= resolved.searchLimit;
+  searchCutoff ??= resolved.searchCutoff;
+  // Colocated roots from config carry their own --only/--writable/canonical
+  // URL; roots named on the command line share the global --only.
+  const colocatedRootSpecs = new Map<string, ResolvedColocatedRoot>();
+  for (const spec of resolved.colocatedRoots) colocatedRootSpecs.set(spec.path, spec);
+  for (const root of values["colocated-bundles"] ?? []) {
+    colocatedRootSpecs.set(path.resolve(root), { path: path.resolve(root) });
+  }
+  const colocatedRoots = [...colocatedRootSpecs.keys()];
+  const remoteRootConfigs = new Map(
+    resolved.colocatedRemoteRoots.map((config) => [config.url, config]),
+  );
   const remoteRootUrls = values["colocated-remote-bundles"] ?? [];
   const only = values.only
     ?.split(",")
@@ -342,7 +406,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (
       command !== "repair" &&
       colocatedRoots.length === 0 &&
-      remoteRootUrls.length === 0
+      remoteRootUrls.length === 0 &&
+      remoteRootConfigs.size === 0
     ) {
       console.error(
         "error: --only requires --colocated-bundles or --colocated-remote-bundles",
@@ -370,12 +435,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 2;
     }
   }
-  for (const root of colocatedRoots) {
+  for (const spec of colocatedRootSpecs.values()) {
+    const root = spec.path;
+    const rootOnly = spec.only ?? folderOnly;
     let discovered: BundleConfig[];
     const skipped: string[] = [];
     try {
       discovered = await discoverColocatedBundles(root, {
-        only: folderOnly,
+        only: rootOnly,
         onSkip: (folder) => skipped.push(folder),
       });
     } catch (err) {
@@ -398,22 +465,39 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // parsed on first access. One-shot commands sweep every bundle anyway, so
     // laziness would only reorder the same work; they load eagerly.
     configs.push(
-      ...(command === "mcp"
-        ? discovered.map((config) => ({ ...config, lazy: true }))
-        : discovered),
+      ...discovered.map((config) => ({
+        ...config,
+        ...(command === "mcp" && { lazy: true }),
+        ...(spec.writable !== undefined && { writable: spec.writable }),
+        ...(spec.canonicalUrl !== undefined && {
+          canonicalUrl: `${spec.canonicalUrl.replace(/\/+$/, "")}/${config.id}`,
+        }),
+      })),
     );
   }
-  const remotes = parseRemoteBundleFlags(values["remote-bundle"] ?? []);
+  const remotes = [...resolved.remotes];
+  for (const flagRemote of parseRemoteBundleFlags(values["remote-bundle"] ?? [])) {
+    const existing = remotes.findIndex((r) => r.id === flagRemote.id);
+    if (existing >= 0) remotes[existing] = flagRemote;
+    else remotes.push(flagRemote);
+  }
   try {
     applyCanonicalUrlFlags(values["canonical-url"] ?? [], configs, remotes, colocatedRoots);
   } catch (err) {
     console.error(`error: ${(err as Error).message}`);
     return 2;
   }
-  if (configs.length === 0 && remotes.length === 0 && remoteRootUrls.length === 0) {
+  for (const url of remoteRootUrls) {
+    remoteRootConfigs.set(url, {
+      url,
+      ...(folderOnly !== undefined && { only: folderOnly }),
+    });
+  }
+  if (configs.length === 0 && remotes.length === 0 && remoteRootConfigs.size === 0) {
     console.error(
-      "error: at least one --bundle, --colocated-bundles, --remote-bundle, " +
-        "or --colocated-remote-bundles is required\n",
+      `error: nothing to mount: declare bundles in an ${CONFIG_FILENAME}, or pass ` +
+        "--bundle, --colocated-bundles, --remote-bundle, or " +
+        "--colocated-remote-bundles\n",
     );
     console.error(USAGE);
     return 2;
@@ -421,12 +505,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   const store = new OkfStore(configs, {
     remotes,
-    colocatedRemoteRoots: remoteRootUrls.map((url) => ({
-      url,
-      ...(folderOnly !== undefined && { only: folderOnly }),
-    })),
+    colocatedRemoteRoots: [...remoteRootConfigs.values()],
   });
   await store.load();
+
+  // A config file declaring any bundle writable enables authoring on its own;
+  // --writable stays the server-wide switch for bundles that declare nothing.
+  const writable = values.writable === true || configs.some((c) => c.writable === true);
 
   switch (command) {
     case "mcp": {
@@ -437,7 +522,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         guides.push(bundleGuide(mount.agentsGuide, `${mount.url}/AGENTS.md`));
       }
       const server = createOkfServer(store, {
-        writable: values.writable ?? false,
+        writable,
         bundleGuides: guides,
         ...(searchLimit !== undefined && { searchLimit }),
         ...(searchCutoff !== undefined && { searchCutoff }),
@@ -450,10 +535,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         discovered.length > 0
           ? `${loadedIds} + ${discovered.length} discovered colocated (loading on first access)`
           : loadedIds;
+      // Name the writable bundles rather than a bare "(writable)": with
+      // per-bundle permissions the server-wide word no longer says enough.
+      const writableIds = writable
+        ? configs.filter((c) => c.writable !== false).map((c) => c.id)
+        : [];
       console.error(
         `okf-mcp serving ${served} over stdio` +
-          (values.writable ? " (writable)" : " (read-only)"),
+          (writableIds.length > 0 ? ` (writable: ${writableIds.join(", ")})` : " (read-only)"),
       );
+      if (resolved.sources.length > 0) {
+        console.error(`okf-mcp: config: ${resolved.sources.join(", ")}`);
+      }
       if (values.watch) {
         const watcher = watchBundles(store, configs, {
           onReload: (stats) => {
@@ -596,13 +689,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     case "index": {
-      if (!values.writable) {
-        console.error("error: index regeneration requires --writable");
+      if (!writable) {
+        console.error(
+          `error: index regeneration requires --writable or a bundle declared ` +
+            `"writable": true in an ${CONFIG_FILENAME}`,
+        );
         return 2;
       }
       for (const bundle of store.bundles()) {
         if (bundle.readOnly) {
-          console.error(`${bundle.id}: skipped (read-only remote bundle)`);
+          console.error(`${bundle.id}: skipped (read-only bundle)`);
           continue;
         }
         const { written, skipped } = await generateIndexes(bundle);

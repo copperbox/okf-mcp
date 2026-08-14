@@ -155,7 +155,8 @@ entries (spec §8), not as an ordered markdown list; the write tools normalize
 \`1.\`-style entries to that form. Use append_log_entry for change narrative not tied
 to a single concept write. When knowledge outgrows its bundle (e.g. project → org),
 promote_concept moves it and leaves a citation stub behind. Remote bundles are
-always read-only.`;
+always read-only, and a local bundle may be mounted read-only too — check
+list_bundles' readOnly before planning a write.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
@@ -183,7 +184,8 @@ const entryPointMeta = { "anthropic/alwaysLoad": true };
 function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
   if (bundle.readOnly) {
     throw new Error(
-      `bundle "${bundle.id}" is read-only (remote bundles cannot be modified)`,
+      `bundle "${bundle.id}" is read-only: remote bundles cannot be modified, ` +
+        `and a local bundle is read-only when its config declares "writable": false`,
     );
   }
 }

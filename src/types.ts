@@ -100,6 +100,13 @@ export interface BundleConfig {
    * built the first time any caller names the bundle (OkfStore.bundle).
    */
   lazy?: boolean;
+  /**
+   * Per-bundle authoring permission, declared in an `okf.config.json`
+   * (see config.ts). `false` mounts the bundle read-only even on a writable
+   * server; `undefined` means undeclared — the bundle follows the server-wide
+   * `--writable` gate, which is how CLI `--bundle` flags have always behaved.
+   */
+  writable?: boolean;
 }
 
 /** A read-only bundle fetched from a remote source (issue: exchange goal). */

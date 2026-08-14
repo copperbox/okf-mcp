@@ -10,6 +10,9 @@ import { embeddedGraphData } from "./helpers.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const CLI = path.join(repoRoot, "src", "cli.ts");
+// Absolute specifier: tests that run the CLI from a temp cwd cannot resolve a
+// bare "tsx" against that directory.
+const TSX = import.meta.resolve("tsx");
 
 interface CliResult {
   code: number;
@@ -17,13 +20,24 @@ interface CliResult {
   stderr: string;
 }
 
-/** Run the CLI as a subprocess (cli.ts invokes main() at import time). */
-function runCli(args: string[]): Promise<CliResult> {
+/**
+ * Run the CLI as a subprocess (cli.ts invokes main() at import time).
+ * OKF_NO_CONFIG keeps discovered okf.config.json files — the repo's own, or
+ * any in an ancestor of the developer's checkout — out of these tests; the
+ * config-file tests opt back in by overriding `env`.
+ */
+function runCli(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      ["--import", "tsx", CLI, ...args],
-      { cwd: repoRoot },
+      ["--import", TSX, CLI, ...args],
+      {
+        cwd: options.cwd ?? repoRoot,
+        env: { ...process.env, OKF_NO_CONFIG: "1", ...options.env },
+      },
       (error, stdout, stderr) => {
         let code = 1;
         if (error === null) {
@@ -804,5 +818,134 @@ describe("cli colocated skip note", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("cli okf.config.json", () => {
+  let root: string;
+
+  /** Sandbox env: discovery on, but the developer's own user config out of reach. */
+  function configEnv(): NodeJS.ProcessEnv {
+    return { OKF_NO_CONFIG: "", OKF_CONFIG_HOME: path.join(root, "no-user-config") };
+  }
+
+  async function makeBundleDir(relPath: string): Promise<string> {
+    const dir = path.join(root, relPath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "note.md"),
+      "---\ntype: Note\ntitle: Note\n---\n\nBody.\n",
+    );
+    return dir;
+  }
+
+  async function writeConfig(dir: string, config: unknown, name = "okf.config.json") {
+    await fs.mkdir(path.join(root, dir), { recursive: true });
+    await fs.writeFile(
+      path.join(root, dir, name),
+      JSON.stringify({ root: true, ...(config as object) }, null, 2),
+    );
+  }
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-config-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("mounts bundles from the working directory's config with no flags", async () => {
+    await makeBundleDir("okf-bundle");
+    await writeConfig(".", { bundles: { brain: "okf-bundle" } });
+    const { code, stdout } = await runCli(["inspect"], { cwd: root, env: configEnv() });
+    assert.equal(code, 0);
+    assert.match(stdout, /"bundle": "brain"/);
+  });
+
+  it("lets a --bundle flag replace the config entry with the same id", async () => {
+    await makeBundleDir("okf-bundle");
+    const other = await makeBundleDir("other");
+    await writeConfig(".", { bundles: { brain: "okf-bundle" } });
+    const { code, stdout } = await runCli(["--bundle", `brain=${other}`, "inspect"], {
+      cwd: root,
+      env: configEnv(),
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /"bundle": "brain"/);
+    // One mount, not two: the flag replaced the config's entry.
+    assert.equal(stdout.match(/"bundle":/g)?.length, 1);
+  });
+
+  it("unions an ancestor config's bundles with the project's own", async () => {
+    await makeBundleDir("personal");
+    await makeBundleDir("project/okf-bundle");
+    await writeConfig(".", { bundles: { user: "personal" } });
+    await writeConfig("project", { root: false, bundles: { brain: "okf-bundle" } });
+    const { code, stdout } = await runCli(["inspect"], {
+      cwd: path.join(root, "project"),
+      env: configEnv(),
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /"bundle": "brain"/);
+    assert.match(stdout, /"bundle": "user"/);
+  });
+
+  it("ignores every config file with --no-config", async () => {
+    await makeBundleDir("okf-bundle");
+    await writeConfig(".", { bundles: { brain: "okf-bundle" } });
+    const { code, stderr } = await runCli(["--no-config", "inspect"], {
+      cwd: root,
+      env: configEnv(),
+    });
+    assert.equal(code, 2);
+    assert.match(stderr, /nothing to mount/);
+  });
+
+  it('enables authoring from a bundle declaring "writable": true, without --writable', async () => {
+    await makeBundleDir("okf-bundle");
+    await writeConfig(".", { bundles: { brain: { path: "okf-bundle", writable: true } } });
+    const { code } = await runCli(["index"], { cwd: root, env: configEnv() });
+    assert.equal(code, 0);
+    const index = await fs.readFile(path.join(root, "okf-bundle", "index.md"), "utf8");
+    assert.match(index, /note/);
+  });
+
+  it('keeps a bundle declaring "writable": false read-only even under --writable', async () => {
+    await makeBundleDir("okf-bundle");
+    await makeBundleDir("reference");
+    await writeConfig(".", {
+      writable: true,
+      bundles: { brain: "okf-bundle", reference: { path: "reference", writable: false } },
+    });
+    const { code, stderr } = await runCli(["--writable", "index"], {
+      cwd: root,
+      env: configEnv(),
+    });
+    assert.equal(code, 0);
+    assert.match(stderr, /reference: skipped \(read-only bundle\)/);
+    await fs.access(path.join(root, "okf-bundle", "index.md"));
+    await assert.rejects(fs.access(path.join(root, "reference", "index.md")));
+  });
+
+  it("downgrades and warns when a project config grants writes outside its directory", async () => {
+    const outside = await makeBundleDir("outside");
+    await writeConfig("project", {
+      bundles: { escape: { path: outside, writable: true } },
+    });
+    const { code, stderr } = await runCli(["index"], {
+      cwd: path.join(root, "project"),
+      env: configEnv(),
+    });
+    assert.match(stderr, /cannot grant it write access/);
+    assert.equal(code, 2);
+    assert.match(stderr, /index regeneration requires --writable/);
+  });
+
+  it("reports a malformed config instead of starting up", async () => {
+    await fs.writeFile(path.join(root, "okf.config.json"), "{ nope }");
+    const { code, stderr } = await runCli(["inspect"], { cwd: root, env: configEnv() });
+    assert.equal(code, 2);
+    assert.match(stderr, /okf\.config\.json is not valid JSON/);
   });
 });
