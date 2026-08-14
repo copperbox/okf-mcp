@@ -72,6 +72,42 @@ describe("exportGraphHtml", () => {
     assert.equal(data.nodes[2]!.external, true);
   });
 
+  it("embeds a url per node via urlOf, omitting nodes without one", () => {
+    const html = exportGraphHtml(graph, {
+      communityOf: communityAssigner("type"),
+      urlOf: (n) =>
+        n.external ? n.id : n.id === "a" ? `https://github.com/o/r/blob/main/${n.path}` : undefined,
+    });
+    const data = embeddedGraphData(html);
+    assert.equal(data.nodes[0]!.url, "https://github.com/o/r/blob/main/a.md");
+    assert.ok(!("url" in data.nodes[1]!));
+    assert.equal(data.nodes[2]!.url, "https://example.com");
+  });
+
+  it("shows a details panel beside #panel for the selected node, with a source link", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // The details panel is its own fixed element next to #panel, not inside it.
+    assert.match(html, /<\/div>\s*<div id="details"><\/div>/);
+    assert.match(html, /#details \{ position: fixed; top: 12px; left: 310px;/);
+    // Hidden until a node is selected; rebuilt on every selection change.
+    assert.match(html, /if \(!selected\) \{ details\.style\.display = "none"; return; \}/);
+    assert.match(html, /renderDetails\(\);/);
+    // The source link opens in a new tab without an opener, only when the
+    // node has a url, and is labeled by destination.
+    assert.match(html, /if \(n\.url\) \{/);
+    assert.match(html, /link\.target = "_blank";/);
+    assert.match(html, /link\.rel = "noopener";/);
+    assert.match(html, /"View on GitHub" : "Open link"/);
+    assert.match(html, /click a node to highlight &amp; show details/);
+  });
+
+  it("shows a node count next to each legend entry", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    assert.match(html, /communitySizes\.set\(n\.community, \(communitySizes\.get\(n\.community\) \|\| 0\) \+ 1\);/);
+    assert.match(html, /count\.className = "legend-count";/);
+    assert.match(html, /item\.append\(swatch, label, count\);/);
+  });
+
   it("escapes < so a </script> in a title cannot break out of the document", () => {
     const hostile: ConceptGraph = {
       nodes: [node({ id: "a", title: "</script><script>alert(1)</script>" })],

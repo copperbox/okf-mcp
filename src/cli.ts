@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { generateIndexes } from "./authoring.js";
+import { citationPrefix } from "./canonical.js";
 import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
 import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
@@ -480,7 +481,22 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         const mode: CommunityMode = merged
           ? "bundle"
           : ((community as CommunityMode | undefined) ?? "type");
-        output = exportGraphHtml(graph, { communityOf: communityAssigner(mode) });
+        // Node source links come from each bundle's canonical location: the
+        // blob (citation) prefix plus the concept's bundle-relative path.
+        // Bundles without a canonical URL yield no link; external nodes link
+        // to themselves when the target is already a web URL.
+        const bundlesById = new Map(store.bundles().map((b) => [b.id, b]));
+        output = exportGraphHtml(graph, {
+          communityOf: communityAssigner(mode),
+          urlOf: (node) => {
+            if (node.external) {
+              return /^https?:\/\//.test(node.id) ? node.id : undefined;
+            }
+            const prefixes = bundlesById.get(node.bundle)?.canonicalUrls;
+            if (prefixes === undefined || prefixes.length === 0) return undefined;
+            return `${citationPrefix(prefixes)}/${node.path}`;
+          },
+        });
       } else {
         output = exportGraph(graph, format as GraphFormat);
       }

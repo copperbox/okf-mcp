@@ -68,6 +68,7 @@ export function embeddedGraphData(html: string): {
     title?: string;
     community: string;
     external?: boolean;
+    url?: string;
   }[];
   edges: { from: string; to: string; kind?: string }[];
 } {
