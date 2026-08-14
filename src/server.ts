@@ -117,7 +117,7 @@ function renderBundleGuide(guide: BundleGuide): string {
  * session (so kept deliberately short): the OKF conventions the tools assume
  * but cannot express individually.
  */
-function serverInstructions(options: ServerOptions): string {
+function serverInstructions(options: ServerOptions, mounted: boolean): string {
   const shared = `This server exposes OKF (Open Knowledge Format) bundles: directories of markdown
 concept documents with YAML frontmatter (type, title, tags), indexed into a link graph.
 A concept's ID is its bundle-relative path without the .md extension (e.g. tables/orders).
@@ -161,7 +161,18 @@ list_bundles' readOnly before planning a write.`;
     ? writing
     : "This server is read-only; authoring tools are not available.";
   const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
-  return [shared, authoring, ...guides].join("\n\n");
+  // Say it up front rather than letting the agent infer it from empty sweeps.
+  const empty =
+    mounted === false
+      ? [
+          `No bundles are mounted for this working directory, so every read returns
+nothing. This is configuration, not an error or an empty knowledge base: bundles
+are declared in an okf.config.json beside the project, or in the user config
+(~/.config/okf/config.json) to mount them in every directory. Tell the user that
+rather than reporting the knowledge base as empty.`,
+        ]
+      : [];
+  return [shared, ...empty, authoring, ...guides].join("\n\n");
 }
 
 function json(data: unknown): CallToolResult {
@@ -229,7 +240,12 @@ export function createOkfServer(
 ): McpServer {
   const server = new McpServer(
     { name: "okf-mcp", version: PACKAGE_VERSION },
-    { instructions: serverInstructions(options) },
+    {
+      instructions: serverInstructions(
+        options,
+        store.bundles().length > 0 || store.discoveredBundles().length > 0,
+      ),
+    },
   );
 
   const selectBundles = async (bundle: string | undefined) =>

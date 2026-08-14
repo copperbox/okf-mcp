@@ -8,7 +8,7 @@ tags:
   - bundles
   - cli
   - mcp
-timestamp: 2026-08-14T21:06:02.897Z
+timestamp: 2026-08-14T21:18:10.663Z
 ---
 
 MCP client configs (`.mcp.json` and every harness equivalent) key servers **by
@@ -43,15 +43,19 @@ set to the project the user has open — verified against running Claude Code
 servers, whose `/proc/<pid>/cwd` is the project root. Discovery walks up from
 there.
 
-Two consequences to keep in mind:
+That makes "nothing to mount" a **normal state**, not an error: a global
+declaration is launched in every directory the user opens, most of which
+configure no bundles, and exiting there would surface as a failed MCP server in
+the harness. So the `mcp` command serves an empty set and says so — on stderr,
+and in the server instructions, which tell the agent this is configuration
+rather than an empty knowledge base. The one-shot commands (`inspect`,
+`validate`, …) keep the usage error, because those were typed deliberately.
+`OkfStore.bundle()` treats zero bundles as its own case for the same reason:
+naming a bundle cannot help, so the message says what would.
 
-- A globally declared server is launched in **every** directory, including ones
-  configuring nothing, where it exits 2 on "nothing to mount" and the harness
-  reports a failed server. One bundle in the user config avoids that
-  everywhere at once, which is why the docs push personal bundles there.
-- Flags do not disable discovery; they layer above it. Mounting purely through
-  flags is unchanged in a directory with no config files, and `--no-config`
-  guarantees it regardless.
+Flags do not disable discovery; they layer above it. Mounting purely through
+flags is unchanged in a directory with no config files, and `--no-config`
+guarantees it regardless.
 
 ## Deliberate choices worth keeping
 
@@ -71,7 +75,9 @@ Test isolation depends on this being switchable: `runCli` in `test/cli.test.ts`
 sets `OKF_NO_CONFIG=1` so neither the repo's own `okf.config.json` nor anything
 in an ancestor of a developer's checkout leaks into unrelated CLI assertions.
 That helper also resolves `tsx` to an absolute specifier, because tests that run
-the CLI from a temp cwd cannot resolve a bare module name against it.
+the CLI from a temp cwd cannot resolve a bare module name against it; its
+sibling `runMcp` starts the long-running `mcp` command and resolves on a stderr
+match, so "serves instead of exiting" is directly testable.
 
 See also [per-bundle writability](per-bundle-writability.md) and the
 [CLI surface](../architecture/cli.md).

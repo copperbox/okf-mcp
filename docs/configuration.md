@@ -24,7 +24,7 @@ Add the server to your harness's **user-level** (global) MCP config, with no arg
 
 In Claude Code that is `claude mcp add -s user okf -- npx -y @copperbox/okf-mcp`; other harnesses have their own global config file, but the entry is the same. Or point `node` at a local checkout you built yourself (`npm run build`): `"command": "node", "args": ["/absolute/path/to/okf-mcp/dist/cli.js"]`.
 
-This works because harnesses launch a stdio MCP server with the working directory set to the project you have open, and the server resolves its bundles from there. One declaration serves every project.
+This works because harnesses launch a stdio MCP server with the working directory set to the project you have open, and the server resolves its bundles from there. One declaration serves every project, and in directories that configure nothing it simply serves an empty set rather than failing.
 
 Nothing stops you from passing `--bundle` flags in a per-project server declaration instead — see [CLI flags](#alternative-cli-flags) below — but flags cannot compose across scopes, which is what the rest of this page is about.
 
@@ -80,7 +80,9 @@ With a global server declaration, `~/.config/okf/config.json` is the natural hom
 }
 ```
 
-It also guarantees the server always has something to mount. A server declared globally is launched in **every** directory you open, including ones with no `okf.config.json` anywhere above them, and with nothing at all to mount it exits with a usage error — which your harness reports as a failed server. One user-level bundle avoids that everywhere at once.
+Mounting it there means every project sees it alongside whatever that project declares, with nothing repeated per repo.
+
+A global declaration is launched in **every** directory you open, including ones that configure nothing. That is fine: the server starts and serves an empty set, reporting `serving no bundles over stdio` on stderr and telling the agent that nothing is mounted for this directory. Only the one-shot CLI commands treat having nothing to mount as a usage error, since those were typed deliberately.
 
 ### Writability
 

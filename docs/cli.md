@@ -20,7 +20,7 @@ okf-mcp [--bundle [id=]<path>] [--colocated-bundles <root> [--only <a,b,c>]]
                       (dry-run by default; --write applies)
 ```
 
-Every command reads the same `okf.config.json` layers the MCP server does, so `okf-mcp inspect` with no flags works in a configured project. `--config <file>` uses one file and skips discovery; `--no-config` ignores config files entirely (both also settable as `OKF_CONFIG` / `OKF_NO_CONFIG=1`).
+Every command reads the same `okf.config.json` layers the MCP server does, so `okf-mcp inspect` with no flags works in a configured project. With nothing to mount, `mcp` still starts and serves an empty set — a globally declared server has to survive directories that configure nothing — while the one-shot commands exit 2 with a usage error. `--config <file>` uses one file and skips discovery; `--no-config` ignores config files entirely (both also settable as `OKF_CONFIG` / `OKF_NO_CONFIG=1`).
 
 Mounting flags and the config file are covered in [configuration](configuration.md), [colocated bundles](colocated-bundles.md), and [remote bundles](remote-bundles.md); `--canonical-url` in [cross-bundle awareness](cross-bundle.md).
 

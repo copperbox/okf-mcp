@@ -1583,6 +1583,28 @@ describe("server instructions", () => {
     await client.close();
   });
 
+  it("says so up front when no bundles are mounted, and still serves", async () => {
+    // A globally declared server is launched in directories that configure
+    // nothing; it must come up rather than fail, and the agent must be told
+    // this is configuration, not an empty knowledge base.
+    const client = await connectClient(new OkfStore([]));
+    const instructions = client.getInstructions();
+    assert.ok(instructions, "server should declare instructions");
+    assert.match(instructions, /No bundles are mounted/);
+    assert.match(instructions, /okf\.config\.json/);
+
+    assert.deepEqual(await callJson(client, "list_bundles", {}), []);
+    // A no-arg sweep is empty rather than an error.
+    const search = (await callJson(client, "search_concepts", { query: "anything" })) as {
+      hits: unknown[];
+    };
+    assert.deepEqual(search.hits, []);
+    // Naming no bundle cannot be disambiguated, so the error says what would help.
+    const failure = await callTool(client, "get_concept", { id: "whatever" });
+    assert.match(textContent(failure), /no bundles are mounted/i);
+    await client.close();
+  });
+
   it("omits authoring guidance on a read-only server", async () => {
     const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
     const instructions = client.getInstructions();

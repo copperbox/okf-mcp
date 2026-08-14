@@ -8,7 +8,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { generateIndexes } from "./authoring.js";
 import { citationPrefix } from "./canonical.js";
 import { discoverColocatedBundles, readColocatedAgentsGuide } from "./bundle.js";
-import { CONFIG_FILENAME, LOCAL_CONFIG_FILENAME, loadOkfConfig } from "./config.js";
+import {
+  CONFIG_FILENAME,
+  LOCAL_CONFIG_FILENAME,
+  loadOkfConfig,
+  userConfigDir,
+} from "./config.js";
 import type { ResolvedColocatedRoot, ResolvedConfig } from "./config.js";
 import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
@@ -493,7 +498,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       ...(folderOnly !== undefined && { only: folderOnly }),
     });
   }
-  if (configs.length === 0 && remotes.length === 0 && remoteRootConfigs.size === 0) {
+  const nothingToMount =
+    configs.length === 0 && remotes.length === 0 && remoteRootConfigs.size === 0;
+  // A globally declared server is launched in every directory the user opens,
+  // most of which configure no bundles. Exiting there would show up as a failed
+  // server in the harness, so `mcp` serves empty and says so; the one-shot
+  // commands were typed deliberately and still get a usage error.
+  if (nothingToMount && command !== "mcp") {
     console.error(
       `error: nothing to mount: declare bundles in an ${CONFIG_FILENAME}, or pass ` +
         "--bundle, --colocated-bundles, --remote-bundle, or " +
@@ -541,8 +552,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         ? configs.filter((c) => c.writable !== false).map((c) => c.id)
         : [];
       console.error(
-        `okf-mcp serving ${served} over stdio` +
-          (writableIds.length > 0 ? ` (writable: ${writableIds.join(", ")})` : " (read-only)"),
+        nothingToMount
+          ? "okf-mcp serving no bundles over stdio: nothing is mounted for this " +
+              `directory. Declare bundles in an ${CONFIG_FILENAME} here, or in ` +
+              `${path.join(userConfigDir(), "config.json")} to mount them everywhere.`
+          : `okf-mcp serving ${served} over stdio` +
+              (writableIds.length > 0
+                ? ` (writable: ${writableIds.join(", ")})`
+                : " (read-only)"),
       );
       if (resolved.sources.length > 0) {
         console.error(`okf-mcp: config: ${resolved.sources.join(", ")}`);

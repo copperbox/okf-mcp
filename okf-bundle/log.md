@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-08-14
+* Note the empty-mount instruction block and zero-bundle sweep behaviour
+* Record that nothing-to-mount is a normal state for the mcp command
 * Record the global-declaration deployment shape and its two consequences
 * Refresh description for the global-declaration guidance
 * Note the two-level write gate now that writability is per bundle

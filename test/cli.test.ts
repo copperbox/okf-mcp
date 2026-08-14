@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +48,47 @@ function runCli(
         resolve({ code, stdout, stderr });
       },
     );
+  });
+}
+
+/**
+ * Start the long-running `mcp` command and resolve with its stderr once
+ * `ready` matches, killing the process. Rejects if it exits first — which is
+ * the failure these tests guard against: serving, not exiting.
+ */
+function runMcp(
+  args: string[],
+  ready: RegExp,
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", TSX, CLI, "mcp", ...args], {
+      cwd: options.cwd ?? repoRoot,
+      env: { ...process.env, OKF_NO_CONFIG: "1", ...options.env },
+    });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`timed out waiting for ${ready}; stderr: ${stderr}`));
+    }, 20_000);
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (!ready.test(stderr)) return;
+      // Printing the line is not the same as staying up: give it a beat and
+      // confirm it is still serving before calling this a pass.
+      setTimeout(() => {
+        clearTimeout(timer);
+        const died = child.exitCode !== null || child.signalCode !== null;
+        child.kill();
+        if (died) reject(new Error(`server exited after announcing itself: ${stderr}`));
+        else resolve(stderr);
+      }, 500);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      // A no-op once resolved; the real signal is exiting before serving.
+      reject(new Error(`server exited with ${code} instead of serving: ${stderr}`));
+    });
   });
 }
 
@@ -940,6 +981,25 @@ describe("cli okf.config.json", () => {
     assert.match(stderr, /cannot grant it write access/);
     assert.equal(code, 2);
     assert.match(stderr, /index regeneration requires --writable/);
+  });
+
+  it("serves with nothing mounted rather than failing the server", async () => {
+    // A globally declared server is launched in every directory the user
+    // opens; exiting in the unconfigured ones would surface as a failed MCP
+    // server in the harness.
+    const stderr = await runMcp([], /serving no bundles/, {
+      cwd: root,
+      env: configEnv(),
+    });
+    assert.match(stderr, /nothing is mounted for this directory/);
+    assert.match(stderr, /okf\.config\.json/);
+    assert.match(stderr, /config\.json to mount them everywhere/);
+  });
+
+  it("still fails a one-shot command with nothing to mount", async () => {
+    const { code, stderr } = await runCli(["inspect"], { cwd: root, env: configEnv() });
+    assert.equal(code, 2);
+    assert.match(stderr, /nothing to mount/);
   });
 
   it("reports a malformed config instead of starting up", async () => {
