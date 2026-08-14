@@ -372,11 +372,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   for (const root of colocatedRoots) {
     let discovered: BundleConfig[];
+    const skipped: string[] = [];
     try {
-      discovered = await discoverColocatedBundles(root, { only: folderOnly });
+      discovered = await discoverColocatedBundles(root, {
+        only: folderOnly,
+        onSkip: (folder) => skipped.push(folder),
+      });
     } catch (err) {
       console.error(`error: ${(err as Error).message}`);
       return 2;
+    }
+    if (skipped.length > 0) {
+      console.error(
+        `note: colocated root ${root}: skipped folders without markdown: ` +
+          `${skipped.join(", ")} (add a .md file to a folder to mount it as a bundle)`,
+      );
     }
     if (discovered.length === 0) {
       console.error(

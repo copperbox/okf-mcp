@@ -18,6 +18,7 @@ The honesty rules that make laziness safe:
 - No-arg `reload_bundles` covers loaded bundles only; naming an unloaded bundle hydrates it and reports an all-added delta.
 - Cross-bundle derivation sees loaded siblings only; edges into a discovered bundle appear when it hydrates.
 - The store's `onHydrate` hook exists specifically so `--watch` can start watching a bundle the moment it loads.
+- Discovery itself follows the same honesty rule: a subfolder with no markdown anywhere (assets, templates, a freshly created empty bundle) is not mounted, and the CLI prints a stderr note naming the skipped folders — a fresh folder that silently fails to appear as a bundle would otherwise read as a bug.
 
 Scope: only the `mcp` command is lazy — one-shot [CLI commands](../architecture/cli.md) load eagerly, and remote mounts are always eager.
 

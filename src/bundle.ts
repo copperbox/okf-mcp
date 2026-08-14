@@ -92,7 +92,7 @@ export async function assertMountDirectory(
 
 export async function discoverColocatedBundles(
   root: string,
-  options: { only?: string[] } = {},
+  options: { only?: string[]; onSkip?: (folder: string) => void } = {},
 ): Promise<BundleConfig[]> {
   await assertMountDirectory(
     root,
@@ -125,7 +125,13 @@ export async function discoverColocatedBundles(
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const bundleRoot = path.join(root, entry.name);
-    if (!(await hasMarkdownFile(bundleRoot))) continue;
+    if (!(await hasMarkdownFile(bundleRoot))) {
+      // Skipping is right (vaults hold asset/template folders), but silent
+      // skipping reads as "missing" to whoever just created a fresh folder —
+      // let the caller say what was skipped and why.
+      options.onSkip?.(entry.name);
+      continue;
+    }
     configs.push({ id: entry.name, root: bundleRoot, colocatedRoot: root });
   }
   return configs;

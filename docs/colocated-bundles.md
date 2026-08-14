@@ -15,7 +15,7 @@ Mount them all with one flag:
 okf-mcp --colocated-bundles /path/to/knowledge
 ```
 
-Every **immediate subdirectory** containing at least one markdown file mounts as its own bundle, folder name as bundle id. Dot directories are skipped; loose root files belong to no bundle; an id colliding with another mount is a startup error naming the root. The flag is repeatable and combines with `--bundle` / `--remote-bundle`.
+Every **immediate subdirectory** containing at least one markdown file (at any depth) mounts as its own bundle, folder name as bundle id. Dot directories are skipped; loose root files belong to no bundle; an id colliding with another mount is a startup error naming the root. Folders with no markdown (assets, templates, a freshly created bundle-to-be) are not mounted — the CLI notes them on stderr so a missing bundle is explained: add a `.md` file to a folder to mount it. The flag is repeatable and combines with `--bundle` / `--remote-bundle`.
 
 Beyond saving flags, `--colocated-bundles` *declares* the sibling layout (`colocatedRoot`) — colocation is never inferred from disk paths. Relative `../sibling/...` links between colocated bundles derive [cross-bundle edges](cross-bundle.md), resolve citations, are checked by `validate`, and are rewritten to canonical URLs by [`pack`](cli.md#pack).
 

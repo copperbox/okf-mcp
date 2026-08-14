@@ -786,3 +786,23 @@ describe("cli invalid configuration errors", () => {
     assert.match(stderr, /--colocated-bundles/);
   });
 });
+
+describe("cli colocated skip note", () => {
+  it("notes skipped markdown-less folders on stderr and still mounts the rest", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-skip-"));
+    try {
+      await fs.mkdir(path.join(root, "real"));
+      await fs.writeFile(path.join(root, "real", "a.md"), "---\ntype: Note\n---\nx\n");
+      await fs.mkdir(path.join(root, "newbrain"));
+      const { code, stdout, stderr } = await runCli([
+        "--colocated-bundles", root, "inspect",
+      ]);
+      assert.equal(code, 0);
+      assert.match(stderr, /skipped folders without markdown: newbrain/);
+      assert.match(stderr, /add a \.md file/);
+      assert.match(stdout, /"bundle": "real"/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
