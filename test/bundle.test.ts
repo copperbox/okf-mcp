@@ -159,6 +159,15 @@ describe("loadBundle", () => {
 });
 
 describe("discoverColocatedBundles", () => {
+  it("rejects a missing root with a message naming the flag", async () => {
+    await assert.rejects(
+      () => discoverColocatedBundles("/nonexistent/vault"),
+      (err: Error) =>
+        err.message.includes("colocated root does not exist") &&
+        err.message.includes("--colocated-bundles"),
+    );
+  });
+
   let root: string;
 
   async function write(relPath: string, content = ""): Promise<void> {

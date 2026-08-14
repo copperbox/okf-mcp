@@ -68,10 +68,37 @@ async function hasMarkdownFile(root: string): Promise<boolean> {
  * (missing, a dot directory, a nested path, or holding no markdown) is an
  * error — a silent no-op would read as "loaded" when it wasn't.
  */
+/**
+ * Assert a mount root exists and is a directory. `describe` names the mount
+ * from the operator's point of view (e.g. `bundle "brain" root`) so the error
+ * says which configuration entry is wrong, not just which path failed.
+ */
+export async function assertMountDirectory(
+  root: string,
+  describe: string,
+  hint?: string,
+): Promise<void> {
+  const suffix = hint === undefined ? "" : ` (${hint})`;
+  let stats;
+  try {
+    stats = await fs.stat(root);
+  } catch {
+    throw new Error(`${describe} does not exist: ${root}${suffix}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`${describe} is not a directory: ${root}${suffix}`);
+  }
+}
+
 export async function discoverColocatedBundles(
   root: string,
   options: { only?: string[] } = {},
 ): Promise<BundleConfig[]> {
+  await assertMountDirectory(
+    root,
+    "colocated root",
+    "check the path passed to --colocated-bundles",
+  );
   if (options.only !== undefined) {
     const configs: BundleConfig[] = [];
     // Deduped and codepoint-sorted, matching full discovery's output order.

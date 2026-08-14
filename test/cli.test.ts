@@ -753,3 +753,36 @@ describe("cli repair", () => {
     assert.equal(report.fixed, 1);
   });
 });
+
+describe("cli invalid configuration errors", () => {
+  it("fails the mount when a --bundle path does not exist, instead of serving empty", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle", "brain=/nonexistent/okf-path", "inspect",
+    ]);
+    assert.equal(code, 1);
+    assert.match(stderr, /bundle "brain": root does not exist/);
+    assert.match(stderr, /create an empty directory first/);
+  });
+
+  it("rejects a --bundle with an empty id", async () => {
+    const { code, stderr } = await runCli(["--bundle", "=somewhere", "inspect"]);
+    assert.equal(code, 2);
+    assert.match(stderr, /--bundle has an empty id/);
+    assert.match(stderr, /id=<path>/);
+  });
+
+  it("rejects a --bundle with an empty path", async () => {
+    const { code, stderr } = await runCli(["--bundle", "brain=", "inspect"]);
+    assert.equal(code, 2);
+    assert.match(stderr, /--bundle has an empty path/);
+  });
+
+  it("rejects a missing --colocated-bundles root with the flag named", async () => {
+    const { code, stderr } = await runCli([
+      "--colocated-bundles", "/nonexistent/vault", "inspect",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /colocated root does not exist/);
+    assert.match(stderr, /--colocated-bundles/);
+  });
+});

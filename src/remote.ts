@@ -93,7 +93,15 @@ async function fetchOk(
 ): Promise<Response> {
   const response = await fetchImpl(url, { headers: apiHeaders() });
   if (!response.ok) {
-    throw new Error(`GitHub request failed with status ${response.status}: ${url}`);
+    // 404s are usually a config problem, and one cause is invisible in the
+    // URL itself: a ref containing "/" parses as ref + path and 404s here.
+    const hint =
+      response.status === 404
+        ? " (check that the repository is public and the path exists; refs containing \"/\" are not supported in tree URLs)"
+        : "";
+    throw new Error(
+      `GitHub request failed with status ${response.status}: ${url}${hint}`,
+    );
   }
   return response;
 }

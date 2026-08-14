@@ -136,8 +136,17 @@ Options:
 function parseBundleFlags(values: string[]): BundleConfig[] {
   return values.map((value) => {
     const eq = value.indexOf("=");
+    if (eq === 0) {
+      throw new Error(
+        `--bundle has an empty id: "${value}" — use id=<path>, or just <path> to derive the id from the directory name`,
+      );
+    }
     if (eq > 0) {
-      return { id: value.slice(0, eq), root: value.slice(eq + 1) };
+      const root = value.slice(eq + 1);
+      if (root === "") {
+        throw new Error(`--bundle has an empty path: "${value}" — use id=<path>`);
+      }
+      return { id: value.slice(0, eq), root };
     }
     const id = value.replace(/\/+$/, "").split("/").pop() || "bundle";
     return { id, root: value };
@@ -297,7 +306,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  const configs = parseBundleFlags(values.bundle ?? []);
+  let configs: BundleConfig[];
+  try {
+    configs = parseBundleFlags(values.bundle ?? []);
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return 2;
+  }
   const [command = "mcp", ...rest] = positionals;
   let searchLimit: number | undefined;
   let searchCutoff: number | undefined;

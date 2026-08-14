@@ -1,6 +1,10 @@
 import path from "node:path";
 
-import { loadBundle, readBundleDescription } from "./bundle.js";
+import {
+  assertMountDirectory,
+  loadBundle,
+  readBundleDescription,
+} from "./bundle.js";
 import { loadColocatedRemoteBundles, loadRemoteBundle } from "./remote.js";
 import type { ColocatedRemoteMount } from "./remote.js";
 import type {
@@ -170,6 +174,8 @@ export class OkfStore {
     { bundleIds: string[]; agentsGuide?: string }
   >();
   private readonly fetchImpl: typeof fetch;
+  /** Set by load(); queries before it get a call-load-first error. */
+  private loadedOnce = false;
 
   constructor(
     private readonly configs: BundleConfig[],
@@ -197,6 +203,14 @@ export class OkfStore {
 
   async load(): Promise<void> {
     for (const config of this.configs) {
+      // A typo'd mount path must fail the mount, not serve an empty brain:
+      // loadBundle degrades an unreadable root to a problem entry (right for
+      // mid-session reload races), so the initial mount checks it up front.
+      await assertMountDirectory(
+        path.resolve(config.root),
+        `bundle "${config.id}": root`,
+        "check the configured bundle path; to start a new brain, create an empty directory first",
+      );
       if (config.lazy) {
         const description = await readBundleDescription(config.root);
         this.pending.set(config.id, {
@@ -220,6 +234,7 @@ export class OkfStore {
     for (const url of this.colocatedRoots.keys()) {
       await this.loadColocatedRoot(url);
     }
+    this.loadedOnce = true;
   }
 
   /**
@@ -472,6 +487,11 @@ export class OkfStore {
    * configured — so single-bundle setups can omit it.
    */
   async bundle(id?: string): Promise<LoadedBundle> {
+    if (!this.loadedOnce) {
+      throw new Error(
+        "OkfStore.load() has not been called — construct the store, await store.load(), then query it",
+      );
+    }
     if (id === undefined) {
       const ids = [...this.loaded.keys(), ...this.pending.keys()];
       if (ids.length !== 1) {
