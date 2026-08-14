@@ -39,7 +39,7 @@ import {
 } from "./graph.js";
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
-import { searchConcepts } from "./search.js";
+import { DEFAULT_CUTOFF_RATIO, DEFAULT_SEARCH_LIMIT, searchConcepts } from "./search.js";
 import type { ColocatedRootMount, OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
@@ -70,6 +70,17 @@ export interface ServerOptions {
    * BUNDLE_GUIDE_BUDGET characters with a pointer to its full file.
    */
   bundleGuides?: BundleGuide[];
+  /**
+   * Default hits per search_concepts page when a call passes no `limit`
+   * (`--search-limit`). Default DEFAULT_SEARCH_LIMIT.
+   */
+  searchLimit?: number;
+  /**
+   * Relevance cutoff ratio for search_concepts text queries: hits under this
+   * fraction of the top hit's score are dropped and counted in `omitted`
+   * (`--search-cutoff`); 0 disables. Default DEFAULT_CUTOFF_RATIO.
+   */
+  searchCutoff?: number;
 }
 
 /**
@@ -113,7 +124,11 @@ index.md and log.md are reserved, generated files.
 Reading: orient with graph_summary and list_types / list_tags, narrow with
 search_concepts (text plus type/tag/path/link filters), then read specific concepts
 with get_concept and explore with get_neighbors / find_path — rather than dumping
-every document. When a get_bundle_guide tool is listed, call it before exploring:
+every document. search_concepts returns one relevance-sorted page of hits (default
+${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}/page; \`total\` counts every match): when it returns fewer hits than \`total\`
+and the page did not answer the question, request the next page with \`offset\` —
+later pages are strictly less relevant. An \`omitted\` count is low-relevance
+matches suppressed entirely; refine the query or filters rather than paging. When a get_bundle_guide tool is listed, call it before exploring:
 it says what each mounted bundle is for and which to use for what work.
 
 Colocated bundles may be discovered but not loaded yet (lazy mounting):
@@ -686,7 +701,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        "Structured search over concepts: text query plus type/tag/path/link/resource filters. The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: \"any\" flags a fallback to partial matches). When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.",
+        `Structured search over concepts: text query plus type/tag/path/link/resource filters. The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()
@@ -708,14 +723,26 @@ export function createOkfServer(
         linkedTo: z.string().optional().describe("Only concepts linking to this ID"),
         linkedFrom: z.string().optional().describe("Only concepts linked from this ID"),
         orphanOnly: z.boolean().optional(),
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(200)
+          .optional()
+          .describe(
+            `Hits per page (default ${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}); page with offset when total exceeds the returned count`,
+          ),
         offset: z.number().int().nonnegative().optional(),
       },
       _meta: entryPointMeta,
     },
     async ({ bundle, ...filters }) =>
       sweepJson(
-        searchConcepts(await selectBundles(bundle), filters),
+        searchConcepts(await selectBundles(bundle), {
+          ...filters,
+          limit: filters.limit ?? options.searchLimit ?? DEFAULT_SEARCH_LIMIT,
+          cutoffRatio: options.searchCutoff ?? DEFAULT_CUTOFF_RATIO,
+        }),
         bundle === undefined,
       ),
   );
