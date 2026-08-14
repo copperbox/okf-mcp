@@ -442,9 +442,14 @@ export function exportGraphHtml(
     else hideTooltip();
   });
   window.addEventListener("mouseup", () => {
-    if (!moved) {
+    // Only clicks that began on the canvas (pressed or panFrom set) may
+    // rebuild the details panel: a mouseup elsewhere — notably on the
+    // panel's own link — must not replaceChildren() mid-click, which would
+    // detach the anchor before its click activation and swallow the
+    // navigation.
+    if (!moved && (pressed || panFrom)) {
       if (pressed) selected = selected === pressed ? null : pressed;
-      else if (panFrom) { selected = null; setFocus(null); }
+      else { selected = null; setFocus(null); }
       renderDetails();
     }
     dragging = null;
