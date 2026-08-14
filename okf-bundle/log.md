@@ -1,6 +1,14 @@
 # Update Log
 
 ## 2026-08-14
+* Record the global-declaration deployment shape and its two consequences
+* Refresh description for the global-declaration guidance
+* Note the two-level write gate now that writability is per bundle
+* Place config.ts in the module layering
+* Record the configuration.md and multi-bundle config-file doc guards
+* Record the okf.config.json layer and per-bundle writability in the CLI surface
+* Record per-bundle writability and the discovered-config trust guard
+* Record the okf.config.json layering decision
 * **Creation**: Created [The 1.0 semver surface is three things](/decisions/semver-surface.md).
 * **Creation**: Created [Documentation structure and guards](/workflows/documentation-structure.md).
 * Repoint citation: agent guidance moved from README to docs/agent-instructions.md
