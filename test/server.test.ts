@@ -1843,6 +1843,20 @@ describe("docs tool documentation", () => {
   });
 });
 
+describe("server handshake", () => {
+  it("reports the published package version, not a hardcoded one", async () => {
+    const store = new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const client = await connectClient(store);
+    const pkg = JSON.parse(
+      await fs.readFile(
+        path.join(import.meta.dirname, "..", "package.json"),
+        "utf8",
+      ),
+    ) as { version: string };
+    assert.equal(client.getServerVersion()?.version, pkg.version);
+  });
+});
+
 describe("entry-point tool _meta", () => {
   it("marks search_concepts and get_concept anthropic/alwaysLoad, and no other tool", async () => {
     const store = new OkfStore([{ id: "acme", root: FIXTURE }]);

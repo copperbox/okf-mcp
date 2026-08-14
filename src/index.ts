@@ -1,15 +1,19 @@
-/** Public API of okf-mcp: load OKF bundles, query them, serve them over MCP. */
+/**
+ * Public API of okf-mcp: load OKF bundles, query them, serve them over MCP.
+ *
+ * This barrel is the package's semver-covered library surface, curated
+ * deliberately for 1.0: embedding the server, loading bundles, querying
+ * (search/graph/validate), and the high-level authoring write path.
+ * Deeper internals (parser sections, frontmatter splicing, remote/pack/
+ * repair/visualize/watch machinery) are intentionally not exported —
+ * reach them through the MCP server or the CLI, which are the stable
+ * surfaces for that functionality.
+ */
 
 export {
   appendLogEntry,
-  assertSafeConceptPath,
   generateIndexes,
-  isCuratedIndex,
-  nearestLogDirectory,
-  readDeclaredVersion,
-  renderIndexes,
   updateConcept,
-  withPreservedFrontmatter,
   writeConcept,
 } from "./authoring.js";
 export type {
@@ -20,46 +24,16 @@ export type {
   UpdateConceptResult,
   WriteConceptOptions,
 } from "./authoring.js";
-export {
-  buildBundle,
-  colocatedSiblings,
-  declaredDescription,
-  declaredOkfVersion,
-  discoverColocatedBundles,
-  loadBundle,
-  outsideLinkDangles,
-  readBundleDescription,
-  readBundleDocument,
-  readColocatedAgentsGuide,
-  resolveOutsideLink,
-} from "./bundle.js";
-export type {
-  BuildBundleOptions,
-  BundleDocument,
-  OutsideLinkTarget,
-} from "./bundle.js";
-export { canonicalUrlPrefixes, resolveUrlToConcept } from "./canonical.js";
-export { patchFrontmatter, serializeDocument, splitFrontmatter } from "./frontmatter.js";
-export type {
-  FrontmatterPatchResult,
-  FrontmatterSplit,
-  PatchFrontmatterOptions,
-} from "./frontmatter.js";
-export { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
-export type { FileCommit } from "./git.js";
+export { buildBundle, loadBundle } from "./bundle.js";
+export type { BuildBundleOptions, BundleDocument } from "./bundle.js";
 export {
   buildGraph,
-  buildMultiGraph,
-  deriveCrossBundleEdges,
   exportGraph,
   findPath,
   getNeighbors,
   graphSummary,
   listTags,
   listTypes,
-  neighborsInGraph,
-  pathInGraph,
-  qualifyNodeId,
 } from "./graph.js";
 export type {
   ConceptGraph,
@@ -73,66 +47,20 @@ export type {
   TagCount,
   TypeCount,
 } from "./graph.js";
-export {
-  conceptIdFromPath,
-  deriveTitle,
-  extractCitations,
-  extractLinks,
-  extractSection,
-  normalizeCitationBlock,
-  normalizeCitationEntries,
-  parseConceptDocument,
-  sectionAt,
-  sectionSpan,
-  sectionSpans,
-  splitSections,
-} from "./parser.js";
-export type {
-  BodySection,
-  Citation,
-  ExtractedCitations,
-  ParsedConceptDocument,
-  SectionSpan,
-} from "./parser.js";
-export { packBundle } from "./pack.js";
-export type { PackOptions, PackResult } from "./pack.js";
-export {
-  archiveKind,
-  loadColocatedRemoteBundles,
-  loadRemoteBundle,
-  MAX_ARCHIVE_DOWNLOAD_BYTES,
-  MAX_REMOTE_BYTES,
-  MAX_REMOTE_FILES,
-  parseGitHubTreeUrl,
-} from "./remote.js";
-export type {
-  ArchiveKind,
-  ColocatedRemoteMount,
-  GitHubTreeRef,
-} from "./remote.js";
-export { FIXERS, repairBundle, selectFixers } from "./repair.js";
-export type {
-  Fixer,
-  FixerContext,
-  RepairBundleOptions,
-  RepairFinding,
-  RepairReport,
-} from "./repair.js";
+export { parseConceptDocument } from "./parser.js";
+export type { ParsedConceptDocument } from "./parser.js";
 export { searchConcepts } from "./search.js";
 export type { SearchFilters, SearchHit, SearchResult } from "./search.js";
-export { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
+export { createOkfServer } from "./server.js";
 export type { BundleGuide, ServerOptions } from "./server.js";
 export { OkfStore } from "./store.js";
-export { suggestConceptPath } from "./suggest.js";
-export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export type {
   BundleReloadStats,
-  ColocatedRemoteRootMount,
-  ColocatedRootBundle,
-  ColocatedRootMount,
   DiscoveredBundle,
   OkfStoreOptions,
 } from "./store.js";
+export { suggestConceptPath } from "./suggest.js";
+export type { PathSuggestion, SuggestPathInput } from "./suggest.js";
 export { okfUri, OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
 export type {
   BundleConfig,
@@ -148,7 +76,3 @@ export type {
 } from "./types.js";
 export { validateBundle } from "./validate.js";
 export type { ValidationReport } from "./validate.js";
-export { communityAssigner, exportGraphHtml } from "./visualize.js";
-export type { CommunityMode, ExportGraphHtmlOptions } from "./visualize.js";
-export { DEFAULT_WATCH_DEBOUNCE_MS, watchBundles } from "./watch.js";
-export type { BundleWatcher, WatchBundlesOptions } from "./watch.js";

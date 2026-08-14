@@ -10,4 +10,6 @@ Source layout: `frontmatter.ts` / `parser.ts` (document parsing, links, sections
 
 Releases are automated: bump the version in `package.json` and merge to `main` — CI tags, verifies, and publishes to npm with provenance.
 
+Semver covers three surfaces: the MCP tools, the CLI commands and flags, and the curated library exports in `src/index.ts`. Internals not re-exported by that barrel may change in any release — reach deeper functionality through the MCP server or the CLI.
+
 The repo's own knowledge base lives in `okf-bundle/` (mounted by `.mcp.json`); it records the architecture, design decisions, and gotchas in depth. Without `--watch` there is no file watcher — call `reload_bundles` after editing bundle files outside the server.

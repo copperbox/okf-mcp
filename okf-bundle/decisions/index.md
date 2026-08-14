@@ -14,3 +14,4 @@
 * [Plain markdown, no database, no embeddings](plain-markdown-no-database.md) - Why the knowledge base is just a directory of markdown with no database or embedding index.
 * [Read-only enforcement in three layers](read-only-enforcement.md) - How writability is enforced at the bundle flag, per-tool assertion, and tool-registration levels, and which commands respect it.
 * [Remote bundle sandbox](remote-bundle-sandbox.md) - The safety caps and guarantees around loading remote bundles from GitHub trees and archives.
+* [The 1.0 semver surface is three things](semver-surface.md) - What semver covers since 1.0.0 — MCP tools, CLI, and the curated index.ts barrel — and why the barrel was pruned before the bump.

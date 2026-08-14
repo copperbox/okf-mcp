@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import {
@@ -45,6 +46,11 @@ import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
+
+/** The published package version, reported to clients in the MCP handshake. */
+const PACKAGE_VERSION: string = createRequire(import.meta.url)(
+  "../package.json",
+).version;
 
 /**
  * Agent-facing guide to the mounted bundles (a colocated root's AGENTS.md),
@@ -220,7 +226,7 @@ export function createOkfServer(
   options: ServerOptions = {},
 ): McpServer {
   const server = new McpServer(
-    { name: "okf-mcp", version: "0.1.0" },
+    { name: "okf-mcp", version: PACKAGE_VERSION },
     { instructions: serverInstructions(options) },
   );
 

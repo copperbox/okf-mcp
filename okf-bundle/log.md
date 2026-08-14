@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-08-14
+* **Creation**: Created [The 1.0 semver surface is three things](/decisions/semver-surface.md).
 * **Creation**: Created [Documentation structure and guards](/workflows/documentation-structure.md).
 * Repoint citation: agent guidance moved from README to docs/agent-instructions.md
 * Link capture-policy concept from overview (was orphaned)
