@@ -80,6 +80,8 @@ This is opt-in and one-way, which is why it is a separate command rather than pa
 
 **What it will not do.** A document with malformed citation entries is reported, not migrated (run `repair --only citation-format` first so nothing is dropped). A document that already has both a `# Citations` section and a `sources` list is reported too — deciding which entries are duplicates is a judgement call, not a mechanical rewrite. And the version stamp only lands when nothing was left unfixed, so a partially-migrated bundle never advertises conformance it does not have.
 
+The report's `versionStamp` says which of those happened: `stamped` (written), `would-stamp` (a dry run with nothing blocking), `withheld` (findings were left unfixed — see `skipped`), or `current` (the bundle already declared 0.2).
+
 ## --watch
 
 `--watch` (mcp only) auto-reloads local bundles when `.md` files change, debounced so an editor save burst triggers one reload; dot directories are ignored. Remote bundles still reload only via `reload_bundles`. Where recursive `fs.watch` is unsupported, the server logs a note and continues without watching.

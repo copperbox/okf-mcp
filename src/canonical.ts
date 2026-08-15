@@ -1,9 +1,10 @@
 /**
- * Canonical-location matching for cross-bundle awareness. OKF §5 has no
+ * Canonical-location matching for cross-bundle awareness. OKF §6 has no
  * cross-bundle link syntax, but the server knows every mounted bundle's
  * canonical location (GitHub tree URL, or a configured canonicalUrl), so a
- * citation or external link whose URL points into another mounted bundle can
- * be resolved to that bundle's concept — derived, read-only, no new syntax.
+ * body link, §6.2 frontmatter path, or `resource` URL pointing into another
+ * mounted bundle can be resolved to that bundle's concept — derived,
+ * read-only, no new syntax.
  */
 
 import { conceptIdFromPath } from "./parser.js";

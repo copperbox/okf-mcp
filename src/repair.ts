@@ -685,13 +685,30 @@ export interface MigrateBundleOptions {
   actor?: string;
 }
 
+/**
+ * What happened to the bundle-root `okf_version` declaration. Four distinct
+ * outcomes, so a boolean would have to lie about at least one of them: a dry
+ * run has not stamped anything, and "not stamped" means something very
+ * different when the migration was blocked than when the bundle was already
+ * current.
+ */
+export type VersionStampOutcome =
+  /** Written to the root index.md (write runs only). */
+  | "stamped"
+  /** A `--write` run would stamp it; this was a dry run. */
+  | "would-stamp"
+  /** Withheld because findings were left unfixed — see `skipped`. */
+  | "withheld"
+  /** The bundle already declared the current version. */
+  | "current";
+
 export interface MigrateReport extends RepairReport {
   /** OKF version the bundle declared before the migration, if any. */
   from?: string;
-  /** OKF version the bundle declares after it. */
+  /** OKF version the bundle declares (or would declare) after it. */
   to: string;
-  /** True when the root index.md's declared `okf_version` was (re)stamped. */
-  versionStamped: boolean;
+  /** What happened to the root index.md's `okf_version` declaration. */
+  versionStamp: VersionStampOutcome;
 }
 
 /**
@@ -717,11 +734,17 @@ export async function migrateBundle(
   })) as MigrateReport;
   report.to = OKF_VERSION;
   if (bundle.okfVersion !== undefined) report.from = bundle.okfVersion;
-  report.versionStamped = false;
 
-  if (report.skipped > 0 || bundle.okfVersion === OKF_VERSION) return report;
+  if (bundle.okfVersion === OKF_VERSION) {
+    report.versionStamp = "current";
+    return report;
+  }
+  if (report.skipped > 0) {
+    report.versionStamp = "withheld";
+    return report;
+  }
   if (options.write !== true) {
-    report.versionStamped = true; // what a --write run would do
+    report.versionStamp = "would-stamp";
     return report;
   }
 
@@ -743,6 +766,6 @@ export async function migrateBundle(
       : `---\nokf_version: "${OKF_VERSION}"\n---\n\n${source.replace(/^\s+/, "")}`,
     "utf8",
   );
-  report.versionStamped = true;
+  report.versionStamp = "stamped";
   return report;
 }

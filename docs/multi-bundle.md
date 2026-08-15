@@ -44,11 +44,11 @@ Split knowledge by scope: standards, environment architecture, and cross-repo sy
 
 ## Referencing across bundles
 
-Cross-bundle markdown links are not part of OKF — §5 links resolve within one bundle, so a link into another bundle indexes as broken. Instead:
+Cross-bundle markdown links are not part of OKF — §6 links resolve within one bundle, so a link into another bundle indexes as broken. Instead:
 
 - Cite the other bundle's concept in a frontmatter `sources` entry (spec §5.1) using its canonical URL — or, in a v0.1 bundle, a `# Citations` entry.
-- When a real graph edge matters, add a small stub concept under `references/` that mirrors the org concept, link to the stub, and let its citation point at the source.
-- When project knowledge turns out to be org-wide, `promote_concept` moves it and leaves exactly such a citation stub behind, so inbound links keep resolving.
+- When a real graph edge matters, add a small stub concept under `references/` (spec §6.3) that mirrors the org concept, link to the stub, and let its own `sources` entry point at the original.
+- When project knowledge turns out to be org-wide, `promote_concept` moves it and leaves exactly such a stub behind, so inbound links keep resolving.
 
 The server also *derives* cross-bundle graph edges from citations and canonical URLs — see [cross-bundle awareness](cross-bundle.md).
 

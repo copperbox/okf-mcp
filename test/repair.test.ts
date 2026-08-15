@@ -433,6 +433,9 @@ describe("migrateBundle", () => {
     assert.equal(report.to, "0.2");
     assert.deepEqual(report.files, ["tables/orders.md"]);
     assert.equal(report.skipped, 0);
+    // A dry run has stamped nothing; the report says what a --write would do
+    // rather than claiming it happened.
+    assert.equal(report.versionStamp, "would-stamp");
     assert.equal(await fs.readFile(path.join(root, "tables/orders.md"), "utf8"), before);
     assert.match(
       await fs.readFile(path.join(root, "index.md"), "utf8"),
@@ -447,7 +450,7 @@ describe("migrateBundle", () => {
       actor: "human:ahormati",
     });
     assert.equal(report.applied, true);
-    assert.equal(report.versionStamped, true);
+    assert.equal(report.versionStamp, "stamped");
     assert.equal(report.skipped, 0);
 
     const migrated = await loadBundle({ id: "kb", root });
@@ -490,6 +493,7 @@ describe("migrateBundle", () => {
     // A second run finds nothing left to do.
     const again = await migrateBundle(migrated, { write: true, actor: "human:ahormati" });
     assert.deepEqual(again.files, []);
+    assert.equal(again.versionStamp, "current");
   });
 
   it("refuses to invent an actor, leaving the document and version alone", async () => {
@@ -502,7 +506,7 @@ describe("migrateBundle", () => {
     );
     // Citations still migrate (they need no actor), but the version stamp is
     // withheld: a partly-migrated bundle must not advertise conformance.
-    assert.equal(report.versionStamped, false);
+    assert.equal(report.versionStamp, "withheld");
     const migrated = await loadBundle({ id: "kb", root });
     assert.equal(migrated.okfVersion, "0.1");
     assert.equal(
