@@ -151,6 +151,58 @@ describe("watchBundles", () => {
     }
   });
 
+  it("starts watching a bundle rediscovery mounts, and stops for a removed one", async () => {
+    // A second bundle the config will add mid-session.
+    const added = await fs.mkdtemp(path.join(os.tmpdir(), "okf-watch-added-"));
+    try {
+      await writeDoc(added, "seed.md", "type: Note", "Seed.");
+      // The store re-resolves to { t, extra } on the first reload, then drops
+      // extra on the second — driving both an add and a remove.
+      let plan: { id: string; root: string }[] = [
+        { id: "t", root },
+        { id: "extra", root: added },
+      ];
+      const dynamicStore = new OkfStore([{ id: "t", root }], {
+        rediscover: async () => plan,
+      });
+      await dynamicStore.load();
+      const errors: { id: string; error: Error }[] = [];
+      watcher = watchBundles(dynamicStore, [{ id: "t", root }], {
+        debounceMs: 25,
+        onReload: (stats) => reloads.push(stats),
+        onError: (id, error) => errors.push({ id, error }),
+      });
+      assert.deepEqual(watcher.watching, ["t"]);
+
+      // Rediscovery mounts "extra"; the watcher should pick it up.
+      await dynamicStore.reloadWithRediscovery();
+      assert.deepEqual(watcher.watching.sort(), ["extra", "t"]);
+
+      // An edit inside the newly mounted bundle now triggers a reload.
+      await writeDoc(added, "fresh.md", "type: Note", "Fresh.");
+      await until(
+        async () => (await dynamicStore.getConcept("extra", "fresh")) !== undefined,
+        "the rediscovered bundle's edit to reload",
+      );
+
+      // Now the config drops "extra"; the watcher should stop watching it.
+      plan = [{ id: "t", root }];
+      await dynamicStore.reloadWithRediscovery();
+      assert.deepEqual(watcher.watching, ["t"]);
+
+      // Editing the removed bundle's directory triggers neither a reload nor an
+      // "unknown bundle" error, because its watcher is closed.
+      reloads.length = 0;
+      errors.length = 0;
+      await writeDoc(added, "ignored.md", "type: Note", "Ignored.");
+      await sleep(200);
+      assert.equal(reloads.length, 0);
+      assert.deepEqual(errors, []);
+    } finally {
+      await fs.rm(added, { recursive: true, force: true });
+    }
+  });
+
   it("reports bundles it cannot watch instead of throwing", async () => {
     const errors: { bundleId: string; error: Error }[] = [];
     watcher = watchBundles(

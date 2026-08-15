@@ -165,6 +165,6 @@ Notes:
 - Omit `--writable` for a read-only server. The flag is server-wide; per-bundle control needs a config file.
 - Flags do not disable discovery — they apply *above* every config layer, so they override rather than replace: a `--bundle` reusing a config file's id wins, and any other configured bundle still mounts. In a directory with no config files anywhere above it, flags are the only source and behave exactly as before. To guarantee that regardless of what config files exist, pass `--no-config` (or set `OKF_NO_CONFIG=1`).
 - Works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, indexes, and log.
-- `--watch` auto-reloads local bundles when `.md` files change on disk (see [CLI](cli.md)). Without it, call `reload_bundles` after editing bundle files outside the server.
+- `--watch` auto-reloads local bundles when `.md` files change on disk (see [CLI](cli.md)). Without it, call `reload_bundles` after editing bundle files outside the server. When a `reload_bundles` re-discovery mounts a new local bundle (or removes one), `--watch` follows it — it starts watching the new directory and stops watching a removed one.
 
 See also: [multi-bundle setups](multi-bundle.md), [colocated bundles](colocated-bundles.md), [teaching your agent](agent-instructions.md).

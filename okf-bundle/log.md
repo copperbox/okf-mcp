@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-08-15
+* Record that --watch tracks rediscovered mounts via onMountChange
+
 ## 2026-08-14
 * Give the OkfStore mutable-mounts note its own section
 * Clean the OkfStore Citations section back to citation entries only

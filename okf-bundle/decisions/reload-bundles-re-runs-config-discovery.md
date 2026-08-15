@@ -8,7 +8,7 @@ tags:
   - bundles
   - mcp
   - cli
-timestamp: 2026-08-14T22:23:55.178Z
+timestamp: 2026-08-15T00:57:07.480Z
 ---
 
 Config resolution used to run exactly once, at launch: the CLI resolved the
@@ -50,6 +50,11 @@ targeted-reload path and returns its delta array directly.
 - **A new id colliding with a remote or colocated-remote mount is skipped**, not
   thrown, with the reason in `notes` — one bad local declaration should not fail
   the whole reload.
+- **New mounts are permissive, not strict.** Unlike `load()`, which hard-fails a
+  typo'd root, a bundle added mid-session degrades an unreadable root to a
+  problem entry (the same permissiveness reloads use), and a colocated folder
+  whose basename collides with an existing config id is de-duplicated last-wins
+  rather than throwing `duplicateBundleIdError` the way startup would.
 - **Writability is still fixed at launch.** Authoring tools are registered once,
   gated by the server-wide writable state at startup, and MCP server
   instructions cannot change mid-session. So a rediscovered bundle that declares
@@ -57,6 +62,13 @@ targeted-reload path and returns its delta array directly.
   not writable; the reload result says to restart. Making authoring activate
   mid-session (register the tools always, enable/disable like `get_bundle_guide`
   does via `tools/list_changed`) is a deliberate follow-up, not done here.
+
+`--watch` **does** track re-discovery: the store fires an `onMountChange` event
+after a rediscovery reload, and `watchBundles` starts watching newly mounted
+directories, moves the watcher when a bundle's root changes, and closes the
+watcher for a removed bundle (so a vanished mount no longer fires reloads for an
+id the store would reject). This is the one cross-feature interaction wired up;
+the boundaries above are the ones left for later.
 
 The CLI builds the `rediscover` closure only for the long-lived `mcp` command;
 one-shot commands have no reload and pass no callback, so `reloadWithRediscovery`

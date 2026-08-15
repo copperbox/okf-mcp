@@ -119,6 +119,18 @@ export interface RediscoverReloadResult {
   stats: BundleReloadStats[];
 }
 
+/**
+ * How reloadWithRediscovery changed the local mount set, for listeners that
+ * track mounts (e.g. `--watch`, which starts/stops watching directories).
+ * `changed` carries the new config of a bundle whose declaration changed (a new
+ * root, say) so a watcher can move to the new location.
+ */
+export interface MountChange {
+  added: BundleConfig[];
+  removed: string[];
+  changed: BundleConfig[];
+}
+
 /** A mounted colocated remote root: its bundle ids and root AGENTS.md guide. */
 export interface ColocatedRemoteRootMount {
   url: string;
@@ -178,7 +190,9 @@ export interface DiscoveredBundle {
  *   siblings only; edges into a discovered bundle appear once it hydrates.
  * - reloadBundle(id) on a discovered bundle hydrates it; the no-arg
  *   reloadBundles() covers loaded bundles only.
- * - onHydrate lets `--watch` start watching a bundle when it loads.
+ * - onHydrate lets `--watch` start watching a bundle when it loads, and
+ *   onMountChange lets it follow bundles that reloadWithRediscovery mounts or
+ *   unmounts mid-session.
  */
 export class OkfStore {
   private loaded = new Map<string, LoadedBundle>();
@@ -190,6 +204,7 @@ export class OkfStore {
   /** In-flight lazy loads, so concurrent first accesses share one parse. */
   private readonly hydrating = new Map<string, Promise<LoadedBundle>>();
   private readonly hydrateListeners: ((bundle: LoadedBundle) => void)[] = [];
+  private readonly mountChangeListeners: ((change: MountChange) => void)[] = [];
   private readonly remotes = new Map<string, RemoteBundleConfig>();
   private readonly colocatedRoots = new Map<string, ColocatedRemoteRootConfig>();
   private readonly colocatedMounts = new Map<
@@ -385,6 +400,20 @@ export class OkfStore {
     };
   }
 
+  /**
+   * Register a listener called after reloadWithRediscovery changes the local
+   * mount set — a config file added, removed, or edited a bundle. Lets `--watch`
+   * start watching newly mounted directories and stop watching removed ones.
+   * Returns an unsubscribe function.
+   */
+  onMountChange(listener: (change: MountChange) => void): () => void {
+    this.mountChangeListeners.push(listener);
+    return () => {
+      const index = this.mountChangeListeners.indexOf(listener);
+      if (index >= 0) this.mountChangeListeners.splice(index, 1);
+    };
+  }
+
   /** First load of a discovered bundle; concurrent callers share one parse. */
   private hydrate(id: string): Promise<LoadedBundle> {
     const inflight = this.hydrating.get(id);
@@ -525,6 +554,8 @@ export class OkfStore {
     const unmounted: string[] = [];
     const problems: string[] = [];
     const preStats: BundleReloadStats[] = [];
+    const addedConfigs: BundleConfig[] = [];
+    const changedConfigs: BundleConfig[] = [];
     if (this.rediscoverImpl !== undefined) {
       let next: BundleConfig[] | undefined;
       try {
@@ -559,10 +590,12 @@ export class OkfStore {
               continue;
             }
             mounted.push(id);
+            addedConfigs.push(config);
           } else if (JSON.stringify(current) !== JSON.stringify(config)) {
             // A changed config for a lazily-discovered bundle must take effect:
             // drop the stale pending entry so the reload below loads it afresh.
             this.pending.delete(id);
+            changedConfigs.push(config);
           }
         }
         // Newly added configs carry no pending entry, so the reload below loads
@@ -571,6 +604,16 @@ export class OkfStore {
       }
     }
     const stats = await this.reloadBundles();
+    // Tell mount listeners (e.g. --watch) once the reload has settled, so a
+    // watcher moves to newly mounted directories and drops removed ones.
+    if (addedConfigs.length + unmounted.length + changedConfigs.length > 0) {
+      const change: MountChange = {
+        added: addedConfigs,
+        removed: unmounted,
+        changed: changedConfigs,
+      };
+      for (const listener of this.mountChangeListeners) listener(change);
+    }
     return { mounted, unmounted, problems, stats: [...preStats, ...stats] };
   }
 
