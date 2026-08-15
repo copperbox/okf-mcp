@@ -23,9 +23,15 @@ import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
 import { archiveKind } from "./remote.js";
-import { repairBundle, selectFixers } from "./repair.js";
+import {
+  FIXERS,
+  MIGRATION_FIXERS,
+  migrateBundle,
+  repairBundle,
+  selectFixers,
+} from "./repair.js";
 import { searchConcepts } from "./search.js";
-import { BUNDLE_GUIDE_BUDGET, createOkfServer } from "./server.js";
+import { BUNDLE_GUIDE_BUDGET, SERVER_ACTOR, createOkfServer } from "./server.js";
 import type { BundleGuide } from "./server.js";
 import { OkfStore } from "./store.js";
 import type { BundleConfig, RemoteBundleConfig } from "./types.js";
@@ -61,7 +67,7 @@ unions.
 Commands:
   mcp                 Start the stdio MCP server (default)
   inspect             Print a summary of each bundle's graph
-  validate            Report OKF v0.1 conformance errors and warnings
+  validate            Report OKF v0.2 conformance errors and warnings
   search <query>      Search concepts
   concept <id>        Print one concept document as JSON
   graph [format] [bundle]
@@ -84,6 +90,14 @@ Commands:
                       names fixers (--only citation-format,...) and --list
                       prints the fixer registry. Read-only remote bundles are
                       skipped
+  migrate [bundle]    Migrate a v0.1 bundle to OKF 0.2: move timestamp into
+                      generated, lift the Citations section into frontmatter
+                      sources, then declare okf_version 0.2 (dry-run; --write
+                      applies). Reading v0.1 stays supported, so this is
+                      opt-in. generated.by comes from --actor or the config
+                      "actor"; without one an interactive run asks. --write
+                      with several bundles mounted needs a named bundle or
+                      --all. --only names migration fixers; --list prints them
 
 Options:
   --bundle [id=]path      Bundle directory; repeatable. ID defaults to the dir name.
@@ -101,7 +115,7 @@ Options:
                           subfolders (comma-separated); the rest of the root
                           is ignored entirely. A name that is not a bundle
                           subdirectory of the root is an error. With the
-                          repair command, names fixers instead.
+                          repair or migrate command, names fixers instead.
   --remote-bundle id=url  Read-only bundle from a public GitHub tree URL
                           (https://github.com/<owner>/<repo>/tree/<ref>[/<path>])
                           or a .tar.gz/.tgz/.zip archive (URL or local path);
@@ -151,7 +165,11 @@ Options:
                           repeatable
   --write                 repair only: apply the safe rewrites (repair is a
                           dry run without it)
-  --list                  repair only: print the fixer registry and exit
+  --list                  repair/migrate only: print the fixer registry and exit
+  --actor id              Actor recorded as generated.by on writes (OKF §7:
+                          human:<id>, process:<id>, or <producer>/<version>).
+                          Defaults to okf-mcp/<version>; also settable as
+                          "actor" in okf.config.json
   --config <file>         Use this config file only, skipping discovery. Also
                           settable as OKF_CONFIG.
   --no-config             Ignore every ${CONFIG_FILENAME}; mount only what these
@@ -313,6 +331,40 @@ async function collectBundleGuides(roots: string[]): Promise<BundleGuide[]> {
   return guides;
 }
 
+/**
+ * Ask for the actor to credit as `generated.by` when migrating a v0.1 bundle
+ * (spec §5.2, §7). Returns null when the operator declines, so the migration
+ * stops rather than guessing.
+ *
+ * Prompting rather than refusing is deliberate: a one-off migration should not
+ * force an `actor` into a config file that then has to be remembered and
+ * removed. Non-interactive runs (CI, a piped stdin, `--yes`) get the server's
+ * own actor, which is honest — okf-mcp really is what rewrote the documents,
+ * and the §7 `<producer>/<version>` form never inflates a trust tier.
+ */
+async function promptForActor(): Promise<string | null> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return SERVER_ACTOR;
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(
+      "\nMigrating to OKF 0.2 moves each document's `timestamp` into a " +
+        "`generated: {by, at}`\nrecord (spec §5.2). `by` names who produced the " +
+        "content, and v0.1 documents do\nnot record it.\n\n" +
+        "  - Enter an actor to credit: `human:<id>`, `process:<id>`, or " +
+        "`<producer>/<version>`.\n" +
+        `  - Press enter to use this server's own actor, ${SERVER_ACTOR}.\n` +
+        "  - Type `cancel` to stop and set `actor` in okf.config.json instead " +
+        "(it applies to\n    every write, not just this migration).\n",
+    );
+    const answer = (await rl.question(`Actor [${SERVER_ACTOR}]: `)).trim();
+    if (answer.toLowerCase() === "cancel") return null;
+    return answer === "" ? SERVER_ACTOR : answer;
+  } finally {
+    rl.close();
+  }
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -336,6 +388,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "no-config": { type: "boolean" },
       "search-limit": { type: "string" },
       "search-cutoff": { type: "string" },
+      actor: { type: "string" },
+      all: { type: "boolean" },
       help: { type: "boolean" },
     },
     allowPositionals: true,
@@ -396,6 +450,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   searchLimit ??= resolved.searchLimit;
   searchCutoff ??= resolved.searchCutoff;
+  const actor = values.actor ?? resolved.actor;
   // Colocated roots from config carry their own --only/--writable/canonical
   // URL; roots named on the command line share the global --only.
   const colocatedRootSpecs = new Map<string, ResolvedColocatedRoot>();
@@ -412,12 +467,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     ?.split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
-  // For the repair command --only names fixers, not colocated subfolders.
-  const fixerOnly = command === "repair" ? only : undefined;
-  const folderOnly = command === "repair" ? undefined : only;
+  // For the repair and migrate commands --only names fixers, not subfolders.
+  const fixerCommand = command === "repair" || command === "migrate";
+  const fixerOnly = fixerCommand ? only : undefined;
+  const folderOnly = fixerCommand ? undefined : only;
   if (only !== undefined) {
     if (
-      command !== "repair" &&
+      !fixerCommand &&
       colocatedRoots.length === 0 &&
       remoteRootUrls.length === 0 &&
       remoteRootConfigs.size === 0
@@ -429,14 +485,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (only.length === 0) {
       console.error(
-        `error: --only requires at least one ${command === "repair" ? "fixer id" : "folder name"}`,
+        `error: --only requires at least one ${fixerCommand ? "fixer id" : "folder name"}`,
       );
       return 2;
     }
   }
-  if (command === "repair") {
+  if (fixerCommand) {
     try {
-      const fixers = selectFixers(fixerOnly);
+      const fixers = selectFixers(
+        fixerOnly,
+        command === "migrate" ? MIGRATION_FIXERS : FIXERS,
+      );
       if (values.list) {
         for (const fixer of fixers) {
           console.log(`${fixer.id}: ${fixer.description}`);
@@ -592,6 +651,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         bundleGuides: guides,
         ...(searchLimit !== undefined && { searchLimit }),
         ...(searchCutoff !== undefined && { searchCutoff }),
+        ...(actor !== undefined && { actor }),
       });
       await server.connect(new StdioServerTransport());
       // stdout carries the protocol; log to stderr only.
@@ -810,6 +870,64 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           write: values.write ?? false,
           only: fixerOnly,
           allBundles: store.bundles(),
+          ...(actor !== undefined && { actor }),
+        });
+        console.log(JSON.stringify(report, null, 2));
+      }
+      return 0;
+    }
+    case "migrate": {
+      // Unlike `repair`, which normalizes form and is safe to re-run on
+      // anything, migrating rewrites a bundle's vocabulary one way. Sweeping
+      // every mounted bundle by default would convert bundles the operator
+      // never named — a user-config bundle mounted in every directory, say —
+      // so a write that is not scoped to one bundle has to say `--all`.
+      if (
+        (values.write ?? false) &&
+        rest[0] === undefined &&
+        values.all !== true &&
+        store.bundles().length > 1
+      ) {
+        console.error(
+          `error: migrate --write with no bundle named would convert all ${store.bundles().length} ` +
+            "mounted bundles; name one (okf-mcp migrate <bundle> --write) or pass --all",
+        );
+        return 2;
+      }
+      const targets =
+        rest[0] !== undefined ? [await store.bundle(rest[0])] : store.bundles();
+      const writable = targets.filter((bundle) => !bundle.readOnly);
+      for (const bundle of targets) {
+        if (bundle.readOnly) {
+          console.error(`${bundle.id}: skipped (read-only remote bundle)`);
+        }
+      }
+      // `generated.by` is information a v0.1 document does not contain, so it
+      // has to come from somewhere. Prefer configuration; fall back to asking,
+      // rather than inventing an actor or refusing outright — a one-off
+      // migration should not require editing a config file you then have to
+      // remember to clean up.
+      let migrationActor: string | undefined = actor;
+      if (
+        migrationActor === undefined &&
+        writable.length > 0 &&
+        (values.write ?? false)
+      ) {
+        const answer = await promptForActor();
+        if (answer === null) {
+          console.error(
+            "migration cancelled; set `actor` in okf.config.json or pass --actor",
+          );
+          return 1;
+        }
+        migrationActor = answer;
+      }
+      for (const bundle of writable) {
+        const report = await migrateBundle(bundle, {
+          write: values.write ?? false,
+          only: fixerOnly,
+          allBundles: store.bundles(),
+          ...(migrationActor !== undefined && { actor: migrationActor }),
         });
         console.log(JSON.stringify(report, null, 2));
       }

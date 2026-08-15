@@ -7,7 +7,14 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { loadBundle } from "../src/bundle.js";
 import { canonicalUrlPrefixes } from "../src/canonical.js";
 import { extractCitations, extractLinks } from "../src/parser.js";
-import { FIXERS, repairBundle, selectFixers } from "../src/repair.js";
+import { buildGraph } from "../src/graph.js";
+import {
+  FIXERS,
+  MIGRATION_FIXERS,
+  migrateBundle,
+  repairBundle,
+  selectFixers,
+} from "../src/repair.js";
 import type { LoadedBundle } from "../src/types.js";
 import { validateBundle } from "../src/validate.js";
 
@@ -363,5 +370,224 @@ describe("repairBundle", () => {
       repairBundle(readOnly, { write: true }),
       /read-only; repair rewrites documents in place/,
     );
+  });
+});
+
+describe("migration fixer registry (OKF v0.1 → v0.2)", () => {
+  it("keeps the vocabulary-changing fixers out of the routine repair sweep", () => {
+    assert.deepEqual(MIGRATION_FIXERS.map((f) => f.id), [
+      "citations-to-sources",
+      "timestamp-to-generated",
+    ]);
+    for (const fixer of MIGRATION_FIXERS) {
+      assert.ok(
+        !FIXERS.some((f) => f.id === fixer.id),
+        `${fixer.id} must not run in the default repair sweep`,
+      );
+    }
+  });
+
+  it("points at the other command when --only names a fixer from it", () => {
+    assert.throws(
+      () => selectFixers(["timestamp-to-generated"]),
+      /belongs to the other registry/,
+    );
+    assert.throws(
+      () => selectFixers(["citation-format"], MIGRATION_FIXERS),
+      /belongs to the other registry/,
+    );
+  });
+});
+
+describe("migrateBundle", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-migrate-"));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** A v0.1 bundle: declared version, timestamps, and a Citations list. */
+  async function v01Bundle(): Promise<LoadedBundle> {
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\nokf_version: "0.1"\ndescription: Warehouse knowledge.\n---\n\n# Bundle Index\n',
+    );
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "tables/orders.md"),
+      "---\n# hand-written note\ntype: Table\ntitle: Orders\ntimestamp: '2026-05-28T22:53:05Z'\nowner: data-team\n---\n\n" +
+        "# Schema\n\nOne row per order.\n\n# Citations\n\n[1] [Revenue policy](https://wiki.acme/revenue)\n",
+    );
+    return loadBundle({ id: "kb", root });
+  }
+
+  it("dry-runs by default: reports the conversion, writes nothing", async () => {
+    const bundle = await v01Bundle();
+    const before = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+
+    const report = await migrateBundle(bundle, { actor: "human:ahormati" });
+    assert.equal(report.applied, false);
+    assert.equal(report.from, "0.1");
+    assert.equal(report.to, "0.2");
+    assert.deepEqual(report.files, ["tables/orders.md"]);
+    assert.equal(report.skipped, 0);
+    // A dry run has stamped nothing; the report says what a --write would do
+    // rather than claiming it happened.
+    assert.equal(report.versionStamp, "would-stamp");
+    assert.equal(await fs.readFile(path.join(root, "tables/orders.md"), "utf8"), before);
+    assert.match(
+      await fs.readFile(path.join(root, "index.md"), "utf8"),
+      /okf_version: "0\.1"/,
+    );
+  });
+
+  it("moves timestamp into generated and Citations into sources, then bumps the version", async () => {
+    const bundle = await v01Bundle();
+    const report = await migrateBundle(bundle, {
+      write: true,
+      actor: "human:ahormati",
+    });
+    assert.equal(report.applied, true);
+    assert.equal(report.versionStamp, "stamped");
+    assert.equal(report.skipped, 0);
+
+    const migrated = await loadBundle({ id: "kb", root });
+    assert.equal(migrated.okfVersion, "0.2");
+    const orders = migrated.concepts.get("tables/orders")!;
+    // The date carries over verbatim — it is the same fact — and `by` comes
+    // from the configured actor, which v0.1 could not record.
+    assert.deepEqual(orders.frontmatter.generated, {
+      by: "human:ahormati",
+      at: "2026-05-28T22:53:05Z",
+    });
+    assert.equal(orders.frontmatter.timestamp, undefined);
+    assert.deepEqual(orders.frontmatter.sources, [
+      {
+        id: "revenue-policy",
+        resource: "https://wiki.acme/revenue",
+        title: "Revenue policy",
+      },
+    ]);
+    assert.doesNotMatch(orders.body, /# Citations/);
+    // Untouched content survives the splice: the schema section, the unknown
+    // `owner` key, and the human's YAML comment.
+    assert.match(orders.body, /# Schema\n\nOne row per order\./);
+    assert.equal(orders.frontmatter.owner, "data-team");
+    const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
+    assert.match(source, /# hand-written note/);
+    // The root index keeps its declared description alongside the new version.
+    assert.equal(migrated.description, "Warehouse knowledge.");
+  });
+
+  it("leaves the migrated bundle clean under validate, and idempotent", async () => {
+    await migrateBundle(await v01Bundle(), { write: true, actor: "human:ahormati" });
+    const migrated = await loadBundle({ id: "kb", root });
+    const report = await validateBundle(migrated);
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(
+      report.warnings.filter((w) => /vocabulary|timestamp|Citations|footnote/.test(w.message)),
+      [],
+    );
+    // A second run finds nothing left to do.
+    const again = await migrateBundle(migrated, { write: true, actor: "human:ahormati" });
+    assert.deepEqual(again.files, []);
+    assert.equal(again.versionStamp, "current");
+  });
+
+  it("refuses to invent an actor, leaving the document and version alone", async () => {
+    const bundle = await v01Bundle();
+    const report = await migrateBundle(bundle, { write: true });
+    assert.equal(report.skipped, 1);
+    assert.match(
+      report.findings.find((f) => !f.fixable)!.message,
+      /refusing to invent one/,
+    );
+    // Citations still migrate (they need no actor), but the version stamp is
+    // withheld: a partly-migrated bundle must not advertise conformance.
+    assert.equal(report.versionStamp, "withheld");
+    const migrated = await loadBundle({ id: "kb", root });
+    assert.equal(migrated.okfVersion, "0.1");
+    assert.equal(
+      migrated.concepts.get("tables/orders")?.frontmatter.timestamp,
+      "2026-05-28T22:53:05Z",
+    );
+  });
+
+  it("drops a timestamp shadowed by an existing generated record", async () => {
+    await fs.writeFile(
+      path.join(root, "x.md"),
+      "---\ntype: Note\ntimestamp: '2020-01-01T00:00:00Z'\ngenerated: { by: human:a, at: 2026-06-20T22:53:05Z }\n---\n\nB.\n",
+    );
+    const report = await migrateBundle(await loadBundle({ id: "kb", root }), {
+      write: true,
+    });
+    assert.equal(report.skipped, 0);
+    const migrated = await loadBundle({ id: "kb", root });
+    const fm = migrated.concepts.get("x")!.frontmatter;
+    assert.equal(fm.timestamp, undefined);
+    assert.equal(fm.generated?.at, "2026-06-20T22:53:05Z");
+  });
+
+  it("reports rather than guesses when citations are malformed", async () => {
+    await fs.writeFile(
+      path.join(root, "x.md"),
+      "---\ntype: Note\n---\n\nB.\n\n# Citations\n\nsee the runbook somewhere\n",
+    );
+    const report = await migrateBundle(await loadBundle({ id: "kb", root }), {
+      write: true,
+      actor: "human:a",
+    });
+    assert.equal(report.skipped, 1);
+    assert.match(report.findings[0]!.message, /repair --only citation-format/);
+    assert.match(await fs.readFile(path.join(root, "x.md"), "utf8"), /# Citations/);
+  });
+
+  it("reports rather than merges when both vocabularies carry provenance", async () => {
+    await fs.writeFile(
+      path.join(root, "x.md"),
+      "---\ntype: Note\nsources:\n  - { id: a, resource: https://example.com/a }\n---\n\n" +
+        "B.\n\n# Citations\n\n[1] [Other](https://example.com/b)\n",
+    );
+    const report = await migrateBundle(await loadBundle({ id: "kb", root }), {
+      write: true,
+      actor: "human:a",
+    });
+    assert.equal(report.skipped, 1);
+    assert.match(report.findings[0]!.message, /merge them by hand/);
+  });
+
+  it("preserves the graph: a migrated citation to a sibling concept stays an edge", async () => {
+    await fs.mkdir(path.join(root, "tables"), { recursive: true });
+    await fs.writeFile(path.join(root, "tables/customers.md"), "---\ntype: Table\n---\n\nB.\n");
+    await fs.writeFile(
+      path.join(root, "tables/orders.md"),
+      "---\ntype: Table\n---\n\nB.\n\n# Citations\n\n[1] [Customers](customers.md)\n",
+    );
+    const edgesBefore = buildGraph(await loadBundle({ id: "kb", root })).edges.length;
+
+    await migrateBundle(await loadBundle({ id: "kb", root }), {
+      write: true,
+      actor: "human:a",
+    });
+    const migrated = await loadBundle({ id: "kb", root });
+    // The link moved out of the body, but `sources[].resource` is a §6.2
+    // path-valued field, so the derivation edge survives the migration.
+    assert.equal(buildGraph(migrated).edges.length, edgesBefore);
+    assert.equal(
+      migrated.concepts.get("tables/orders")?.frontmatterLinks[0]?.resolvedId,
+      "tables/customers",
+    );
+  });
+
+  it("logs the sweep and refuses read-only bundles", async () => {
+    await migrateBundle(await v01Bundle(), { write: true, actor: "human:a" });
+    assert.match(
+      await fs.readFile(path.join(root, "log.md"), "utf8"),
+      /Migration to OKF 0\.2 \(okf-mcp migrate\)/,
+    );
+    const readOnly = { ...(await loadBundle({ id: "kb", root })), readOnly: true };
+    await assert.rejects(migrateBundle(readOnly, { write: true }), /read-only/);
   });
 });

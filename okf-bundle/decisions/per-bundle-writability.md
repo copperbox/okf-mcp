@@ -7,7 +7,16 @@ tags:
   - bundles
   - authoring
   - security
-timestamp: 2026-08-14T19:53:58.748Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T19:53:58.748Z
+sources:
+  - id: src-config-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/config.ts
+    title: src/config.ts
+  - id: src-bundle-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/bundle.ts
+    title: src/bundle.ts
 ---
 
 `--writable` was server-wide: every local bundle was writable or none was, so
@@ -42,8 +51,3 @@ Reading a bundle from anywhere stays unrestricted: the grant is the dangerous
 half, not the mount.
 
 See also [config file layering](config-file-layering.md).
-
-# Citations
-
-[1] [src/config.ts](https://github.com/copperbox/okf-mcp/blob/main/src/config.ts)
-[2] [src/bundle.ts](https://github.com/copperbox/okf-mcp/blob/main/src/bundle.ts)

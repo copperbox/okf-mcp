@@ -6,7 +6,13 @@ description: Releasing is bumping package.json and merging to main; the tag,
 tags:
   - release
   - ci
-timestamp: 2026-08-14T01:22:07.626Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:22:07.626Z
+sources:
+  - id: github-workflows
+    resource: https://github.com/copperbox/okf-mcp/tree/main/.github/workflows
+    title: .github/workflows
 ---
 
 **Releasing = bump the version in `package.json` and merge to `main`.** Everything after is automated by a three-workflow chain in `.github/workflows/`:
@@ -22,7 +28,3 @@ timestamp: 2026-08-14T01:22:07.626Z
 - `npm pack --dry-run --json` must contain nothing outside `package.json` / `README.md` / `LICENSE` / `dist/`, and must include `dist/cli.js`.
 
 These gates are mirrored locally by `test/package.test.ts`, a release-guard test asserting `bin`, `files`, license, and that `prepack` runs the build so a publish can never ship a stale `dist` (see [testing conventions](testing-conventions.md)).
-
-# Citations
-
-[1] [.github/workflows](https://github.com/copperbox/okf-mcp/tree/main/.github/workflows)

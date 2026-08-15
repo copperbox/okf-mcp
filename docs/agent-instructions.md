@@ -22,6 +22,9 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
   updating an existing concept over creating a near-duplicate.
 - Keep concepts small and linked: one idea per concept, document-relative markdown
   links (`../tables/orders.md`) to related concepts, and reuse existing types and tags.
+- Record where the knowledge came from in `sources`, and attribute a specific claim
+  with a footnote keyed to that entry's `id`. Set `stale_after` when something has a
+  known shelf life, and `status: draft` when you are not confident yet.
 - Don't record ephemera (task status, one-off debugging detail) — the brain is for
   knowledge that should still be true next month.
 - If the brain is shared (a clone of a team repo), the server never syncs git for you.
@@ -59,6 +62,18 @@ Capture keeps the brain growing; reconciliation keeps it true.
   instead of editing.
 ```
 
-The claims that rot fastest are the ones no diff ever touches: absence claims and status flags are falsified by changes that create something new, so no file the concept cites is ever modified. Two optional refinements: adopt a `verified: <ISO date>` frontmatter key to record when a concept was last checked against reality (unknown keys round-trip untouched; `timestamp` records the last *edit*, a different thing), and escalate the "explain" branch from convention to gate once tooling can compute which concepts a diff intersects.
+The claims that rot fastest are the ones no diff ever touches: absence claims and status flags are falsified by changes that create something new, so no file the concept cites is ever modified.
+
+OKF v0.2 gives reconciliation real vocabulary for this. `verified: {by, at}` records that someone checked a concept against reality, which is a different fact from `generated`, when it was last *written* — a concept can be rewritten without re-confirmation, and re-confirmed without a rewrite. So the **verify** branch above can now leave a trace instead of being silent:
+
+```markdown
+  - **Verify** it: you checked and it still holds — record that with
+    `verified: {by: <your actor>, at: <ISO now>}` so the next agent can tell a
+    checked concept from an unexamined one. Use `human:<id>` only for a human's
+    own sign-off; `search_concepts` derives its human-reviewed tier from that
+    prefix.
+```
+
+Two things follow. `search_concepts` can now find what needs attention rather than waiting for a diff to point at it — `{stale: true}` surfaces concepts past their `stale_after`, and `{minTrust: "unverified"}` surfaces ones nothing has ever confirmed. And the "explain" branch can escalate from convention to gate once tooling computes which concepts a diff intersects.
 
 For routing guidance when several brains are mounted, see [multi-bundle setups](multi-bundle.md).

@@ -1,14 +1,26 @@
 import path from "node:path";
 
 import { splitFrontmatter } from "./frontmatter.js";
-import type { Concept, ConceptFrontmatter, ConceptLink } from "./types.js";
+import type {
+  AttesterRecord,
+  Concept,
+  ConceptFrontmatter,
+  ConceptLink,
+  ExecutorRecord,
+  FrontmatterLink,
+  LinkKind,
+  SourceEntry,
+  VerifiedRecord,
+} from "./types.js";
 
 export interface ParsedConceptDocument {
   frontmatter: ConceptFrontmatter | null;
   body: string;
   /** Links extracted from the body; `resolvedId` is filled in by the bundle loader. */
   links: ConceptLink[];
-  /** Conformance problems with this document (spec §9). */
+  /** §6.2 path-valued frontmatter fields, resolved by the same loader pass. */
+  frontmatterLinks: FrontmatterLink[];
+  /** Conformance problems with this document (spec §11). */
   problems: string[];
 }
 
@@ -41,7 +53,34 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/dg;
 
 /**
- * Extract cross-links from a concept body (spec §5). Targets beginning with
+ * Classify one raw link target relative to the document holding it (spec §6):
+ * a URI scheme is external, `#` is an anchor, a leading `/` is bundle-relative,
+ * anything else is relative to the document's directory, and a normalized path
+ * escaping the bundle root is `outside`. Shared by body links and the §6.2
+ * path-valued frontmatter fields so both classify identically.
+ */
+export function classifyTarget(
+  rawTarget: string,
+  conceptPath: string,
+): { kind: LinkKind; path?: string } {
+  if (rawTarget.startsWith("#")) return { kind: "anchor" };
+  if (SCHEME.test(rawTarget) || rawTarget.startsWith("//")) {
+    return { kind: "external" };
+  }
+  const withoutFragment = rawTarget.split("#")[0]!.split("?")[0]!;
+  if (withoutFragment === "") return { kind: "anchor" };
+  const fromDir = path.posix.dirname(conceptPath);
+  const joined = withoutFragment.startsWith("/")
+    ? withoutFragment.slice(1)
+    : path.posix.join(fromDir === "." ? "" : fromDir, withoutFragment);
+  const normalized = path.posix.normalize(joined);
+  return normalized.startsWith("..")
+    ? { kind: "outside", path: normalized }
+    : { kind: "concept", path: normalized };
+}
+
+/**
+ * Extract cross-links from a concept body (spec §6). Targets beginning with
  * `/` are bundle-relative; other non-URI targets are relative to the
  * document's directory. Broken links are tolerated, never an error. Link
  * syntax inside fenced code blocks is code, not a cross-link — the same
@@ -51,38 +90,72 @@ const MARKDOWN_LINK = /(?<!!)\[([^\]]*)\]\(<?([^)<>\s]+)>?(?:\s+"[^"]*")?\)/dg;
  */
 export function extractLinks(body: string, conceptPath: string): ConceptLink[] {
   const links: ConceptLink[] = [];
-  const fromDir = path.posix.dirname(conceptPath);
   const fenced = fencedSpans(body);
   for (const match of body.matchAll(MARKDOWN_LINK)) {
     if (fenced.some((s) => match.index! >= s.start && match.index! < s.end)) {
       continue;
     }
-    const text = match[1] ?? "";
     const rawTarget = match[2] ?? "";
     const [targetStart, targetEnd] = match.indices![2]!;
-    const base = { text, target: rawTarget, targetStart, targetEnd };
-    if (rawTarget.startsWith("#")) {
-      links.push({ ...base, kind: "anchor" });
-      continue;
-    }
-    if (SCHEME.test(rawTarget) || rawTarget.startsWith("//")) {
-      links.push({ ...base, kind: "external" });
-      continue;
-    }
-    const withoutFragment = rawTarget.split("#")[0]!.split("?")[0]!;
-    if (withoutFragment === "") {
-      links.push({ ...base, kind: "anchor" });
-      continue;
-    }
-    const joined = withoutFragment.startsWith("/")
-      ? withoutFragment.slice(1)
-      : path.posix.join(fromDir === "." ? "" : fromDir, withoutFragment);
-    const normalized = path.posix.normalize(joined);
-    if (normalized.startsWith("..")) {
-      links.push({ ...base, kind: "outside", path: normalized });
-      continue;
-    }
-    links.push({ ...base, kind: "concept", path: normalized });
+    links.push({
+      text: match[1] ?? "",
+      target: rawTarget,
+      targetStart,
+      targetEnd,
+      ...classifyTarget(rawTarget, conceptPath),
+    });
+  }
+  return links;
+}
+
+/**
+ * Whether a `sources[].resource` names something a consumer can follow rather
+ * than a scope descriptor it cannot (spec §5.1: "all queries in BigQuery
+ * project X" is a legitimate value). Whitespace is the tell — every path form
+ * §6.2 accepts is a single token — so a descriptor produces no link and, more
+ * importantly, no broken-link warning.
+ */
+function looksLikePath(value: string): boolean {
+  return value !== "" && !/\s/.test(value);
+}
+
+/**
+ * Extract the §6.2 path-valued frontmatter fields as resolvable links:
+ * `sources[].resource` (skipping scope descriptors), `computation`,
+ * `executor.resource`, and `attester.resource`. Top-level `resource` is
+ * deliberately absent — it names the asset the concept describes, not
+ * knowledge it derives from (see Concept.frontmatterLinks).
+ *
+ * Anchors are dropped: a frontmatter path pointing at nothing but a fragment
+ * is not a reference to another document.
+ */
+export function extractFrontmatterLinks(
+  frontmatter: ConceptFrontmatter,
+  conceptPath: string,
+): FrontmatterLink[] {
+  const links: FrontmatterLink[] = [];
+  const add = (field: string, value: unknown) => {
+    if (typeof value !== "string" || !looksLikePath(value)) return;
+    const classified = classifyTarget(value, conceptPath);
+    if (classified.kind === "anchor") return;
+    links.push({ field, target: value, ...classified });
+  };
+
+  const sources = frontmatter.sources;
+  if (Array.isArray(sources)) {
+    sources.forEach((entry, index) => {
+      if (entry === null || typeof entry !== "object") return;
+      add(`sources[${index}].resource`, (entry as SourceEntry).resource);
+    });
+  }
+  add("computation", frontmatter.computation);
+  const executor = frontmatter.executor;
+  if (executor !== null && typeof executor === "object") {
+    add("executor.resource", (executor as ExecutorRecord).resource);
+  }
+  const attester = frontmatter.attester;
+  if (attester !== null && typeof attester === "object") {
+    add("attester.resource", (attester as AttesterRecord).resource);
   }
   return links;
 }
@@ -273,7 +346,11 @@ export function sectionAt(body: string, offset: number): string | undefined {
   return enclosing;
 }
 
-/** One numbered entry under a concept's `# Citations` heading (spec §8). */
+/**
+ * One numbered entry under a concept's `# Citations` heading. This is the
+ * v0.1 §8 form, superseded by frontmatter `sources` in v0.2 §5.1 — still
+ * parsed, because §13.1 lets consumers keep reading it for v0.1 documents.
+ */
 export interface Citation {
   /** Citation number as written, e.g. 1 for `[1]`. */
   index: number;
@@ -295,7 +372,7 @@ export interface ExtractedCitations {
   malformed: string[];
 }
 
-// The markdown-link part of a §8 entry, shared by the entry matchers.
+// The markdown-link part of a v0.1 §8 entry, shared by the entry matchers.
 const CITATION_LINK = String.raw`\[[^\]]*\]\(<?[^)<>\s]+>?(?:\s+"[^"]*")?\)`;
 // A citation entry: `[n]` then a markdown link; trailing prose is allowed.
 const CITATION_ENTRY = new RegExp(String.raw`^\[(\d+)\][ \t]+(${CITATION_LINK})`);
@@ -307,7 +384,7 @@ const ORDERED_CITATION_ENTRY = new RegExp(
 
 /**
  * Rewrite ordered-list citation entries (`n. [text](target)`, `n) ...`) in a
- * Citations section's content to the spec §8 `[n] [text](target)` form.
+ * Citations section's content to the v0.1 §8 `[n] [text](target)` form.
  * Lines that are not list-numbered markdown links — correct entries, prose,
  * fenced code — pass through untouched.
  */
@@ -326,7 +403,7 @@ export function normalizeCitationBlock(content: string): string {
 }
 
 /**
- * Normalize the entries of every `# Citations` section in a body (spec §8)
+ * Normalize the entries of every `# Citations` section in a body (v0.1 §8)
  * via normalizeCitationBlock, leaving all other sections byte-for-byte
  * intact — ordered lists outside Citations are content, not citations.
  */
@@ -349,9 +426,10 @@ export function normalizeCitationEntries(body: string): string {
 
 /**
  * Extract the numbered citation entries under a concept's `# Citations`
- * heading (spec §8). Targets are classified like body links, with
+ * heading (v0.1 §8; v0.2 documents use frontmatter `sources` instead —
+ * see conceptSources in provenance.ts). Targets are classified like body links, with
  * bundle-relative targets resolved through `conceptExists`; unresolved
- * ones are `missing`, never an error (consistent with §9 tolerance).
+ * ones are `missing`, never an error (consistent with §11 tolerance).
  * `outsideResolves` lets callers resolve `../` targets that leave the
  * bundle root (e.g. into a mounted colocated sibling — see
  * resolveOutsideLink); a resolving one classifies as `concept`.
@@ -423,9 +501,23 @@ function normalizeTags(value: unknown): string[] | undefined {
 }
 
 /**
+ * Normalize `verified` to a list. Spec §11 makes this a consumer MUST: a
+ * single verifier may be written as a bare `{ by, at }` mapping without the
+ * list dash, and every consumer must read it as a one-element list. Done here
+ * so nothing downstream has to know the document could carry either shape.
+ * A non-mapping value is left for the validator to warn about, not coerced.
+ */
+function normalizeVerified(value: unknown): VerifiedRecord[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) return value as VerifiedRecord[];
+  if (typeof value !== "object") return undefined;
+  return [value as VerifiedRecord];
+}
+
+/**
  * Parse one concept document. Never throws: conformance problems are
  * reported alongside whatever could still be understood, because consumers
- * must keep serving valid content from partial bundles (spec §9).
+ * must keep serving valid content from partial bundles (spec §11).
  */
 export function parseConceptDocument(
   source: string,
@@ -437,11 +529,23 @@ export function parseConceptDocument(
 
   if (!split.present) {
     problems.push("missing YAML frontmatter block");
-    return { frontmatter: null, body: split.body, links, problems };
+    return {
+      frontmatter: null,
+      body: split.body,
+      links,
+      frontmatterLinks: [],
+      problems,
+    };
   }
   if (split.error || split.data === null) {
     problems.push(split.error ?? "unparseable frontmatter");
-    return { frontmatter: null, body: split.body, links, problems };
+    return {
+      frontmatter: null,
+      body: split.body,
+      links,
+      frontmatterLinks: [],
+      problems,
+    };
   }
 
   const data = split.data;
@@ -456,6 +560,14 @@ export function parseConceptDocument(
   };
   const tags = normalizeTags(data.tags);
   if (tags !== undefined) frontmatter.tags = tags;
+  const verified = normalizeVerified(data.verified);
+  if (verified !== undefined) frontmatter.verified = verified;
 
-  return { frontmatter, body: split.body, links, problems };
+  return {
+    frontmatter,
+    body: split.body,
+    links,
+    frontmatterLinks: extractFrontmatterLinks(frontmatter, relPath),
+    problems,
+  };
 }

@@ -1,5 +1,6 @@
 import { deriveTitle, sectionAt } from "./parser.js";
-import type { Concept, LoadedBundle } from "./types.js";
+import { conceptStatus, isStale, trustTier } from "./provenance.js";
+import type { ConceptStatus, Concept, LoadedBundle, TrustTier } from "./types.js";
 
 export interface SearchFilters {
   /**
@@ -26,6 +27,18 @@ export interface SearchFilters {
   /** Only concepts with no resolved links in either direction. */
   orphanOnly?: boolean;
   /**
+   * Lifecycle status to match (spec §5.4). A concept with no `status` counts
+   * as `stable`, so filtering for "stable" includes every undeclared concept.
+   */
+  status?: ConceptStatus[];
+  /** Minimum derived trust tier (spec §5.3): unverified < machine < human. */
+  minTrust?: TrustTier;
+  /**
+   * Filter on staleness (spec §5.5): true keeps only concepts past their
+   * `stale_after`, false drops them. Concepts without the key are never stale.
+   */
+  stale?: boolean;
+  /**
    * Text-query hits scoring below this fraction of the top hit's score are
    * dropped and counted in `omitted`. 0 disables the cutoff. Default
    * DEFAULT_CUTOFF_RATIO; ignored without a query.
@@ -41,6 +54,13 @@ export const DEFAULT_SEARCH_LIMIT = 10;
 
 /** Default relevance cutoff: drop hits under a quarter of the top score. */
 export const DEFAULT_CUTOFF_RATIO = 0.25;
+
+/** Trust tiers as an order, lowest to highest, for the `minTrust` filter (§5.3). */
+const TRUST_RANK: Record<TrustTier, number> = {
+  unverified: 0,
+  "machine-confirmed": 1,
+  "human-reviewed": 2,
+};
 
 /** Fields the text query is matched against, in scoring order. */
 export type MatchField = "id" | "title" | "resource" | "description" | "tags" | "body";
@@ -64,6 +84,12 @@ export interface SearchHit {
   snippet?: string;
   /** Heading of the section enclosing the first body match, when inside one. */
   section?: string;
+  /** Lifecycle status, defaulted to `stable` when undeclared (spec §5.4). */
+  status: ConceptStatus;
+  /** Trust tier derived from `verified` (spec §5.3). */
+  trust: TrustTier;
+  /** Present and true only when the concept is past its `stale_after` (§5.5). */
+  stale?: boolean;
 }
 
 export interface TagHint {
@@ -249,6 +275,11 @@ export function searchConcepts(
   const types = lower(filters.types);
   const tagsAny = lower(filters.tagsAny);
   const tagsAll = lower(filters.tagsAll);
+  const statuses =
+    filters.status !== undefined && filters.status.length > 0
+      ? new Set(filters.status)
+      : null;
+  const minTrust = filters.minTrust;
   const trimmedQuery = filters.query?.trim();
   const query = trimmedQuery === "" ? undefined : trimmedQuery;
   const terms = query?.toLowerCase().split(/\s+/) ?? [];
@@ -280,6 +311,14 @@ export function searchConcepts(
         continue;
       if (linkedFrom !== null && !linkedFrom.has(concept.id)) continue;
       if (linkedIds !== null && linkedIds.has(concept.id)) continue;
+      if (statuses !== null && !statuses.has(conceptStatus(concept.frontmatter))) continue;
+      if (
+        minTrust !== undefined &&
+        TRUST_RANK[trustTier(concept.frontmatter)] < TRUST_RANK[minTrust]
+      )
+        continue;
+      if (filters.stale !== undefined && isStale(concept.frontmatter) !== filters.stale)
+        continue;
 
       candidates.push({ bundleId: bundle.id, concept });
     }
@@ -322,6 +361,9 @@ export function searchConcepts(
             resource: concept.frontmatter.resource,
           }),
           ...(concept.frontmatter.tags !== undefined && { tags: concept.frontmatter.tags }),
+          status: conceptStatus(concept.frontmatter),
+          trust: trustTier(concept.frontmatter),
+          ...(isStale(concept.frontmatter) && { stale: true }),
           score: relevance,
           ...(matchedIn !== undefined && { matchedIn }),
           ...(snippet !== undefined && { snippet }),

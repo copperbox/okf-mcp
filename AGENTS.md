@@ -15,6 +15,9 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
   so name the topic and leave the specifics inside the body where they are discoverable.
 - Keep concepts small and linked: one idea per concept, document-relative markdown
   links (`../tables/orders.md`) to related concepts, and reuse existing types and tags.
+- This bundle is OKF v0.2: record provenance in the frontmatter `sources` list
+  (each entry needs a `resource`, plus an `id` when the body cites it via a
+  `[^id]` footnote), not in a `# Citations` section.
 - Don't record ephemera (task status, one-off debugging detail) — the brain is for
   knowledge that should still be true next month.
 - After writing durable knowledge to a shared brain, commit and push it if you're
@@ -33,7 +36,9 @@ Capture keeps the brain growing; reconciliation keeps it true.
   - **Update** it (`update_concept`) if any claim is now false. Watch
     especially for claims that invert silently: "X does not exist" when
     your change created X, and any open-status flag your work closed.
-  - **Verify** it: you checked and it still holds.
+  - **Verify** it: you checked and it still holds — record that with
+    `verified: {by: <actor>, at: <ISO now>}`, which is a different fact from
+    `generated` (when it was last written).
   - **Explain**: if you leave a concept untouched that names something you
     changed, say why when you report your work.
 - Keep it bounded: only concepts intersecting your work, never a

@@ -82,6 +82,13 @@ export interface OkfConfigFile {
   colocatedRemoteRoots?: ConfigColocatedRemoteEntry[];
   searchLimit?: number;
   searchCutoff?: number;
+  /**
+   * Actor recorded as `generated.by` on every write (OKF spec §5.2, §7).
+   * Defaults to `okf-mcp/<version>`. Set it to `human:<id>` only for a
+   * single-human deployment: §5.3 derives the human-reviewed trust tier from
+   * that prefix, so a shared server claiming it would inflate every write.
+   */
+  actor?: string;
 }
 
 /** A colocated root to mount, resolved from config files. */
@@ -102,6 +109,7 @@ export interface ResolvedConfig {
   colocatedRemoteRoots: ColocatedRemoteRootConfig[];
   searchLimit?: number;
   searchCutoff?: number;
+  actor?: string;
   /** Absolute paths of the config files that applied, lowest precedence first. */
   sources: string[];
   /** Non-fatal problems to report on stderr (unknown keys, writability downgrades). */
@@ -143,6 +151,7 @@ const KNOWN_KEYS = new Set<keyof OkfConfigFile>([
   "colocatedRemoteRoots",
   "searchLimit",
   "searchCutoff",
+  "actor",
 ]);
 
 /** Expand a leading `~` so config files can name paths without hardcoding a home directory. */
@@ -287,7 +296,7 @@ function applyLayer(
   colocatedRoots: Map<string, ResolvedColocatedRoot>,
   remotes: Map<string, RemoteBundleConfig>,
   colocatedRemoteRoots: Map<string, ColocatedRemoteRootConfig>,
-  scalars: { searchLimit?: number; searchCutoff?: number },
+  scalars: { searchLimit?: number; searchCutoff?: number; actor?: string },
   warnings: string[],
 ): void {
   const { file, dir, config, trusted } = layer;
@@ -428,6 +437,9 @@ function applyLayer(
   if (searchLimit !== undefined) scalars.searchLimit = searchLimit;
   const searchCutoff = optionalNumber(file, "searchCutoff", config.searchCutoff);
   if (searchCutoff !== undefined) scalars.searchCutoff = searchCutoff;
+  if (config.actor !== undefined) {
+    scalars.actor = requireString(file, "actor", config.actor);
+  }
 }
 
 /**
@@ -444,7 +456,7 @@ export async function loadOkfConfig(
   const colocatedRoots = new Map<string, ResolvedColocatedRoot>();
   const remotes = new Map<string, RemoteBundleConfig>();
   const colocatedRemoteRoots = new Map<string, ColocatedRemoteRootConfig>();
-  const scalars: { searchLimit?: number; searchCutoff?: number } = {};
+  const scalars: { searchLimit?: number; searchCutoff?: number; actor?: string } = {};
   const warnings: string[] = [];
   for (const layer of layers) {
     applyLayer(
@@ -464,6 +476,7 @@ export async function loadOkfConfig(
     colocatedRemoteRoots: [...colocatedRemoteRoots.values()],
     ...(scalars.searchLimit !== undefined && { searchLimit: scalars.searchLimit }),
     ...(scalars.searchCutoff !== undefined && { searchCutoff: scalars.searchCutoff }),
+    ...(scalars.actor !== undefined && { actor: scalars.actor }),
     sources: layers.map((l) => l.file),
     warnings,
   };

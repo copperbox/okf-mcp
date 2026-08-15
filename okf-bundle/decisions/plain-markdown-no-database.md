@@ -5,7 +5,9 @@ description: Why the knowledge base is just a directory of markdown with no
   database or embedding index.
 tags:
   - philosophy
-timestamp: 2026-08-14T01:19:31.305Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:19:31.305Z
 ---
 
 A knowledge base is *just a directory of markdown* (a bundle). There is no database, no embeddings, no external index; [search is pure substring scoring](../architecture/search-scoring.md) computed in memory. The only network calls are optional read-only [remote bundles](remote-bundle-sandbox.md) the operator explicitly configures.

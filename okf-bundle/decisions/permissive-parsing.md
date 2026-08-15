@@ -5,7 +5,13 @@ description: Malformed documents are reported as problems while every valid
   concept keeps serving; the parser never throws.
 tags:
   - parsing
-timestamp: 2026-08-14T01:19:41.197Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:19:41.197Z
+sources:
+  - id: src-parser-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/parser.ts
+    title: src/parser.ts
 ---
 
 Per OKF spec §9 the server is **permissive by design**: malformed documents are reported as `BundleProblem`s, but valid concepts keep serving. One broken file must never take down the bundle.
@@ -18,7 +24,3 @@ How that is implemented:
 - The `test/fixtures/malformed/` bundle exists specifically to exercise this path.
 
 Related: [read-only enforcement](read-only-enforcement.md) applies the same "report, don't guess" stance to repairs — the [repair registry](../architecture/cli.md) reports unprovable rewrites instead of applying them.
-
-# Citations
-
-[1] [src/parser.ts](https://github.com/copperbox/okf-mcp/blob/main/src/parser.ts)

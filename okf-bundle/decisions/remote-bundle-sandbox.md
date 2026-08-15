@@ -6,7 +6,16 @@ description: The safety caps and guarantees around loading remote bundles from
 tags:
   - remote
   - security
-timestamp: 2026-08-14T01:21:07.762Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:21:07.762Z
+sources:
+  - id: src-remote-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/remote.ts
+    title: src/remote.ts
+  - id: src-pack-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/pack.ts
+    title: src/pack.ts
 ---
 
 Remote bundles (`--remote-bundle`, `load_remote_bundle`, colocated-remote variants) index a published bundle without cloning: a GitHub tree API walk, or a `.tar.gz`/`.tgz`/`.zip` archive read by hand-rolled minimal tar and zip readers in `src/remote.ts`. All remote bundles are read-only (see [read-only enforcement](read-only-enforcement.md)) and live in memory only.
@@ -20,8 +29,3 @@ Sandbox guarantees:
 - Remote bundles have no directory to watch; they refresh only via `reload_bundles`.
 
 Trivia: `pack` carries a hand-rolled CRC-32 table because `zlib.crc32` requires Node 20.15+ and the package supports Node >= 20.
-
-# Citations
-
-[1] [src/remote.ts](https://github.com/copperbox/okf-mcp/blob/main/src/remote.ts)
-[2] [src/pack.ts](https://github.com/copperbox/okf-mcp/blob/main/src/pack.ts)

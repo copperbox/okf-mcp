@@ -1009,3 +1009,174 @@ describe("cli okf.config.json", () => {
     assert.match(stderr, /okf\.config\.json is not valid JSON/);
   });
 });
+
+describe("cli migrate", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-migrate-"));
+    await fs.writeFile(
+      path.join(root, "index.md"),
+      '---\nokf_version: "0.1"\n---\n\n# Bundle Index\n',
+    );
+    await fs.writeFile(
+      path.join(root, "note.md"),
+      "---\ntype: Note\ntimestamp: '2026-05-28T22:53:05Z'\n---\n\nB.\n\n" +
+        "# Citations\n\n[1] [Alpha](https://example.com/a)\n",
+    );
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("lists the migration fixers, not the repair ones", async () => {
+    const { code, stdout } = await runCli(["migrate", "--list"]);
+    assert.equal(code, 0);
+    assert.match(stdout, /citations-to-sources:/);
+    assert.match(stdout, /timestamp-to-generated:/);
+    assert.doesNotMatch(stdout, /absolute-links-to-relative:/);
+  });
+
+  it("dry-runs by default, leaving the bundle on v0.1", async () => {
+    const { code, stdout } = await runCli(["--bundle", root, "migrate"]);
+    assert.equal(code, 0);
+    const report = JSON.parse(stdout) as { applied: boolean; from: string; to: string };
+    assert.equal(report.applied, false);
+    assert.equal(report.from, "0.1");
+    assert.equal(report.to, "0.2");
+    assert.match(await fs.readFile(path.join(root, "index.md"), "utf8"), /okf_version: "0\.1"/);
+  });
+
+  it("--write --actor converts the bundle without prompting", async () => {
+    const { code } = await runCli([
+      "--bundle",
+      root,
+      "migrate",
+      "--write",
+      "--actor",
+      "human:ahormati",
+    ]);
+    assert.equal(code, 0);
+    const note = await fs.readFile(path.join(root, "note.md"), "utf8");
+    assert.match(note, /generated:\s*\n?\s*by: human:ahormati/);
+    assert.doesNotMatch(note, /^timestamp:/m);
+    assert.match(note, /sources:/);
+    assert.doesNotMatch(note, /# Citations/);
+    assert.match(await fs.readFile(path.join(root, "index.md"), "utf8"), /okf_version: "0\.2"/);
+  });
+
+  it("falls back to the server actor when stdin is not a TTY, rather than stalling", async () => {
+    // CI has no terminal to prompt at; a migration that hung there would be
+    // worse than one attributed to okf-mcp, which really did rewrite the files.
+    const { code } = await runCli(["--bundle", root, "migrate", "--write"]);
+    assert.equal(code, 0);
+    assert.match(
+      await fs.readFile(path.join(root, "note.md"), "utf8"),
+      /by: okf-mcp\/\d+\.\d+\.\d+/,
+    );
+  });
+
+  it("takes the actor from okf.config.json when no flag is given", async () => {
+    await fs.writeFile(
+      path.join(root, "okf.config.json"),
+      JSON.stringify({
+        root: true,
+        actor: "process:nightly",
+        bundles: { kb: { path: ".", writable: true } },
+      }),
+    );
+    const { code } = await runCli(["migrate", "--write", "--all"], {
+      cwd: root,
+      // Re-enabling discovery also picks up the *user* config
+      // (~/.config/okf/config.json), whose bundles are real and often
+      // writable — point OKF_CONFIG_HOME at an empty directory so this test
+      // can only ever see the sandbox config it just wrote.
+      env: { OKF_NO_CONFIG: "0", OKF_CONFIG_HOME: path.join(root, "empty-config-home") },
+    });
+    assert.equal(code, 0);
+    assert.match(await fs.readFile(path.join(root, "note.md"), "utf8"), /by: process:nightly/);
+  });
+
+  it("rejects a repair fixer id, naming the command that owns it", async () => {
+    const { code, stderr } = await runCli([
+      "--bundle",
+      root,
+      "migrate",
+      "--only",
+      "citation-format",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /belongs to the other registry/);
+  });
+});
+
+describe("cli migrate safety", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-cli-migrate-safety-"));
+    for (const id of ["a", "b"]) {
+      await fs.mkdir(path.join(root, id), { recursive: true });
+      await fs.writeFile(
+        path.join(root, id, "note.md"),
+        "---\ntype: Note\ntimestamp: '2026-05-28T22:53:05Z'\n---\n\nB.\n",
+      );
+    }
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("refuses an unscoped --write across several bundles", async () => {
+    // Migrating is one-way, so a sweep must never convert bundles the operator
+    // did not name — a user-config bundle mounted in every directory, say.
+    const { code, stderr } = await runCli([
+      "--bundle", path.join(root, "a"),
+      "--bundle", path.join(root, "b"),
+      "--writable",
+      "migrate", "--write", "--actor", "human:a",
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /name one .* or pass --all/);
+    // Neither bundle was touched.
+    for (const id of ["a", "b"]) {
+      assert.match(
+        await fs.readFile(path.join(root, id, "note.md"), "utf8"),
+        /^timestamp:/m,
+      );
+    }
+  });
+
+  it("converts just the named bundle", async () => {
+    const { code } = await runCli([
+      "--bundle", path.join(root, "a"),
+      "--bundle", path.join(root, "b"),
+      "--writable",
+      "migrate", "a", "--write", "--actor", "human:a",
+    ]);
+    assert.equal(code, 0);
+    assert.match(await fs.readFile(path.join(root, "a/note.md"), "utf8"), /generated:/);
+    assert.match(await fs.readFile(path.join(root, "b/note.md"), "utf8"), /^timestamp:/m);
+  });
+
+  it("--all opts into the sweep explicitly", async () => {
+    const { code } = await runCli([
+      "--bundle", path.join(root, "a"),
+      "--bundle", path.join(root, "b"),
+      "--writable",
+      "migrate", "--write", "--all", "--actor", "human:a",
+    ]);
+    assert.equal(code, 0);
+    for (const id of ["a", "b"]) {
+      assert.match(await fs.readFile(path.join(root, id, "note.md"), "utf8"), /generated:/);
+    }
+  });
+
+  it("still allows an unscoped dry run, which writes nothing", async () => {
+    const { code } = await runCli([
+      "--bundle", path.join(root, "a"),
+      "--bundle", path.join(root, "b"),
+      "--writable",
+      "migrate",
+    ]);
+    assert.equal(code, 0);
+  });
+});

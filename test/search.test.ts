@@ -342,3 +342,58 @@ describe("searchConcepts", () => {
     assert.doesNotMatch(snippet, loneSurrogate, "snippet contains a lone surrogate");
   });
 });
+
+describe("lifecycle and trust filters (spec §5.3–§5.5)", () => {
+  const bundle = makeBundle([
+    { id: "draft-note", type: "Note", frontmatter: { status: "draft" } },
+    { id: "plain", type: "Note" },
+    { id: "retired", type: "Note", frontmatter: { status: "deprecated" } },
+    {
+      id: "signed-off",
+      type: "Note",
+      frontmatter: { verified: [{ by: "human:ahormati", at: "2026-06-25T09:00:00Z" }] },
+    },
+    {
+      id: "nightly",
+      type: "Note",
+      frontmatter: { verified: [{ by: "process:nightly", at: "2026-06-26T02:00:00Z" }] },
+    },
+    { id: "expired", type: "Note", frontmatter: { stale_after: "2000-01-01" } },
+  ]);
+  const ids = (filters: Parameters<typeof searchConcepts>[1]) =>
+    searchConcepts([bundle], filters).hits.map((h) => h.id).sort();
+
+  it("counts an undeclared status as stable", () => {
+    assert.deepEqual(ids({ status: ["stable"] }), [
+      "expired",
+      "nightly",
+      "plain",
+      "signed-off",
+    ]);
+    assert.deepEqual(ids({ status: ["draft"] }), ["draft-note"]);
+    assert.deepEqual(ids({ status: ["draft", "deprecated"] }), ["draft-note", "retired"]);
+  });
+
+  it("filters on the derived trust tier, not a stored field", () => {
+    assert.deepEqual(ids({ minTrust: "human-reviewed" }), ["signed-off"]);
+    assert.deepEqual(ids({ minTrust: "machine-confirmed" }), ["nightly", "signed-off"]);
+    assert.equal(ids({ minTrust: "unverified" }).length, 6);
+  });
+
+  it("filters staleness in both directions, and never calls an undated concept stale", () => {
+    assert.deepEqual(ids({ stale: true }), ["expired"]);
+    assert.equal(ids({ stale: false }).includes("expired"), false);
+    assert.equal(ids({ stale: false }).length, 5);
+  });
+
+  it("reports status and trust on every hit, and stale only when it is", () => {
+    const hits = searchConcepts([bundle], {});
+    const byId = new Map(hits.hits.map((h) => [h.id, h]));
+    assert.equal(byId.get("plain")?.status, "stable");
+    assert.equal(byId.get("plain")?.trust, "unverified");
+    assert.equal(byId.get("plain")?.stale, undefined);
+    assert.equal(byId.get("signed-off")?.trust, "human-reviewed");
+    assert.equal(byId.get("retired")?.status, "deprecated");
+    assert.equal(byId.get("expired")?.stale, true);
+  });
+});

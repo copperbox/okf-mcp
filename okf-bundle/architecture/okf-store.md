@@ -6,7 +6,13 @@ description: The store as the single mutable runtime object, and why authoring
 tags:
   - bundles
   - authoring
-timestamp: 2026-08-14T22:24:47.308Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T22:24:47.308Z
+sources:
+  - id: src-store-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/store.ts
+    title: src/store.ts
 ---
 
 `OkfStore` (`src/store.ts`) is the in-memory multi-bundle index and the **single mutable runtime object**. It owns bundle configs, [lazy mounting](../decisions/lazy-bundle-mounting.md), remote mounts, reload deltas (`BundleReloadStats`), and the `onHydrate` hook (which exists so `--watch` can start watching a bundle the moment it loads). It never watches the filesystem itself — `watch.ts` drives it from outside.
@@ -28,7 +34,3 @@ no-argument `reload_bundles` picks up an `okf.config.json` added mid-session
 (see [reload_bundles re-runs config discovery](../decisions/reload-bundles-re-runs-config-discovery.md)).
 `hasWritableBundle()` exposes the config-derived half of the authoring gate for
 that path.
-
-# Citations
-
-[1] [src/store.ts](https://github.com/copperbox/okf-mcp/blob/main/src/store.ts)

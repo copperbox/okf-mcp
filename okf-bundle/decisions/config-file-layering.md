@@ -8,7 +8,16 @@ tags:
   - bundles
   - cli
   - mcp
-timestamp: 2026-08-14T22:24:05.348Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T22:24:05.348Z
+sources:
+  - id: src-config-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/config.ts
+    title: src/config.ts
+  - id: docs-configuration-md
+    resource: https://github.com/copperbox/okf-mcp/blob/main/docs/configuration.md
+    title: docs/configuration.md
 ---
 
 MCP client configs (`.mcp.json` and every harness equivalent) key servers **by
@@ -86,8 +95,3 @@ match, so "serves instead of exiting" is directly testable.
 
 See also [per-bundle writability](per-bundle-writability.md) and the
 [CLI surface](../architecture/cli.md).
-
-# Citations
-
-[1] [src/config.ts](https://github.com/copperbox/okf-mcp/blob/main/src/config.ts)
-[2] [docs/configuration.md](https://github.com/copperbox/okf-mcp/blob/main/docs/configuration.md)
