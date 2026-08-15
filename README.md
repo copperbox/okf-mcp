@@ -5,7 +5,7 @@ An MCP server that gives AI agents a standardized [Open Knowledge Format (OKF)](
 The knowledge base is just a directory of Markdown ("a bundle"). Humans browse and edit it with any editor — including opening it directly as an **Obsidian vault** — while agents work through the MCP server.
 
 - No database, no embeddings; the only network calls are for optional read-only remote bundles you explicitly configure.
-- Permissive by design (spec §9): malformed documents are reported, valid concepts keep serving.
+- Permissive by design (spec §11): malformed documents are reported, valid concepts keep serving.
 - The write path keeps `index.md` navigation and `log.md` history current, so the human view stays browsable as agents write.
 
 ## Quick start

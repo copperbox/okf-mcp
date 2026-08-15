@@ -6,7 +6,13 @@ description: Colocated bundles are discovered cheaply at startup and fully
 tags:
   - bundles
   - mcp
-timestamp: 2026-08-14T01:20:24.082Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:20:24.082Z
+sources:
+  - id: src-store-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/store.ts
+    title: src/store.ts
 ---
 
 Under the `mcp` command, colocated bundles mount **lazily** (issue #64): startup costs only the folder name plus a frontmatter-only read of the root `index.md` for `description`. The full parse happens on first `store.bundle(id)` access; concurrent first accesses share one in-flight parse.
@@ -21,7 +27,3 @@ The honesty rules that make laziness safe:
 - Discovery itself follows the same honesty rule: a subfolder with no markdown anywhere (assets, templates, a freshly created empty bundle) is not mounted, and the CLI prints a stderr note naming the skipped folders — a fresh folder that silently fails to appear as a bundle would otherwise read as a bug.
 
 Scope: only the `mcp` command is lazy — one-shot [CLI commands](../architecture/cli.md) load eagerly, and remote mounts are always eager.
-
-# Citations
-
-[1] [src/store.ts](https://github.com/copperbox/okf-mcp/blob/main/src/store.ts)

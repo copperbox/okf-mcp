@@ -320,3 +320,31 @@ describe("userConfigDir", () => {
     }
   });
 });
+
+describe("actor (OKF spec §5.2, §7)", () => {
+  const noHome = () => path.join(root, "none");
+
+  it("reads it from a config file and lets a nearer layer win", async () => {
+    await writeConfig(".", { actor: "process:nightly" });
+    await writeConfig("project", { actor: "human:ahormati" });
+    const resolved = await loadOkfConfig({
+      cwd: path.join(root, "project"),
+      configHome: noHome(),
+    });
+    assert.equal(resolved.actor, "human:ahormati");
+  });
+
+  it("is absent when nothing declares one, so the server default applies", async () => {
+    await writeConfig(".", { bundles: { brain: "okf-bundle" } });
+    const resolved = await loadOkfConfig({ cwd: root, configHome: noHome() });
+    assert.equal(resolved.actor, undefined);
+  });
+
+  it("rejects a non-string actor rather than stamping it into every write", async () => {
+    await writeConfig(".", { actor: 42 });
+    await assert.rejects(
+      loadOkfConfig({ cwd: root, configHome: noHome() }),
+      /actor must be a non-empty string/,
+    );
+  });
+});

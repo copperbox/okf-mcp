@@ -80,8 +80,8 @@ describe("packBundle", () => {
     const bundle = await loadBundle({ id: "brain", root });
     const { loaded } = await roundTrip(bundle);
 
-    // The packed bundle is self-describing (§6, §11)...
-    assert.equal(loaded.okfVersion, "0.1");
+    // The packed bundle is self-describing (§8, §12)...
+    assert.equal(loaded.okfVersion, "0.2");
     assert.match(loaded.sources!.get("tables/index.md")!, /\[Orders\]\(orders\.md\)/);
     // ...but pack never wrote an index into the source directory.
     await assert.rejects(fs.access(path.join(root, "index.md")));

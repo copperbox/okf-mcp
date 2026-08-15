@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-08-15
+* Migration to OKF 0.2 (okf-mcp migrate): citations-to-sources (28 files), timestamp-to-generated (29 files)
 * Record that --watch tracks rediscovered mounts via onMountChange
 
 ## 2026-08-14

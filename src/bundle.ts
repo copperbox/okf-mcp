@@ -8,6 +8,8 @@ import type {
   BundleConfig,
   BundleProblem,
   Concept,
+  ConceptLink,
+  FrontmatterLink,
   LoadedBundle,
   ReservedFile,
 } from "./types.js";
@@ -157,7 +159,7 @@ function isReserved(relPath: string): ReservedFile | null {
   return { path: relPath, kind: base === "index.md" ? "index" : "log" };
 }
 
-/** The okf_version a bundle-root index.md declares in frontmatter (spec §11). */
+/** The okf_version a bundle-root index.md declares in frontmatter (spec §12). */
 export function declaredOkfVersion(source: string): string | undefined {
   const version = splitFrontmatter(source).data?.okf_version;
   return typeof version === "string" ? version : undefined;
@@ -208,7 +210,7 @@ export interface BuildBundleOptions {
 
 /**
  * Index a set of in-memory documents into a bundle (the parse/resolve
- * pipeline shared by local and remote loading). Permissive per spec §9:
+ * pipeline shared by local and remote loading). Permissive per spec §11:
  * malformed documents are reported as problems and skipped, valid
  * concepts keep working.
  */
@@ -229,7 +231,7 @@ export function buildBundle(
     const reservedFile = isReserved(relPath);
     if (reservedFile) {
       reserved.push(reservedFile);
-      // Only the bundle-root index.md may declare okf_version (spec §11)
+      // Only the bundle-root index.md may declare okf_version (spec §12)
       // and the bundle description.
       if (reservedFile.kind === "index" && !relPath.includes("/")) {
         okfVersion = declaredOkfVersion(document.source);
@@ -249,6 +251,7 @@ export function buildBundle(
       frontmatter: parsed.frontmatter,
       body: parsed.body,
       links: parsed.links,
+      frontmatterLinks: parsed.frontmatterLinks,
     });
   }
 
@@ -342,9 +345,14 @@ export async function readBundleDocument(
 /**
  * Resolve concept-kind links against the loaded concept set. A `.md`
  * suffix is optional in link targets (Obsidian-style extensionless links
- * resolve too). Unresolved links are warnings, never errors (spec §5.3):
+ * resolve too). Unresolved links are warnings, never errors (spec §6.1):
  * each one that plausibly targets a concept is marked `broken` and
  * reported as a missing-concept warning.
+ *
+ * The §6.2 path-valued frontmatter fields resolve in the same pass and by the
+ * same rules, so a `sources[].resource` naming a concept becomes a real graph
+ * edge and one naming nothing becomes a broken-link warning — the parity that
+ * kept v0.2 provenance from being invisible to the graph.
  */
 function resolveLinks(
   concepts: Map<string, Concept>,
@@ -354,17 +362,22 @@ function resolveLinks(
   const directories = knownDirectories(concepts, reserved);
   const reservedPaths = new Set(reserved.map((file) => file.path));
   for (const concept of concepts.values()) {
-    for (const link of concept.links) {
+    const targets: Array<ConceptLink | FrontmatterLink> = [
+      ...concept.links,
+      ...concept.frontmatterLinks,
+    ];
+    for (const link of targets) {
       if (link.kind !== "concept" || link.path === undefined) continue;
       const id = conceptIdFromPath(link.path);
       if (concepts.has(id)) {
         link.resolvedId = id;
       } else if (targetsMissingConcept(link.path, directories, reservedPaths)) {
         link.broken = true;
+        const where = "field" in link ? ` (frontmatter \`${link.field}\`)` : "";
         problems.push({
           severity: "warning",
           path: concept.path,
-          message: `link to missing concept: ${link.target}`,
+          message: `link to missing concept: ${link.target}${where}`,
         });
       }
     }

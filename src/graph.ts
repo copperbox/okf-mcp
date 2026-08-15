@@ -1,6 +1,11 @@
 import { colocatedSiblings, resolveOutsideLink } from "./bundle.js";
 import { resolveUrlToConcept } from "./canonical.js";
-import type { Concept, LoadedBundle } from "./types.js";
+import type {
+  Concept,
+  ConceptLink,
+  FrontmatterLink,
+  LoadedBundle,
+} from "./types.js";
 
 export interface GraphNode {
   id: string;
@@ -20,9 +25,9 @@ export interface GraphEdge {
   /** Link text, when it carries meaning beyond the target title. */
   label?: string;
   /**
-   * "cross-bundle" marks a derived edge: a citation/external-link/resource
-   * URL matching another mounted bundle's canonical location, or a relative
-   * `../sibling/...` link between bundles sharing a declared colocated root.
+   * "cross-bundle" marks a derived edge: a body-link, §6.2 frontmatter-path,
+   * or `resource` URL matching another mounted bundle's canonical location, or
+   * a relative `../sibling/...` link between bundles sharing a colocated root.
    * Absent on ordinary in-bundle link edges.
    */
   kind?: "cross-bundle";
@@ -31,7 +36,7 @@ export interface GraphEdge {
 export interface ConceptGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  /** Broken internal links and similar soft issues (spec §5.3). */
+  /** Broken internal links and similar soft issues (spec §6.1). */
   warnings: string[];
 }
 
@@ -64,8 +69,21 @@ function nodeFromConcept(concept: Concept): GraphNode {
 }
 
 /**
+ * Every link a concept asserts: body links plus the §6.2 path-valued
+ * frontmatter fields. Both are untyped edges (spec §6.1) — a `sources[]` entry
+ * naming another concept *is* the derivation edge, which §5.1 relies on when
+ * it says lineage is expressed through links rather than a dedicated field.
+ *
+ * Parallel edges are kept, matching how two body links to the same concept
+ * already count twice: an edge here is one link instance, not one relationship.
+ */
+function conceptEdgeLinks(concept: Concept): Array<ConceptLink | FrontmatterLink> {
+  return [...concept.links, ...concept.frontmatterLinks];
+}
+
+/**
  * Build the directed link graph of a bundle. Every markdown link between
- * concepts is one untyped edge (spec §5.3).
+ * concepts is one untyped edge (spec §6.1).
  */
 export function buildGraph(
   bundle: LoadedBundle,
@@ -78,7 +96,7 @@ export function buildGraph(
 
   for (const concept of bundle.concepts.values()) {
     nodes.push(nodeFromConcept(concept));
-    for (const link of concept.links) {
+    for (const link of conceptEdgeLinks(concept)) {
       if (link.resolvedId !== undefined) {
         edges.push({ from: concept.id, to: link.resolvedId });
       } else if (link.broken) {
@@ -109,13 +127,19 @@ interface DerivedCrossEdges {
 
 /**
  * Derive cross-bundle edges, read-only and never new document semantics (OKF
- * §5 has no cross-bundle link syntax):
- * - a citation target, external link, or frontmatter `resource` URL that
- *   points under the canonical location of a *different* mounted bundle;
- * - a relative `../sibling/...` body link between bundles declaring the same
- *   colocated root (the layout Obsidian resolves natively when the root is
- *   opened as one vault).
+ * §6 has no cross-bundle link syntax):
+ * - a body link, a §6.2 path-valued frontmatter field, or a frontmatter
+ *   `resource` URL that points under the canonical location of a *different*
+ *   mounted bundle;
+ * - a relative `../sibling/...` link — in the body or in a §6.2 frontmatter
+ *   field — between bundles declaring the same colocated root (the layout
+ *   Obsidian resolves natively when the root is opened as one vault).
  * Each becomes a `kind: "cross-bundle"` edge to the resolved concept.
+ *
+ * Top-level `resource` contributes URLs but never an in-bundle edge: it names
+ * the asset a concept *describes*, not knowledge it derives from. The §6.2
+ * fields are the opposite — §5.1 says the derivation edge for a `sources`
+ * entry "already exists in the bundle graph" — so they resolve both ways.
  */
 function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
   const targets = bundles.filter((b) => (b.canonicalUrls?.length ?? 0) > 0);
@@ -135,7 +159,8 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
     if (candidates.length === 0 && siblings.length === 0) continue;
     for (const concept of source.concepts.values()) {
       const from = qualifyNodeId(source.id, concept.id);
-      const urls = concept.links
+      const links = conceptEdgeLinks(concept);
+      const urls = links
         .filter((link) => link.kind === "external")
         .map((link) => link.target);
       if (typeof concept.frontmatter.resource === "string") {
@@ -150,7 +175,7 @@ function deriveCrossBundle(bundles: LoadedBundle[]): DerivedCrossEdges {
           derive(from, url, target.id, id);
         }
       }
-      for (const link of concept.links) {
+      for (const link of links) {
         if (link.kind !== "outside" || link.path === undefined) continue;
         const resolved = resolveOutsideLink(link.path, siblings);
         if (resolved === undefined) continue;
@@ -186,7 +211,7 @@ export function buildMultiGraph(
     for (const concept of bundle.concepts.values()) {
       const from = qualifyNodeId(bundle.id, concept.id);
       nodes.push({ ...nodeFromConcept(concept), id: from });
-      for (const link of concept.links) {
+      for (const link of conceptEdgeLinks(concept)) {
         if (link.resolvedId !== undefined) {
           edges.push({ from, to: qualifyNodeId(bundle.id, link.resolvedId) });
         } else if (link.broken) {
@@ -212,7 +237,7 @@ export function buildMultiGraph(
 
 export interface GraphSummary {
   bundle: string;
-  /** OKF version the bundle-root index.md declares, when present (spec §11). */
+  /** OKF version the bundle-root index.md declares, when present (spec §12). */
   okfVersion?: string;
   concepts: number;
   edges: number;

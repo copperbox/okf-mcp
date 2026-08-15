@@ -23,8 +23,15 @@ import {
 import { readBundleDocument } from "./bundle.js";
 import { citationPrefix } from "./canonical.js";
 import { patchFrontmatter, splitFrontmatter } from "./frontmatter.js";
-import { extractLinks, normalizeCitationEntries, sectionSpans } from "./parser.js";
+import {
+  extractCitations,
+  extractLinks,
+  normalizeCitationEntries,
+  sectionSpans,
+} from "./parser.js";
+import { uniqueSourceId } from "./provenance.js";
 import type { LoadedBundle } from "./types.js";
+import { OKF_VERSION } from "./types.js";
 
 /** What a fixer sees beyond the raw source of the document under repair. */
 export interface FixerContext {
@@ -33,6 +40,11 @@ export interface FixerContext {
   bundle: LoadedBundle;
   /** Every mounted bundle, for cross-bundle lookups (okf:// targets). */
   allBundles: LoadedBundle[];
+  /**
+   * Actor to credit for provenance a fixer creates (spec §7). Undefined when
+   * none is configured — a fixer that needs one reports instead of inventing.
+   */
+  actor?: string;
 }
 
 /** One defect found by one fixer in one document. */
@@ -216,7 +228,8 @@ const okfUriToCanonical: Fixer = {
         repaired.slice(0, edit.start) + edit.replacement + repaired.slice(edit.end);
     }
 
-    const resource = splitFrontmatter(repaired).data?.resource;
+    const declared = splitFrontmatter(repaired).data;
+    const resource = declared?.resource;
     if (typeof resource === "string" && resource.startsWith("okf://")) {
       const resolved = canonicalForOkfUri(resource, allBundles);
       if ("reason" in resolved) {
@@ -233,6 +246,36 @@ const okfUriToCanonical: Fixer = {
           message: `resource ${resource} → ${resolved.url}`,
           fixable: true,
         });
+      }
+    }
+
+    // `sources[].resource` is a §6.2 path-valued field like the body links
+    // above, and promote_concept's stub now writes provenance there — so an
+    // okf:// URI can land in frontmatter too, and must be rewritten the same
+    // way or the cross-bundle edge only resolves inside this server.
+    const sources = declared?.sources;
+    if (Array.isArray(sources)) {
+      const rewritten = sources.map((entry) => {
+        if (entry === null || typeof entry !== "object") return entry;
+        const record = entry as Record<string, unknown>;
+        const target = record.resource;
+        if (typeof target !== "string" || !target.startsWith("okf://")) return entry;
+        const resolved = canonicalForOkfUri(target, allBundles);
+        if ("reason" in resolved) {
+          findings.push({
+            message: `sources entry ${target} left as-is: ${resolved.reason}`,
+            fixable: false,
+          });
+          return entry;
+        }
+        findings.push({
+          message: `sources entry ${target} → ${resolved.url}`,
+          fixable: true,
+        });
+        return { ...record, resource: resolved.url };
+      });
+      if (rewritten.some((entry, i) => entry !== sources[i])) {
+        repaired = patchFrontmatter(repaired, { sources: rewritten }).source;
       }
     }
     return { source: repaired, findings };
@@ -297,6 +340,169 @@ const absoluteLinksToRelative: Fixer = {
   },
 };
 
+/**
+ * Move a v0.1 `timestamp` to the v0.2 `generated: { by, at }` record
+ * (spec §13.1). The date carries over verbatim — it is the same fact — but
+ * `by` is information the v0.1 document simply does not contain, so it comes
+ * from the configured actor. Without one the finding is reported and the
+ * document is left alone: a fabricated `by` is worse than an unmigrated
+ * document, because §5.3 derives trust from exactly that field.
+ *
+ * A document carrying both keys is the half-migrated state the validator
+ * warns about; there `generated` already wins for every consumer, so the fix
+ * is to drop the shadowed `timestamp` rather than reconcile two values.
+ */
+const timestampToGenerated: Fixer = {
+  id: "timestamp-to-generated",
+  description:
+    "move a v0.1 `timestamp` into the v0.2 `generated: {by, at}` record, " +
+    "taking `by` from the configured actor (spec §5.2, §13.1)",
+  repair(source, { actor }) {
+    const declared = splitFrontmatter(source).data;
+    const timestamp = declared?.timestamp;
+    if (timestamp === undefined || timestamp === null) {
+      return { source, findings: [] };
+    }
+    const at = timestamp instanceof Date ? timestamp.toISOString() : timestamp;
+    if (declared?.generated !== undefined) {
+      return {
+        source: patchFrontmatter(source, { timestamp: null }).source,
+        findings: [
+          {
+            message: `removed \`timestamp: ${excerpt(String(at))}\` shadowed by an existing \`generated\``,
+            fixable: true,
+          },
+        ],
+      };
+    }
+    if (actor === undefined) {
+      return {
+        source,
+        findings: [
+          {
+            message:
+              "`timestamp` needs an actor to become `generated.by` (spec §5.2) — " +
+              "set `actor` in okf.config.json or pass --actor; refusing to invent one",
+            fixable: false,
+          },
+        ],
+      };
+    }
+    // Delete then set, so `generated` lands in `timestamp`'s slot rather than
+    // at the end of the mapping.
+    const cleared = patchFrontmatter(source, { timestamp: null }).source;
+    return {
+      source: patchFrontmatter(cleared, { generated: { by: actor, at } }, {
+        insertAfter: { generated: IDENTITY_KEYS },
+      }).source,
+      findings: [
+        {
+          message: `timestamp ${excerpt(String(at))} → generated: { by: ${actor}, at: ${excerpt(String(at))} }`,
+          fixable: true,
+        },
+      ],
+    };
+  },
+};
+
+/**
+ * Lift a v0.1 `# Citations` list into the v0.2 frontmatter `sources` list
+ * (spec §13.1), then drop the section. Each entry keeps its target as
+ * `resource` and its link text as `title`, and gains a slugged `id` — keyed
+ * rather than positional because §5.1 is explicit that agents reorder these
+ * lists and a positional index misattributes silently when they do.
+ *
+ * Nothing in the body needs rewriting: v0.1 has no per-claim footnotes, so
+ * there is no attribution to re-point. The links themselves survive as graph
+ * edges because `sources[].resource` is a §6.2 path-valued field the loader
+ * resolves (see extractFrontmatterLinks) — moving them out of the body does
+ * not disconnect the concept.
+ *
+ * A document that already declares `sources` is reported, never merged: two
+ * provenance lists are a judgement call about which entries are duplicates,
+ * and that is not a mechanical rewrite.
+ */
+const citationsToSources: Fixer = {
+  id: "citations-to-sources",
+  description:
+    "lift a v0.1 `# Citations` list into the v0.2 frontmatter `sources` list " +
+    "with slugged entry ids, and drop the section (spec §5.1, §13.1)",
+  repair(source, { path: docPath }) {
+    const bodyStart = bodyStartOffset(source);
+    const body = source.slice(bodyStart);
+    const spans = sectionSpans(body).filter(
+      (s) => s.heading.toLowerCase() === "citations",
+    );
+    if (spans.length === 0) return { source, findings: [] };
+    const { citations, malformed } = extractCitations(body, docPath, () => false);
+    if (citations.length === 0 && malformed.length === 0) {
+      // An empty section: dropping it loses nothing, but there is also nothing
+      // to migrate, so leave it to duplicate-citation-headings.
+      return { source, findings: [] };
+    }
+    if (malformed.length > 0) {
+      return {
+        source,
+        findings: [
+          {
+            message:
+              `${malformed.length} citation entr${malformed.length === 1 ? "y is" : "ies are"} ` +
+              "malformed; run `repair --only citation-format` first so nothing is dropped",
+            fixable: false,
+          },
+        ],
+      };
+    }
+    if (splitFrontmatter(source).data?.sources !== undefined) {
+      return {
+        source,
+        findings: [
+          {
+            message:
+              "document has both a `# Citations` section and frontmatter `sources`; " +
+              "merge them by hand — deciding which entries are duplicates is not mechanical",
+            fixable: false,
+          },
+        ],
+      };
+    }
+
+    const used = new Set<string>();
+    const sources = citations.map((citation) => ({
+      id: uniqueSourceId(citation.text || citation.target, used),
+      resource: citation.target,
+      ...(citation.text !== "" && { title: citation.text }),
+    }));
+    let repaired = patchFrontmatter(source, { sources }, {
+      insertAfter: { sources: IDENTITY_KEYS },
+    }).source;
+    // Re-derive the spans against the patched document: the frontmatter grew,
+    // so every body offset moved.
+    const newBodyStart = bodyStartOffset(repaired);
+    const newBody = repaired.slice(newBodyStart);
+    for (const span of sectionSpans(newBody)
+      .filter((s) => s.heading.toLowerCase() === "citations")
+      .sort((a, b) => b.start - a.start)) {
+      repaired =
+        repaired.slice(0, newBodyStart + span.start).trimEnd() +
+        "\n" +
+        repaired.slice(newBodyStart + span.end);
+    }
+    return {
+      source: repaired,
+      findings: [
+        {
+          message: `${citations.length} citation${citations.length === 1 ? "" : "s"} → frontmatter \`sources\` (ids: ${sources.map((s) => s.id).join(", ")})`,
+          fixable: true,
+        },
+      ],
+    };
+  },
+};
+
+/** The §4.1 identity keys a newly created §5 family slots in after. */
+const IDENTITY_KEYS = ["type", "title", "description", "resource", "tags"] as const;
+
 /** The fixer registry, in the order fixers run over each document. */
 export const FIXERS: readonly Fixer[] = [
   citationFormat,
@@ -305,18 +511,46 @@ export const FIXERS: readonly Fixer[] = [
   absoluteLinksToRelative,
 ];
 
-/** Resolve `--only` fixer ids against the registry, in registry order. */
-export function selectFixers(only?: string[]): Fixer[] {
-  if (only === undefined) return [...FIXERS];
+/**
+ * Fixers that migrate a bundle from OKF v0.1 to v0.2. Deliberately outside
+ * FIXERS: every fixer there normalizes *form* and is safe to run on any
+ * bundle at any time, while these rewrite a document's vocabulary — a
+ * one-way, whole-bundle decision that belongs to `okf-mcp migrate`, not to a
+ * routine hygiene sweep. Reading v0.1 stays supported indefinitely (§13.1),
+ * so nothing forces this on anyone.
+ */
+export const MIGRATION_FIXERS: readonly Fixer[] = [
+  citationsToSources,
+  timestampToGenerated,
+];
+
+/** Every fixer id `--only` can name, across both registries. */
+const ALL_FIXERS: readonly Fixer[] = [...FIXERS, ...MIGRATION_FIXERS];
+
+/**
+ * Resolve `--only` fixer ids against a registry, in registry order.
+ * `registry` defaults to the routine sweep; the migrate command passes the
+ * migration set. An id from the other registry is named in the error rather
+ * than reported as unknown — "that fixer exists, but not in this command".
+ */
+export function selectFixers(
+  only?: string[],
+  registry: readonly Fixer[] = FIXERS,
+): Fixer[] {
+  if (only === undefined) return [...registry];
   const wanted = new Set(only);
   for (const id of wanted) {
-    if (!FIXERS.some((f) => f.id === id)) {
-      throw new Error(
-        `unknown fixer: ${id} (available: ${FIXERS.map((f) => f.id).join(", ")})`,
-      );
-    }
+    if (registry.some((f) => f.id === id)) continue;
+    const elsewhere = ALL_FIXERS.some((f) => f.id === id);
+    throw new Error(
+      elsewhere
+        ? `fixer ${id} belongs to the other registry; ` +
+          `\`repair\` runs ${FIXERS.map((f) => f.id).join(", ")} and ` +
+          `\`migrate\` runs ${MIGRATION_FIXERS.map((f) => f.id).join(", ")}`
+        : `unknown fixer: ${id} (available: ${registry.map((f) => f.id).join(", ")})`,
+    );
   }
-  return FIXERS.filter((f) => wanted.has(f.id));
+  return registry.filter((f) => wanted.has(f.id));
 }
 
 export interface RepairBundleOptions {
@@ -326,6 +560,12 @@ export interface RepairBundleOptions {
   only?: string[];
   /** Every mounted bundle, for cross-bundle fixers. Defaults to just `bundle`. */
   allBundles?: LoadedBundle[];
+  /** Fixer registry to run. Defaults to FIXERS; migrateBundle passes its own. */
+  registry?: readonly Fixer[];
+  /** Actor for fixers that create provenance (spec §7). */
+  actor?: string;
+  /** Log line describing the sweep; defaults to the repair wording. */
+  logLabel?: string;
 }
 
 export interface RepairReport {
@@ -365,7 +605,7 @@ export async function repairBundle(
     );
   }
   const write = options.write ?? false;
-  const fixers = selectFixers(options.only);
+  const fixers = selectFixers(options.only, options.registry ?? FIXERS);
   const allBundles = options.allBundles ?? [bundle];
   const findings: RepairFinding[] = [];
   const files: string[] = [];
@@ -377,7 +617,12 @@ export async function repairBundle(
     // Fresh from disk, not the loaded snapshot, so edits splice what is
     // actually there even if the file changed since the bundle loaded.
     const original = await readBundleDocument(bundle, concept.path);
-    const context = { path: concept.path, bundle, allBundles };
+    const context = {
+      path: concept.path,
+      bundle,
+      allBundles,
+      ...(options.actor !== undefined && { actor: options.actor }),
+    };
     let source = original;
     for (const fixer of fixers) {
       const result = fixer.repair(source, context);
@@ -418,10 +663,86 @@ export async function repairBundle(
     .join(", ");
   const { path: logPath } = await appendLogEntry(
     bundle.root,
-    `Repair sweep (okf-mcp repair): ${summary}`,
+    `${options.logLabel ?? "Repair sweep (okf-mcp repair)"}: ${summary}`,
   );
   report.log = logPath;
   const { written } = await generateIndexes(bundle);
   report.indexes = written.length;
+  return report;
+}
+
+export interface MigrateBundleOptions {
+  /** Apply the migration. Defaults to a dry run: report findings, write nothing. */
+  write?: boolean;
+  /** Run only the named migration fixers; an unknown id is an error. */
+  only?: string[];
+  /** Every mounted bundle, for cross-bundle fixers. Defaults to just `bundle`. */
+  allBundles?: LoadedBundle[];
+  /**
+   * Actor to credit as `generated.by` for provenance the migration creates
+   * (spec §7). Without one, timestamp-to-generated reports instead of guessing.
+   */
+  actor?: string;
+}
+
+export interface MigrateReport extends RepairReport {
+  /** OKF version the bundle declared before the migration, if any. */
+  from?: string;
+  /** OKF version the bundle declares after it. */
+  to: string;
+  /** True when the root index.md's declared `okf_version` was (re)stamped. */
+  versionStamped: boolean;
+}
+
+/**
+ * Migrate a bundle from OKF v0.1 to v0.2: run the migration fixers over every
+ * concept, then declare the new version on the bundle-root index.md.
+ *
+ * The version stamp goes **last** and only when nothing was left unfixed, so a
+ * partially-migrated bundle never advertises conformance it does not have —
+ * `okf_version: "0.2"` is what tells this server's own write path to start
+ * writing v0.2 vocabulary, and flipping it over half-converted documents is
+ * how a bundle ends up permanently mixed.
+ *
+ * Dry-run by default, like repair.
+ */
+export async function migrateBundle(
+  bundle: LoadedBundle,
+  options: MigrateBundleOptions = {},
+): Promise<MigrateReport> {
+  const report = (await repairBundle(bundle, {
+    ...options,
+    registry: MIGRATION_FIXERS,
+    logLabel: `Migration to OKF ${OKF_VERSION} (okf-mcp migrate)`,
+  })) as MigrateReport;
+  report.to = OKF_VERSION;
+  if (bundle.okfVersion !== undefined) report.from = bundle.okfVersion;
+  report.versionStamped = false;
+
+  if (report.skipped > 0 || bundle.okfVersion === OKF_VERSION) return report;
+  if (options.write !== true) {
+    report.versionStamped = true; // what a --write run would do
+    return report;
+  }
+
+  const indexPath = path.join(bundle.root, "index.md");
+  let existing: string | undefined;
+  try {
+    existing = await fs.readFile(indexPath, "utf8");
+  } catch {
+    existing = undefined;
+  }
+  // generateIndexes (run by repairBundle above) has already created a root
+  // index when there was none, and stamps the vocabulary the bundle was
+  // written in — which was still 0.1 at that point. Restamp it explicitly.
+  const source = existing ?? `---\nokf_version: "${OKF_VERSION}"\n---\n\n# Bundle Index\n`;
+  await fs.writeFile(
+    indexPath,
+    splitFrontmatter(source).present
+      ? patchFrontmatter(source, { okf_version: OKF_VERSION }).source
+      : `---\nokf_version: "${OKF_VERSION}"\n---\n\n${source.replace(/^\s+/, "")}`,
+    "utf8",
+  );
+  report.versionStamped = true;
   return report;
 }

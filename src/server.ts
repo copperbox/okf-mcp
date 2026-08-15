@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import path from "node:path";
 
 import {
@@ -10,6 +9,7 @@ import { z } from "zod";
 
 import {
   appendLogEntry,
+  bundleVocabulary,
   deleteConcept,
   generateIndexes,
   nearestLogDirectory,
@@ -40,17 +40,22 @@ import {
 } from "./graph.js";
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
+import {
+  conceptSources,
+  defaultActor,
+  footnoteLabels,
+  generatedAt,
+  isStale,
+  trustTier,
+  usageWindowFor,
+} from "./provenance.js";
 import { DEFAULT_CUTOFF_RATIO, DEFAULT_SEARCH_LIMIT, searchConcepts } from "./search.js";
 import type { ColocatedRootMount, OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
-import type { ConceptFrontmatter, LoadedBundle } from "./types.js";
-import { okfUri } from "./types.js";
+import type { ConceptFrontmatter, ConceptStatus, LoadedBundle } from "./types.js";
+import { CONCEPT_STATUSES, okfUri } from "./types.js";
 import { validateBundle } from "./validate.js";
-
-/** The published package version, reported to clients in the MCP handshake. */
-const PACKAGE_VERSION: string = createRequire(import.meta.url)(
-  "../package.json",
-).version;
+import { PACKAGE_VERSION } from "./version.js";
 
 /**
  * Agent-facing guide to the mounted bundles (a colocated root's AGENTS.md),
@@ -87,7 +92,19 @@ export interface ServerOptions {
    * (`--search-cutoff`); 0 disables. Default DEFAULT_CUTOFF_RATIO.
    */
   searchCutoff?: number;
+  /**
+   * Actor recorded as `generated.by` on every write (spec §5.2, §7). Defaults
+   * to SERVER_ACTOR — `okf-mcp/<version>`, the §7 `<producer>/<version>` form.
+   * Deployments that want writes attributed to the agent driving the server,
+   * or to a named process, set this in okf.config.json (`actor`) or with
+   * `--actor`. It is never `human:` by default: the server is not a person,
+   * and §5.3 derives the human-reviewed trust tier from that prefix.
+   */
+  actor?: string;
 }
+
+/** This server's own actor id, used when nothing else is configured (spec §7). */
+export const SERVER_ACTOR = defaultActor(PACKAGE_VERSION);
 
 /**
  * Instructions load into the agent's context every session, so a bundle
@@ -146,17 +163,20 @@ Obsidian), call reload_bundles before relying on current state.`;
   const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
 where similar concepts live, and reuse existing types/tags. Prefer update_concept
 for partial edits — it patches frontmatter keys and/or one body section, preserving
-the rest of the document — over full write_concept rewrites. write_concept,
-update_concept, rename_concept, and delete_concept keep index.md navigation and the
-log.md history current — never edit those reserved files directly. Their auto entries
-go to the nearest existing directory log.md above the concept, falling back to the
-bundle root's. Cite sources under a # Citations heading as \`[n] [text](target)\`
-entries (spec §8), not as an ordered markdown list; the write tools normalize
-\`1.\`-style entries to that form. Use append_log_entry for change narrative not tied
-to a single concept write. When knowledge outgrows its bundle (e.g. project → org),
-promote_concept moves it and leaves a citation stub behind. Remote bundles are
-always read-only, and a local bundle may be mounted read-only too — check
-list_bundles' readOnly before planning a write.`;
+the rest of the document — over full write_concept rewrites. The write tools keep
+index.md navigation and log.md history current; never edit those reserved files
+directly. Use append_log_entry for narrative not tied to one write, promote_concept
+when knowledge outgrows its bundle (project → org).
+Record provenance in the frontmatter \`sources\` list (spec §5.1): each entry needs a
+\`resource\`, plus an \`id\` when the body cites it via a footnote keyed to that id
+(\`...sharded daily.[^ga4-schema]\`). Set \`status\` (draft/stable/deprecated) and
+\`stale_after\` when a concept has a shelf life; record sign-off as
+\`verified: {by: human:<id>, at: <ISO>}\` — the \`human:\` prefix is what makes it
+human-reviewed (§5.3). The server stamps \`generated\` itself; pass \`actor\` to credit
+someone else. Bundles declaring okf_version 0.1 keep the legacy \`timestamp\` and
+\`# Citations\` form; \`okf-mcp migrate\` converts one. Remote bundles are always
+read-only, and a local bundle may be read-only too — check list_bundles' readOnly
+before planning a write.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
@@ -700,11 +720,47 @@ export function createOkfServer(
   );
 
   server.registerTool(
+    "get_sources",
+    {
+      title: "Get sources",
+      description:
+        "A concept's provenance: its frontmatter `sources` entries (spec §5.1) with their credibility signals (`author`, `usage_count` over the applicable `usage_window`, `last_modified`), which body footnotes cite each entry, and the concept's derived trust tier and staleness. For a v0.1 document with no `sources`, entries are synthesized from its legacy `# Citations` list and marked `origin: \"citations\"`",
+      inputSchema: {
+        bundle: bundleParam,
+        id: z.string().describe("Concept ID, e.g. tables/orders"),
+      },
+    },
+    async ({ bundle, id }) => {
+      const concept = await store.getConcept(bundle, id);
+      if (!concept) throw new Error(`unknown concept: ${id}`);
+      const { sources, origin } = conceptSources(concept);
+      const { referenced } = footnoteLabels(concept.body);
+      return json({
+        origin,
+        trust: trustTier(concept.frontmatter),
+        stale: isStale(concept.frontmatter),
+        ...(generatedAt(concept.frontmatter) !== undefined && {
+          generatedAt: generatedAt(concept.frontmatter),
+        }),
+        sources: sources.map((entry) => ({
+          ...entry,
+          ...(usageWindowFor(concept.frontmatter, entry) !== undefined && {
+            usage_window: usageWindowFor(concept.frontmatter, entry),
+          }),
+          // Whether the body actually attributes a claim to this entry, which
+          // is the difference between a cited source and a listed one.
+          cited: entry.id !== undefined && referenced.has(entry.id),
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
     "get_citations",
     {
-      title: "Get citations",
+      title: "Get citations (deprecated)",
       description:
-        "Numbered citation entries under a concept's `# Citations` heading (spec §8), each classified as an external URL, a concept (in the bundle, or reached by a relative `../` link into a mounted colocated sibling bundle), or missing (a relative target that does not resolve)",
+        "Deprecated: use get_sources. Numbered citation entries under a concept's `# Citations` heading — the OKF v0.1 form, superseded by frontmatter `sources` in v0.2 (spec §13.1). Each is classified as an external URL, a concept (in the bundle, or reached by a relative `../` link into a mounted colocated sibling bundle), or missing (a relative target that does not resolve)",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
@@ -749,7 +805,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `Structured search over concepts: text query plus type/tag/path/link/resource filters. The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `Structured search over concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()
@@ -771,6 +827,24 @@ export function createOkfServer(
         linkedTo: z.string().optional().describe("Only concepts linking to this ID"),
         linkedFrom: z.string().optional().describe("Only concepts linked from this ID"),
         orphanOnly: z.boolean().optional(),
+        status: z
+          .array(z.enum(CONCEPT_STATUSES as unknown as [ConceptStatus, ...ConceptStatus[]]))
+          .optional()
+          .describe(
+            "Lifecycle statuses to keep (spec §5.4). A concept with no `status` counts as stable, so [\"stable\"] includes every undeclared concept",
+          ),
+        minTrust: z
+          .enum(["unverified", "machine-confirmed", "human-reviewed"])
+          .optional()
+          .describe(
+            "Minimum trust tier derived from `verified` (spec §5.3) — use human-reviewed when only signed-off knowledge will do",
+          ),
+        stale: z
+          .boolean()
+          .optional()
+          .describe(
+            "true keeps only concepts past their `stale_after`, false drops them (spec §5.5)",
+          ),
         limit: z
           .number()
           .int()
@@ -1031,7 +1105,7 @@ export function createOkfServer(
     "validate_bundle",
     {
       title: "Validate bundle",
-      description: "Report OKF v0.1 conformance errors and soft warnings",
+      description: "Report OKF v0.2 conformance errors and soft warnings",
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
@@ -1084,12 +1158,12 @@ export function createOkfServer(
             .object({ type: z.string().min(1) })
             .passthrough()
             .describe(
-              "YAML frontmatter; `type` is required, extra keys are preserved. `timestamp` defaults to the current UTC time when omitted (supply one to backdate)",
+              "YAML frontmatter; `type` is required, extra keys are preserved. `generated: {by, at}` defaults to this server's actor and the current UTC time when omitted (supply one to backdate or to credit a different actor). Record provenance in `sources` (spec §5.1), lifecycle in `status`/`stale_after` (§5.4-5.5), and sign-off in `verified` (§5.2). In a bundle declaring okf_version 0.1 the legacy `timestamp` is stamped instead",
             ),
           body: z
             .string()
             .describe(
-              "Markdown body. Cite sources under a `# Citations` heading as `[n] [text](target)` entries (spec §8); ordered-list entries like `1. [text](target)` are normalized to that form",
+              "Markdown body. Attribute a claim to a `sources` entry with a markdown footnote whose label is that entry's `id` (spec §5.1), e.g. `...sharded daily.[^ga4-schema]`. In a v0.1 bundle, cite under a `# Citations` heading as `[n] [text](target)` entries instead; ordered-list entries like `1. [text](target)` are normalized to that form",
             ),
           logMessage: z
             .string()
@@ -1105,6 +1179,7 @@ export function createOkfServer(
           relPath,
           frontmatter as ConceptFrontmatter,
           body,
+          { vocabulary: bundleVocabulary(target), actor: options.actor ?? SERVER_ACTOR },
         );
         const verb = result.created ? "Creation" : "Update";
         const title =
@@ -1123,7 +1198,7 @@ export function createOkfServer(
       {
         title: "Update concept",
         description:
-          "Partially update a concept without rewriting the whole document: shallow-merge a frontmatter patch and/or replace one body section by heading. Everything not named in the update — other frontmatter keys, YAML comments and formatting, the rest of the body — is preserved byte-for-byte, except `timestamp`, which refreshes to the current UTC time (spec §4.1: last meaningful change) unless pinned via the patch or `keepTimestamp`. Appends a log.md entry and regenerates index.md files.",
+          "Partially update a concept without rewriting the whole document: shallow-merge a frontmatter patch and/or replace one body section by heading. Everything not named in the update — other frontmatter keys, YAML comments and formatting, the rest of the body — is preserved byte-for-byte, except `generated`, which refreshes to this server's actor and the current UTC time (spec §5.2: last meaningful change) unless pinned via the patch or `keepGenerated`. A bundle declaring okf_version 0.1 gets its legacy `timestamp` refreshed instead. Appends a log.md entry and regenerates index.md files.",
         inputSchema: {
           bundle: bundleParam,
           id: z.string().describe("Concept ID or bundle-relative path, e.g. tables/orders"),
@@ -1131,7 +1206,7 @@ export function createOkfServer(
             .record(z.unknown())
             .optional()
             .describe(
-              "Frontmatter keys to set/overwrite; an explicit null deletes a key. Including `timestamp` (a value, or null to delete) overrides the default refresh",
+              "Frontmatter keys to set/overwrite; an explicit null deletes a key. Including `generated` or `timestamp` (a value, or null to delete) overrides the default refresh",
             ),
           section: z
             .object({
@@ -1144,16 +1219,26 @@ export function createOkfServer(
               content: z
                 .string()
                 .describe(
-                  "New markdown content for the section; the existing heading line is kept (a leading heading repeating it is stripped, never duplicated) and Citations entries are normalized to the `[n] [text](target)` form (spec §8)",
+                  "New markdown content for the section; the existing heading line is kept (a leading heading repeating it is stripped, never duplicated) and legacy Citations entries are normalized to the `[n] [text](target)` form (v0.1 §8)",
                 ),
             })
             .optional()
             .describe("Replace one body section, leaving the rest of the body untouched"),
-          keepTimestamp: z
+          keepGenerated: z
             .boolean()
             .optional()
             .describe(
-              "Preserve the existing `timestamp` byte-for-byte instead of refreshing it to now",
+              "Preserve the existing `generated` record (or a v0.1 `timestamp`) byte-for-byte instead of refreshing it to now",
+            ),
+          keepTimestamp: z
+            .boolean()
+            .optional()
+            .describe("Deprecated alias for `keepGenerated`"),
+          actor: z
+            .string()
+            .optional()
+            .describe(
+              "Actor to record as `generated.by` for this write (spec §7: `human:<id>`, `process:<id>`, or `<producer>/<version>`). Defaults to the server's configured actor",
             ),
           logMessage: z
             .string()
@@ -1161,13 +1246,24 @@ export function createOkfServer(
             .describe("Entry for log.md; a default is generated when omitted"),
         },
       },
-      async ({ bundle, id, frontmatter, section, keepTimestamp, logMessage }) => {
+      async ({
+        bundle,
+        id,
+        frontmatter,
+        section,
+        keepGenerated,
+        keepTimestamp,
+        actor,
+        logMessage,
+      }) => {
         const target = await store.bundle(bundle);
         assertWritableBundle(target);
         const result = await updateConcept(target, id, {
           ...(frontmatter !== undefined && { frontmatter }),
           ...(section !== undefined && { section }),
+          ...(keepGenerated !== undefined && { keepGenerated }),
           ...(keepTimestamp !== undefined && { keepTimestamp }),
+          actor: actor ?? options.actor ?? SERVER_ACTOR,
         });
         await logAndReindex(
           target,
@@ -1279,6 +1375,7 @@ export function createOkfServer(
         assertWritableBundle(source);
         assertWritableBundle(target);
         const result = await promoteConcept(source, target, id, {
+          actor: options.actor ?? SERVER_ACTOR,
           ...(toPath !== undefined && { toPath }),
           ...(stub !== undefined && { stub }),
         });

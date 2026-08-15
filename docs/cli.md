@@ -18,6 +18,8 @@ okf-mcp [--bundle [id=]<path>] [--colocated-bundles <root> [--only <a,b,c>]]
   pack [bundle]       Publish a bundle as a distributable archive
   repair [bundle]     Detect and auto-fix known bundle defect classes
                       (dry-run by default; --write applies)
+  migrate [bundle]    Convert a v0.1 bundle to OKF 0.2
+                      (dry-run by default; --write applies)
 ```
 
 Every command reads the same `okf.config.json` layers the MCP server does, so `okf-mcp inspect` with no flags works in a configured project. With nothing to mount, `mcp` still starts and serves an empty set — a globally declared server has to survive directories that configure nothing — while the one-shot commands exit 2 with a usage error. `--config <file>` uses one file and skips discovery; `--no-config` ignores config files entirely (both also settable as `OKF_CONFIG` / `OKF_NO_CONFIG=1`).
@@ -58,7 +60,25 @@ okf-mcp --bundle ./kb repair --only citation-format --write
 okf-mcp repair --list
 ```
 
-Fixers: `citation-format` (ordered-list citations → spec §8 form, the same transformation the write paths apply), `duplicate-citation-headings` (drop empty duplicate `# Citations` sections; report content-bearing duplicates for manual merge), `okf-uri-to-canonical` (rewrite `okf://` targets to canonical URLs once configured), `absolute-links-to-relative` (bundle-absolute → document-relative links).
+Fixers: `citation-format` (ordered-list citations → the v0.1 §8 form, the same transformation the write paths apply), `duplicate-citation-headings` (drop empty duplicate `# Citations` sections; report content-bearing duplicates for manual merge), `okf-uri-to-canonical` (rewrite `okf://` targets — in body links, `resource`, and `sources[].resource` — to canonical URLs once configured), `absolute-links-to-relative` (bundle-absolute → document-relative links).
+
+Every fixer here normalizes *form* and is safe to run on any bundle at any time, including a v0.1 one. The fixers that change a document's *vocabulary* live in `migrate` instead.
+
+## migrate
+
+`migrate` converts a bundle from OKF v0.1 to v0.2: each document's `timestamp` becomes a `generated: {by, at}` record (spec §5.2), each `# Citations` list becomes a frontmatter `sources` list with slugged entry ids (§5.1), and the bundle-root `index.md` is stamped `okf_version: "0.2"` last. Dry-run by default, like `repair`.
+
+```bash
+okf-mcp --bundle ./kb migrate                             # dry-run: report what would change
+okf-mcp --bundle ./kb migrate --write --actor human:ahormati
+okf-mcp migrate --list
+```
+
+This is opt-in and one-way, which is why it is a separate command rather than part of the `repair` sweep. Reading v0.1 stays supported permanently (§13.1), so there is no deadline.
+
+**The actor.** `generated.by` names who produced the content, and a v0.1 document does not record it — so it has to come from somewhere. `migrate` takes it from `--actor` or the config `actor`; with neither, an interactive `--write` run asks, offering the server's own actor (`okf-mcp/<version>`) as the default and `cancel` if you would rather set `actor` in `okf.config.json` first. That config value applies to every write, not just this migration, which is the tradeoff the prompt exists to let you skip. A non-interactive run (CI, piped stdin) uses the server actor without asking — honest, since okf-mcp really is what rewrote the documents, and the `<producer>/<version>` form never inflates a trust tier.
+
+**What it will not do.** A document with malformed citation entries is reported, not migrated (run `repair --only citation-format` first so nothing is dropped). A document that already has both a `# Citations` section and a `sources` list is reported too — deciding which entries are duplicates is a judgement call, not a mechanical rewrite. And the version stamp only lands when nothing was left unfixed, so a partially-migrated bundle never advertises conformance it does not have.
 
 ## --watch
 

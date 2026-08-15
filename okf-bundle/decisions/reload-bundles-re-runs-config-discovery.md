@@ -8,7 +8,19 @@ tags:
   - bundles
   - mcp
   - cli
-timestamp: 2026-08-15T00:57:07.480Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-15T00:57:07.480Z
+sources:
+  - id: src-store-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/store.ts
+    title: src/store.ts
+  - id: src-cli-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/cli.ts
+    title: src/cli.ts
+  - id: src-server-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/server.ts
+    title: src/server.ts
 ---
 
 Config resolution used to run exactly once, at launch: the CLI resolved the
@@ -77,9 +89,3 @@ degrades to a plain reload with an empty `mounted`/`unmounted` summary.
 See also [config file layering](config-file-layering.md),
 [lazy bundle mounting](lazy-bundle-mounting.md), and the
 [OkfStore](../architecture/okf-store.md).
-
-# Citations
-
-[1] [src/store.ts](https://github.com/copperbox/okf-mcp/blob/main/src/store.ts)
-[2] [src/cli.ts](https://github.com/copperbox/okf-mcp/blob/main/src/cli.ts)
-[3] [src/server.ts](https://github.com/copperbox/okf-mcp/blob/main/src/server.ts)

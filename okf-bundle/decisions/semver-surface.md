@@ -6,7 +6,13 @@ description: What semver covers since 1.0.0 — MCP tools, CLI, and the curated
 tags:
   - release
   - modules
-timestamp: 2026-08-14T02:23:03.133Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T02:23:03.133Z
+sources:
+  - id: src-index-ts
+    resource: https://github.com/copperbox/okf-mcp/blob/main/src/index.ts
+    title: src/index.ts
 ---
 
 Since 1.0.0, semver covers exactly three surfaces:
@@ -22,7 +28,3 @@ Anything not re-exported by the barrel is internal and may change in any release
 Related invariant fixed in the same change: the MCP handshake used to hardcode `version: "0.1.0"`; it now reads the real package version from `package.json` via `createRequire` (guarded by a server test), so clients see the published version.
 
 The policy is stated for users in [docs/development.md](https://github.com/copperbox/okf-mcp/blob/main/docs/development.md).
-
-# Citations
-
-[1] [src/index.ts](https://github.com/copperbox/okf-mcp/blob/main/src/index.ts)

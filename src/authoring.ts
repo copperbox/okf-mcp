@@ -12,8 +12,16 @@ import {
   sectionSpan,
   splitSections,
 } from "./parser.js";
-import type { Concept, ConceptFrontmatter, ConceptLink, LoadedBundle } from "./types.js";
+import { defaultActor } from "./provenance.js";
+import type {
+  Actor,
+  Concept,
+  ConceptFrontmatter,
+  ConceptLink,
+  LoadedBundle,
+} from "./types.js";
 import { OKF_VERSION, RESERVED_FILENAMES } from "./types.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 /**
  * Reject concept paths that are absolute, escape the bundle root, are not
@@ -38,30 +46,123 @@ export function assertSafeConceptPath(relPath: string): string {
   return normalized;
 }
 
+/**
+ * The frontmatter vocabulary a document is written in. v0.2 renamed
+ * `timestamp` to `generated.at` (spec §13.1), so a server that writes one
+ * vocabulary into a bundle authored in the other produces documents that are
+ * neither cleanly v0.1 nor cleanly v0.2. The vocabulary is therefore chosen
+ * per bundle, never globally — see bundleVocabulary.
+ */
+export type WriteVocabulary = "0.1" | "0.2";
+
+/**
+ * Which vocabulary to write a bundle in. A declared `okf_version` decides it
+ * outright. Undeclared, the bundle's own documents do: one already carrying
+ * `generated`/`sources` is v0.2, one carrying only `timestamp` is v0.1, and an
+ * empty bundle gets the current version. Inferring rather than defaulting is
+ * what keeps upgrading this server from silently half-migrating a v0.1 bundle
+ * the first time an agent writes to it.
+ */
+export function bundleVocabulary(
+  bundle: Pick<LoadedBundle, "okfVersion" | "concepts">,
+): WriteVocabulary {
+  if (bundle.okfVersion === "0.1") return "0.1";
+  if (bundle.okfVersion === OKF_VERSION) return OKF_VERSION;
+  const concepts = [...bundle.concepts.values()];
+  if (
+    concepts.some(
+      (c) =>
+        c.frontmatter.generated !== undefined ||
+        c.frontmatter.sources !== undefined ||
+        c.frontmatter.verified !== undefined,
+    )
+  ) {
+    return "0.2";
+  }
+  return concepts.some((c) => typeof c.frontmatter.timestamp === "string")
+    ? "0.1"
+    : OKF_VERSION;
+}
+
 export interface WriteConceptOptions {
   /** Refuse to replace an existing document. Defaults to allowing updates. */
   failIfExists?: boolean;
+  /**
+   * Vocabulary to stamp provenance in (see bundleVocabulary). Defaults to the
+   * current spec version; pass "0.1" when writing into a v0.1 bundle.
+   */
+  vocabulary?: WriteVocabulary;
+  /**
+   * Actor recorded as `generated.by` (spec §5.2, §7). Required in substance
+   * for a v0.2 stamp — callers pass the configured server actor.
+   */
+  actor?: Actor;
 }
 
-/** Spec §4.1 keys in their recommended order; `timestamp` slots in after these. */
+/**
+ * Spec §4.1 + §5 + §10 keys in the order the spec's own examples use. New
+ * frontmatter is emitted in this order; extension keys follow in their
+ * original order, and existing documents never have their keys reordered.
+ */
+const SPEC_KEY_ORDER = [
+  "type",
+  "title",
+  "description",
+  "resource",
+  "tags",
+  "status",
+  "runtime",
+  "parameters",
+  "computation",
+  "executor",
+  "attester",
+  "generated",
+  "verified",
+  "stale_after",
+  "sources",
+  "usage_window",
+] as const;
+
+/**
+ * Anchor keys a newly created provenance stamp slots in after: the §4.1
+ * identity block, which every concept has and which always precedes the §5
+ * families.
+ */
 const SPEC_KEYS = ["type", "title", "description", "resource", "tags"] as const;
 
 /**
- * Default `timestamp` to the current time (spec §4.1: ISO 8601 datetime of
- * last meaningful change) — the server knows when it writes. A caller-provided
- * value always wins, so producers may backdate deliberately. When defaulting,
- * spec keys are emitted in spec order with `timestamp` in its slot, followed
- * by extension keys in their original order.
+ * Stamp the provenance of a write the server is performing — `generated`
+ * under v0.2 (spec §5.2), a legacy `timestamp` under v0.1 (§4.1). Either way
+ * it records the same fact: the content last meaningfully changed now.
+ *
+ * A caller-provided value always wins, in *either* vocabulary, so producers
+ * may backdate deliberately and so a caller writing an explicit `timestamp`
+ * into a v0.2 bundle does not also get a `generated` it did not ask for. When
+ * defaulting, spec keys are emitted in spec order with the stamp in its slot.
  */
-function withDefaultTimestamp(frontmatter: ConceptFrontmatter): ConceptFrontmatter {
-  if (frontmatter.timestamp !== undefined) return frontmatter;
-  const ordered: Record<string, unknown> = {};
-  for (const key of SPEC_KEYS) {
-    if (frontmatter[key] !== undefined) ordered[key] = frontmatter[key];
+function withDefaultProvenance(
+  frontmatter: ConceptFrontmatter,
+  options: { vocabulary?: WriteVocabulary; actor?: Actor; now?: Date } = {},
+): ConceptFrontmatter {
+  if (frontmatter.timestamp !== undefined || frontmatter.generated !== undefined) {
+    return frontmatter;
   }
-  ordered.timestamp = new Date().toISOString();
+  const at = (options.now ?? new Date()).toISOString();
+  const legacy = (options.vocabulary ?? OKF_VERSION) === "0.1";
+  const stampKey = legacy ? "timestamp" : "generated";
+  const stampValue = legacy
+    ? at
+    : { by: options.actor ?? defaultActor(PACKAGE_VERSION), at };
+  // v0.1 has no slot for the §5 families, so its stamp follows the §4.1 block.
+  const order: readonly string[] = legacy ? [...SPEC_KEYS, "timestamp"] : SPEC_KEY_ORDER;
+
+  const ordered: Record<string, unknown> = {};
+  for (const key of order) {
+    if (key === stampKey) ordered[key] = stampValue;
+    else if (frontmatter[key] !== undefined) ordered[key] = frontmatter[key];
+  }
   for (const [key, value] of Object.entries(frontmatter)) {
-    if (!(SPEC_KEYS as readonly string[]).includes(key)) ordered[key] = value;
+    if (!order.includes(key)) ordered[key] = value;
   }
   return ordered as ConceptFrontmatter;
 }
@@ -71,8 +172,9 @@ function withDefaultTimestamp(frontmatter: ConceptFrontmatter): ConceptFrontmatt
  * concept write path; it validates the path and required frontmatter but
  * does not touch the in-memory index — reload the bundle afterwards.
  * Ordered-list entries under a `# Citations` heading are normalized to the
- * spec §8 `[n] [text](target)` form so the natural-but-malformed markdown
- * list form never lands on disk (issue #78).
+ * v0.1 §8 `[n] [text](target)` form so the natural-but-malformed markdown
+ * list form never lands on disk (issue #78) — legacy provenance is still
+ * kept well-formed for the bundles that use it.
  */
 export async function writeConcept(
   bundleRoot: string,
@@ -93,7 +195,13 @@ export async function writeConcept(
   await fs.mkdir(path.dirname(absolute), { recursive: true });
   await fs.writeFile(
     absolute,
-    serializeDocument(withDefaultTimestamp(frontmatter), normalizeCitationEntries(body)),
+    serializeDocument(
+      withDefaultProvenance(frontmatter, {
+        ...(options.vocabulary !== undefined && { vocabulary: options.vocabulary }),
+        ...(options.actor !== undefined && { actor: options.actor }),
+      }),
+      normalizeCitationEntries(body),
+    ),
     "utf8",
   );
   return { path: safePath, created: !exists };
@@ -150,15 +258,23 @@ export interface UpdateConceptInput {
    * first match, including its subsections). The heading line is kept and the
    * rest of the body stays byte-for-byte intact; a leading heading in the
    * content repeating the target's is stripped rather than duplicated, and
-   * Citations entries are normalized to the §8 form (issue #78).
+   * Citations entries are normalized to the v0.1 §8 form (issue #78).
    */
   section?: { heading: string; content: string };
   /**
-   * Keep the existing `timestamp` byte-for-byte instead of refreshing it to
-   * the current time. An explicit `timestamp` in the frontmatter patch
-   * (including null to delete) also suppresses the refresh and always wins.
+   * Keep the existing provenance stamp byte-for-byte instead of refreshing it
+   * to the current time. An explicit `generated`/`timestamp` in the
+   * frontmatter patch (including null to delete) also suppresses the refresh
+   * and always wins.
+   */
+  keepGenerated?: boolean;
+  /**
+   * Deprecated alias for `keepGenerated`, kept because it is a semver-covered
+   * MCP tool parameter. Either being true pins the stamp.
    */
   keepTimestamp?: boolean;
+  /** Actor recorded as `generated.by` (spec §7). Defaults to the server actor. */
+  actor?: Actor;
 }
 
 export interface UpdateConceptResult {
@@ -166,7 +282,7 @@ export interface UpdateConceptResult {
   path: string;
   /** Frontmatter title after the update, when the concept has one. */
   title?: string;
-  /** Frontmatter keys set or overwritten, in patch order; includes `timestamp` when the default refresh applied it. */
+  /** Frontmatter keys set or overwritten, in patch order; includes the provenance key when the default refresh applied it. */
   updatedKeys: string[];
   /** Frontmatter keys deleted by an explicit null, in patch order. */
   deletedKeys: string[];
@@ -180,12 +296,14 @@ export interface UpdateConceptResult {
  * so everything outside the touched spans survives byte-for-byte — round-trip
  * preservation of unknown keys (spec §4.1) as a server guarantee, and a
  * smaller write surface than a full rewrite when humans edit concurrently.
- * `timestamp` is refreshed to the write time by default (spec §4.1: datetime
- * of last meaningful change, matching writeConcept), through the same
- * in-place patch so everything else still survives; a concept without the
- * key gains one in its spec-order slot. An explicit `timestamp` in the patch
- * or `keepTimestamp: true` pins it. Does not touch the in-memory index —
- * reload the bundle afterwards.
+ * The provenance stamp is refreshed to the write time by default (spec §5.2:
+ * `generated` records the content's last meaningful change, matching
+ * writeConcept), through the same in-place patch so everything else still
+ * survives; a concept without the key gains one in its spec-order slot. The
+ * bundle's own vocabulary decides which key is refreshed, so a v0.1 bundle
+ * keeps getting `timestamp` (§13.1). An explicit `generated`/`timestamp` in
+ * the patch, or `keepGenerated: true`, pins it. Does not touch the in-memory
+ * index — reload the bundle afterwards.
  */
 export async function updateConcept(
   bundle: LoadedBundle,
@@ -209,25 +327,37 @@ export async function updateConcept(
   const absolute = path.join(bundle.root, concept.path);
   let source = await fs.readFile(absolute, "utf8");
 
-  // A partial update is a meaningful change (spec §4.1), so refresh
-  // `timestamp` like writeConcept does unless the caller pins it.
-  const refreshTimestamp = input.keepTimestamp !== true && !("timestamp" in patch);
-  const effectivePatch: Record<string, unknown> = refreshTimestamp
-    ? { ...patch, timestamp: new Date().toISOString() }
+  // A partial update is a meaningful change (spec §5.2), so refresh the
+  // provenance stamp like writeConcept does unless the caller pins it. Which
+  // key that is follows the bundle, not this server's own version: refreshing
+  // `generated` on a v0.1 document would leave it carrying both vocabularies.
+  const legacy = bundleVocabulary(bundle) === "0.1";
+  const stampKey = legacy ? "timestamp" : "generated";
+  const pinned = input.keepGenerated === true || input.keepTimestamp === true;
+  const refreshStamp =
+    !pinned && !("timestamp" in patch) && !("generated" in patch);
+  const at = new Date().toISOString();
+  const effectivePatch: Record<string, unknown> = refreshStamp
+    ? {
+        ...patch,
+        [stampKey]: legacy
+          ? at
+          : { by: input.actor ?? defaultActor(PACKAGE_VERSION), at },
+      }
     : patch;
 
   let updatedKeys: string[] = [];
   let deletedKeys: string[] = [];
-  if (hasPatch || refreshTimestamp) {
+  if (hasPatch || refreshStamp) {
     try {
       const patched = patchFrontmatter(source, effectivePatch, {
-        insertAfter: { timestamp: SPEC_KEYS },
+        insertAfter: { timestamp: SPEC_KEYS, generated: SPEC_KEYS },
       });
       source = patched.source;
       updatedKeys = patched.set;
       deletedKeys = patched.deleted;
     } catch (err) {
-      // The caller's own patch must apply, but the implicit timestamp refresh
+      // The caller's own patch must apply, but the implicit stamp refresh
       // is best-effort: a section-only update of a document without a
       // patchable frontmatter block still goes through, just unstamped.
       if (hasPatch) throw err;
@@ -653,7 +783,7 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
   for (const [dir, { files, dirs }] of directories) {
     const lines: string[] = [];
     if (dir === "") {
-      lines.push("---", `okf_version: "${OKF_VERSION}"`, "---", "");
+      lines.push("---", `okf_version: "${bundleVocabulary(bundle)}"`, "---", "");
     }
     lines.push(`# ${dir === "" ? "Bundle Index" : path.posix.basename(dir)}`, "");
     if (dirs.size > 0) {
@@ -661,7 +791,7 @@ export function renderIndexes(bundle: LoadedBundle): Map<string, string> {
       for (const sub of [...dirs].sort()) {
         // Target the subdirectory's index file rather than the bare
         // directory: Obsidian does not resolve trailing-slash links, and
-        // spec §6 only requires a relative URL.
+        // spec §8 only requires a relative URL.
         lines.push(`* [${sub}](${sub}/index.md)`);
       }
       lines.push("");
@@ -699,22 +829,28 @@ export interface GenerateIndexesResult {
 /**
  * Merge the frontmatter a producer put on the existing bundle-root index
  * into freshly rendered content: every declared key survives — a declared
- * okf_version included (spec §11) — and `okf_version` is stamped only when
- * absent. Without existing frontmatter the rendered content stands as-is.
+ * okf_version included (spec §12) — and `okf_version` is stamped only when
+ * absent. The stamped value is the vocabulary the bundle is actually written
+ * in, so an undeclared v0.1 bundle is not relabelled 0.2 by an index
+ * regeneration. Without existing frontmatter the rendered content stands as-is.
  */
-export function withPreservedFrontmatter(existing: string, rendered: string): string {
+export function withPreservedFrontmatter(
+  existing: string,
+  rendered: string,
+  version: string = OKF_VERSION,
+): string {
   const declared = splitFrontmatter(existing).data;
   if (declared === null || Object.keys(declared).length === 0) return rendered;
   const merged =
     declared.okf_version === undefined
-      ? { okf_version: OKF_VERSION, ...declared }
+      ? { okf_version: version, ...declared }
       : declared;
   return serializeDocument(merged, splitFrontmatter(rendered).body);
 }
 
 /**
  * Regenerate `index.md` in every directory of the bundle for progressive
- * disclosure (spec §6). Existing index files are overwritten as generated
+ * disclosure (spec §8). Existing index files are overwritten as generated
  * artifacts — except hand-curated ones opting out via `generated: false`
  * frontmatter, which are reported as skipped, and the bundle root's
  * frontmatter, which is carried over rather than restamped. Entries use
@@ -740,7 +876,7 @@ export async function generateIndexes(
     }
     const finalContent =
       indexPath === "index.md" && existing !== undefined
-        ? withPreservedFrontmatter(existing, content)
+        ? withPreservedFrontmatter(existing, content, bundleVocabulary(bundle))
         : content;
     await fs.writeFile(absolute, finalContent, "utf8");
     written.push(indexPath);
@@ -749,7 +885,7 @@ export async function generateIndexes(
   return { written: written.sort(), skipped: skipped.sort(byPath) };
 }
 
-/** The okf_version a bundle root's index.md declares on disk, if any (spec §11). */
+/** The okf_version a bundle root's index.md declares on disk, if any (spec §12). */
 export async function readDeclaredVersion(
   bundleRoot: string,
 ): Promise<string | undefined> {

@@ -2,10 +2,11 @@
  * Promotion of a concept across bundles: knowledge that started out
  * project-scoped and turned out to be org-wide moves into the shared bundle,
  * and a citation stub stays behind so the source bundle's graph remains
- * navigable. OKF §5 has no cross-bundle link syntax, so the stub redirects
- * via its `resource` URL and a §8 citation on the promoted concept's
- * canonical location — which the graph tools already resolve back into a
- * derived cross-bundle edge when the target bundle has a canonical URL.
+ * navigable. OKF §6 has no cross-bundle link syntax, so the stub redirects
+ * via its `resource` URL and a §5.1 `sources` entry naming the promoted
+ * concept's canonical location — which the graph tools already resolve back
+ * into a derived cross-bundle edge when the target bundle has a canonical URL.
+ * A v0.1 bundle gets the legacy `# Citations` stub instead (§13.1).
  *
  * Between colocated siblings the citation is a relative on-disk link into
  * the sibling folder instead — even when the target has a canonical URL —
@@ -21,6 +22,7 @@ import path from "node:path";
 
 import {
   assertSafeConceptPath,
+  bundleVocabulary,
   conceptsLinkingTo,
   removeEmptyDirectories,
   requireConcept,
@@ -32,6 +34,9 @@ import { suggestConceptPath } from "./suggest.js";
 import type { Concept, LoadedBundle } from "./types.js";
 import { okfUri } from "./types.js";
 
+/** `sources[].id` of the stub entry pointing at the promoted copy (spec §5.1). */
+const PROMOTED_SOURCE_ID = "promoted-copy";
+
 export interface PromoteConceptOptions {
   /**
    * Explicit target-bundle-relative path ending in .md. Defaults to
@@ -39,6 +44,8 @@ export interface PromoteConceptOptions {
    * original filename.
    */
   toPath?: string;
+  /** Actor to credit as `generated.by` on the promoted copy and stub (§7). */
+  actor?: string;
   /**
    * Leave a citation stub at the old path (the default). `false` deletes the
    * source copy outright, leaving the reported inbound links dangling.
@@ -149,6 +156,8 @@ export async function promoteConcept(
   }
   await writeConcept(target.root, toPath, concept.frontmatter, concept.body, {
     failIfExists: true,
+    vocabulary: bundleVocabulary(target),
+    ...(options.actor !== undefined && { actor: options.actor }),
   });
 
   const canonical = canonicalConceptUrl(target, toPath);
@@ -168,6 +177,12 @@ export async function promoteConcept(
     );
   } else {
     const label = title ?? concept.id;
+    // The stub's whole job is to keep the source graph navigable, so it must
+    // record the promoted copy in whichever vocabulary the source bundle
+    // speaks: frontmatter `sources` under v0.2 (spec §5.1), the legacy
+    // `# Citations` list under v0.1. Both resolve to the same graph edge —
+    // `sources[].resource` is a §6.2 path-valued field the loader resolves.
+    const legacy = bundleVocabulary(source) === "0.1";
     await writeConcept(
       source.root,
       concept.path,
@@ -176,8 +191,17 @@ export async function promoteConcept(
         ...(title !== undefined && { title }),
         description: `Promoted to bundle "${target.id}"; this stub cites the canonical copy.`,
         resource: canonical,
+        ...(legacy
+          ? {}
+          : { sources: [{ id: PROMOTED_SOURCE_ID, resource: citation, title: label }] }),
       },
-      `Promoted to [${label}](${citation}) in bundle \`${target.id}\`.\n\n# Citations\n\n[1] [${label}](${citation})\n`,
+      legacy
+        ? `Promoted to [${label}](${citation}) in bundle \`${target.id}\`.\n\n# Citations\n\n[1] [${label}](${citation})\n`
+        : `Promoted to [${label}](${citation}) in bundle \`${target.id}\`.[^${PROMOTED_SOURCE_ID}]\n\n[^${PROMOTED_SOURCE_ID}]: ${label}\n`,
+      {
+        vocabulary: bundleVocabulary(source),
+        ...(options.actor !== undefined && { actor: options.actor }),
+      },
     );
     stubPath = concept.path;
   }

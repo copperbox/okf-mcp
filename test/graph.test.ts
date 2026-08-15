@@ -314,3 +314,67 @@ describe("colocated cross-bundle links", () => {
     assert.equal(graphSummary(bundles[1]!, bundles).crossBundleEdges, 1);
   });
 });
+
+describe("graph edges from §6.2 path-valued frontmatter fields", () => {
+  const bundle = () =>
+    buildBundle("t", "/t", [
+      {
+        path: "metrics/income-statement.md",
+        source:
+          "---\ntype: Metric\nsources:\n  - { id: rev, resource: ../computations/revenue.md }\n---\n\n" +
+          "Narrates [revenue](../computations/revenue.md).\n",
+      },
+      {
+        path: "computations/revenue.md",
+        source:
+          "---\ntype: Attested Computation\nruntime: bigquery\n" +
+          "executor: { resource: ../references/run-on-bq.md }\n---\n\n# Computation\n\n    SELECT 1\n",
+      },
+      { path: "references/run-on-bq.md", source: "---\ntype: Reference\n---\n\nHow to run it.\n" },
+    ]);
+
+  it("makes a sources entry a real edge, as §5.1 says the bundle graph already holds", () => {
+    const graph = buildGraph(bundle());
+    assert.ok(
+      graph.edges.some(
+        (e) => e.from === "computations/revenue" && e.to === "references/run-on-bq",
+      ),
+      "executor.resource should link the computation to its run instructions",
+    );
+  });
+
+  it("counts a body link and a sources entry to the same target as two link instances", () => {
+    // Consistent with two body links to one target, which already count twice:
+    // an edge here is one link instance, not one relationship.
+    const edges = buildGraph(bundle()).edges.filter(
+      (e) => e.from === "metrics/income-statement" && e.to === "computations/revenue",
+    );
+    assert.equal(edges.length, 2);
+  });
+
+  it("leaves an orphan computation non-orphaned once something sources it", () => {
+    const summary = graphSummary(bundle());
+    assert.deepEqual(summary.orphans, []);
+  });
+
+  it("derives a cross-bundle edge from a sources URL, not just a body link", () => {
+    const ORG_URL = "https://github.com/acme/org-brain/tree/main";
+    const org = buildBundle(
+      "org",
+      ORG_URL,
+      [{ path: "standards/naming.md", source: "---\ntype: Standard\n---\n\nB.\n" }],
+      { readOnly: true, canonicalUrls: canonicalUrlPrefixes(ORG_URL) },
+    );
+    const proj = buildBundle("proj", "/proj", [
+      {
+        path: "guides/setup.md",
+        source:
+          "---\ntype: Guide\nsources:\n  - { id: naming, resource: " +
+          `${ORG_URL.replace("/tree/", "/blob/")}/standards/naming.md }\n---\n\nNo body links at all.\n`,
+      },
+    ]);
+    assert.deepEqual(deriveCrossBundleEdges([proj, org]), [
+      { from: "proj:guides/setup", to: "org:standards/naming", kind: "cross-bundle" },
+    ]);
+  });
+});

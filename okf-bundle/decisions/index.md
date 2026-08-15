@@ -8,8 +8,10 @@
 * [Bundle mounts layer through okf.config.json](config-file-layering.md) - Why mount declarations moved out of MCP client config into discovered config files, how the layers merge, and the global-declaration deployment shape it enables.
 * [Cross-bundle edges are derived, not written](derived-cross-bundle-edges.md) - Why OKF gets no cross-bundle link syntax and how cross-bundle graph edges are derived from spec-clean data instead.
 * [Document-relative links are the recommended form](document-relative-links.md) - Why bundle-absolute links are discouraged and how link parsing and rewriting preserve author intent.
+* [Path-valued frontmatter fields are graph links](frontmatter-paths-are-graph-links.md) - Why the OKF v0.2 §6.2 frontmatter paths resolve into real graph edges, and why top-level `resource` is deliberately left out.
 * [Generated indexes and scoped logs](generated-indexes-and-scoped-logs.md) - How index.md regeneration, the generated:false opt-out, root-frontmatter carry-over, and nearest-existing-log routing work.
 * [Lazy colocated bundle mounting](lazy-bundle-mounting.md) - Colocated bundles are discovered cheaply at startup and fully parsed only on first access, with sweeps reporting what they excluded.
+* [Migration is its own command, not a repair fixer](okf-0.2-migration-is-its-own-command.md) - Why converting a bundle to OKF v0.2 lives in `okf-mcp migrate` rather than the repair sweep, and how it handles the actor it cannot infer.
 * [Pack rewrites sibling links or fails](pack-link-rewriting.md) - Packing rewrites relative sibling links to canonical URLs and refuses to ship a link it cannot resolve.
 * [Writability is per bundle, and a cloned config cannot grant it](per-bundle-writability.md) - How the server-wide --writable flag and a config file's per-bundle writable interact, plus the trust guard on discovered configs.
 * [Permissive parsing](permissive-parsing.md) - Malformed documents are reported as problems while every valid concept keeps serving; the parser never throws.
@@ -18,3 +20,5 @@
 * [reload_bundles re-runs config discovery](reload-bundles-re-runs-config-discovery.md) - Why the no-argument reload_bundles re-resolves local mounts from disk so a config file added or edited mid-session takes effect without a restart, and the boundaries of that re-discovery.
 * [Remote bundle sandbox](remote-bundle-sandbox.md) - The safety caps and guarantees around loading remote bundles from GitHub trees and archives.
 * [The 1.0 semver surface is three things](semver-surface.md) - What semver covers since 1.0.0 — MCP tools, CLI, and the curated index.ts barrel — and why the barrel was pruned before the bump.
+* [The server's actor, and why it is never human by default](server-actor.md) - Where `generated.by` comes from on every write, and the trust-tier reason the default is a tool identity rather than a person.
+* [The write vocabulary follows the bundle, not the server](write-vocabulary-follows-the-bundle.md) - How okf-mcp decides whether to write a concept in OKF v0.1 or v0.2 frontmatter, and why upgrading the server never converts a bundle by itself.

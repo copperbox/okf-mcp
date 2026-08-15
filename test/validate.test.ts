@@ -518,3 +518,124 @@ describe("validateBundle bundle-absolute links", () => {
     assert.deepEqual(absoluteWarnings(result), []);
   });
 });
+
+describe("v0.2 provenance, trust, and lifecycle warnings (spec §5, §7, §10)", () => {
+  /** Validate a one-document bundle, returning just its warning messages. */
+  async function warnings(source: string, extra: Record<string, string> = {}) {
+    const documents = [
+      { path: "x.md", source },
+      ...Object.entries(extra).map(([p, s]) => ({ path: p, source: s })),
+    ];
+    const bundle = buildBundle("t", "/t", documents);
+    // Sources are served from memory, so validate can re-read the raw YAML.
+    bundle.sources = new Map(documents.map((d) => [d.path, d.source]));
+    const result = await validateBundle(bundle);
+    assert.deepEqual(result.errors, [], "none of these may be a conformance error");
+    return result.warnings.map((w) => w.message);
+  }
+
+  it("requires generated.by within generated", async () => {
+    const found = await warnings("---\ntype: Note\ngenerated: { at: 2026-06-20T22:53:05Z }\n---\n\nB.\n");
+    assert.ok(found.some((m) => /`generated.by` is required/.test(m)));
+  });
+
+  it("flags an actor written without its convention prefix", async () => {
+    // The one that matters: `ahormati` is a person, but without `human:` the
+    // §5.3 tier silently reads machine-confirmed.
+    const found = await warnings(
+      "---\ntype: Note\nverified: { by: ahormati, at: 2026-06-25T09:00:00Z }\n---\n\nB.\n",
+    );
+    assert.ok(found.some((m) => /verified\[0\]\.by.*actor convention.*human:/s.test(m)));
+  });
+
+  it("accepts all three actor forms without comment", async () => {
+    const found = await warnings(
+      "---\ntype: Note\ngenerated: { by: reference_agent/gemini-2.5-pro, at: 2026-06-20T22:53:05Z }\n" +
+        "verified:\n  - { by: human:a, at: 2026-06-25T09:00:00Z }\n  - { by: process:nightly, at: 2026-06-26T02:00:00Z }\n---\n\nB.\n",
+    );
+    assert.deepEqual(found.filter((m) => /actor convention/.test(m)), []);
+  });
+
+  it("flags a status outside the closed enum, unlike the open type vocabulary", async () => {
+    const found = await warnings("---\ntype: Anything At All\nstatus: retired\n---\n\nB.\n");
+    assert.ok(found.some((m) => /`status` should be one of draft, stable, deprecated/.test(m)));
+    assert.deepEqual(found.filter((m) => /`type`/.test(m)), []);
+  });
+
+  it("flags a stale_after that is not a bare date", async () => {
+    const found = await warnings("---\ntype: Note\nstale_after: 2026-09-23T00:00:00Z\n---\n\nB.\n");
+    assert.ok(found.some((m) => /`stale_after` should be an absolute `YYYY-MM-DD` date/.test(m)));
+  });
+
+  it("requires resource within a sources entry", async () => {
+    const found = await warnings(
+      "---\ntype: Note\nsources:\n  - { id: a, title: No resource }\n---\n\nB.\n",
+    );
+    assert.ok(found.some((m) => /`sources\[0\]\.resource` is required/.test(m)));
+  });
+
+  it("accepts a scope descriptor as a sources resource", async () => {
+    const found = await warnings(
+      "---\ntype: Note\nsources:\n  - { id: a, resource: all queries in BigQuery project X }\n---\n\nB.\n",
+    );
+    assert.deepEqual(found, []);
+  });
+
+  it("flags a footnote attributing a claim to no sources entry", async () => {
+    const found = await warnings(
+      "---\ntype: Note\nsources:\n  - { id: ga4-schema, resource: https://example.com/a }\n---\n\n" +
+        "Sharded daily.[^ga4-schema] Also true.[^runbook]\n\n[^ga4-schema]: GA4\n",
+    );
+    assert.ok(found.some((m) => /footnote \[\^runbook\] matches no `sources\[\]\.id`/.test(m)));
+    assert.deepEqual(found.filter((m) => /\[\^ga4-schema\]/.test(m)), []);
+  });
+
+  it("leaves plain footnotes alone in a document that declares no sources", async () => {
+    const found = await warnings("---\ntype: Note\n---\n\nA claim.[^n]\n\n[^n]: An aside.\n");
+    assert.deepEqual(found, []);
+  });
+
+  it("requires runtime on an Attested Computation", async () => {
+    const found = await warnings("---\ntype: Attested Computation\n---\n\n# Computation\n\n    SELECT 1\n");
+    assert.ok(found.some((m) => /`runtime` is required for `type: Attested Computation`/.test(m)));
+    const complete = await warnings(
+      "---\ntype: Attested Computation\nruntime: bigquery\n---\n\n# Computation\n\n    SELECT 1\n",
+    );
+    assert.deepEqual(complete, []);
+  });
+
+  it("flags a document carrying both superseded and current provenance", async () => {
+    const both = await warnings(
+      "---\ntype: Note\ntimestamp: '2020-01-01T00:00:00Z'\ngenerated: { by: human:a, at: 2026-06-20T22:53:05Z }\n---\n\nB.\n",
+    );
+    assert.ok(both.some((m) => /both `timestamp` and `generated`/.test(m)));
+    assert.ok(both.some((m) => /repair --only timestamp-to-generated/.test(m)));
+
+    const lists = await warnings(
+      "---\ntype: Note\nsources:\n  - { id: a, resource: https://example.com/a }\n---\n\nB.\n\n" +
+        "# Citations\n\n[1] [Other](https://example.com/b)\n",
+    );
+    assert.ok(lists.some((m) => /both a `# Citations` section and frontmatter `sources`/.test(m)));
+  });
+
+  it("stays silent about a clean v0.1 document, which is still conformant", async () => {
+    const found = await warnings(
+      "---\ntype: Note\ntimestamp: '2026-05-28T22:53:05Z'\n---\n\nB.\n\n" +
+        "# Citations\n\n[1] [Policy](https://example.com/a)\n",
+    );
+    assert.deepEqual(found, []);
+  });
+
+  it("names the migration when a bundle declaring v0.2 still holds v0.1 documents", async () => {
+    const found = await warnings(
+      "---\ntype: Note\ntimestamp: '2026-05-28T22:53:05Z'\n---\n\nB.\n\n" +
+        "# Citations\n\n[1] [Policy](https://example.com/a)\n",
+      { "index.md": '---\nokf_version: "0.2"\n---\n\n# Bundle Index\n' },
+    );
+    assert.ok(found.some((m) => /v0\.1 `timestamp` rather than `generated`/.test(m)));
+    assert.ok(found.some((m) => /v0\.1 `# Citations` list rather than frontmatter `sources`/.test(m)));
+    for (const message of found) {
+      assert.match(message, /repair --only (timestamp-to-generated|citations-to-sources)/);
+    }
+  });
+});

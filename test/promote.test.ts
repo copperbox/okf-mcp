@@ -71,15 +71,27 @@ describe("promoteConcept", () => {
     assert.deepEqual(promoted?.frontmatter.tags, ["style"]);
     assert.match(promoted?.body ?? "", /snake_case/);
 
-    // The stub redirects: resource + §8 citation on the canonical location,
-    // and the inbound link still resolves (to the stub).
+    // The stub redirects: resource + a §5.1 `sources` entry naming the
+    // canonical location, and the inbound link still resolves (to the stub).
     const projAfter = await loadBundle({ id: "proj", root: projRoot });
     const stub = projAfter.concepts.get("notes/naming");
     assert.equal(stub?.frontmatter.type, "Standard");
     assert.equal(stub?.frontmatter.title, "Naming");
     assert.equal(stub?.frontmatter.resource, "okf://org/standards/naming.md");
-    assert.match(stub?.body ?? "", /# Citations/);
-    assert.match(stub?.body ?? "", /\[1\] \[Naming\]\(okf:\/\/org\/standards\/naming\.md\)/);
+    assert.deepEqual(stub?.frontmatter.sources, [
+      {
+        id: "promoted-copy",
+        resource: "okf://org/standards/naming.md",
+        title: "Naming",
+      },
+    ]);
+    // The `sources` entry resolves as a §6.2 frontmatter link, so the promoted
+    // copy stays reachable in the graph without a body citation list.
+    assert.equal(
+      stub?.frontmatterLinks.find((l) => l.field === "sources[0].resource")?.kind,
+      "external",
+    );
+    assert.doesNotMatch(stub?.body ?? "", /# Citations/);
     const setup = projAfter.concepts.get("guides/setup");
     assert.equal(
       setup?.links.find((l) => l.kind === "concept")?.resolvedId,
@@ -199,12 +211,13 @@ describe("promoteConcept between colocated siblings", () => {
 
     const stub = (await load("proj")).concepts.get("notes/naming");
     assert.equal(stub?.frontmatter.resource, "okf://org/standards/naming.md");
-    assert.match(
-      stub?.body ?? "",
-      /\[1\] \[Naming\]\(\.\.\/\.\.\/org\/standards\/naming\.md\)/,
+    assert.equal(
+      (stub?.frontmatter.sources as { resource: string }[])[0]?.resource,
+      "../../org/standards/naming.md",
     );
-    // The stub's link parses as an outside link into the sibling bundle.
-    const outside = stub?.links.find((l) => l.kind === "outside");
+    // The stub's `sources` path parses as an outside link into the sibling
+    // bundle, exactly as the body citation link used to.
+    const outside = stub?.frontmatterLinks.find((l) => l.kind === "outside");
     assert.equal(outside?.path, "../org/standards/naming.md");
   });
 

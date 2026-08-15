@@ -5,7 +5,13 @@ description: The node:test setup, fixture-versus-tmpdir styles, shared helpers,
   and the rule that features ship with tests.
 tags:
   - testing
-timestamp: 2026-08-14T01:22:19.236Z
+generated:
+  by: okf-mcp/1.3.0
+  at: 2026-08-14T01:22:19.236Z
+sources:
+  - id: test
+    resource: https://github.com/copperbox/okf-mcp/tree/main/test
+    title: test/
 ---
 
 Tests use Node's built-in `node:test` via tsx (`npm test` = `node --import tsx --test test/*.test.ts`) with `node:assert/strict`. No jest/vitest, no mocking library, no coverage tooling. One test file per `src/` module, plus `test/package.test.ts` as a release guard (see [release process](release-process.md)).
@@ -22,7 +28,3 @@ Shared infrastructure in `test/`:
 - `server.test.ts` connects a real MCP `Client` to `createOkfServer` over an in-memory transport pair.
 
 House rule visible in history: **every feature commit ships its tests in the same commit** — no `src/` change lands without a matching `test/` change apart from docs/CI-only commits.
-
-# Citations
-
-[1] [test/](https://github.com/copperbox/okf-mcp/tree/main/test)

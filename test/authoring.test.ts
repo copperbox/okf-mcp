@@ -75,7 +75,7 @@ describe("authoring", () => {
     );
   });
 
-  it("defaults timestamp to now, between tags and extension keys", async () => {
+  it("defaults generated to now and this server's actor, in its spec-order slot", async () => {
     const before = Date.now();
     await writeConcept(
       root,
@@ -86,18 +86,49 @@ describe("authoring", () => {
     const after = Date.now();
 
     const bundle = await loadBundle({ id: "t", root });
-    const timestamp = bundle.concepts.get("metrics/revenue")?.frontmatter.timestamp;
-    assert.equal(typeof timestamp, "string");
-    assert.match(timestamp as string, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    const written = Date.parse(timestamp as string);
+    const generated = bundle.concepts.get("metrics/revenue")?.frontmatter.generated;
+    assert.equal(typeof generated?.at, "string");
+    assert.match(generated!.at as string, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const written = Date.parse(generated!.at as string);
     assert.ok(written >= before && written <= after);
+    // The §7 `<producer>/<version>` form, never `human:` — the server is not one.
+    assert.match(generated!.by, /^okf-mcp\/\d+\.\d+\.\d+/);
+
+    const source = await fs.readFile(path.join(root, "metrics/revenue.md"), "utf8");
+    const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
+    assert.deepEqual(keys, ["type", "tags", "generated", "owner"]);
+  });
+
+  it("records a caller-supplied actor as generated.by", async () => {
+    await writeConcept(root, "x.md", { type: "Note" }, "Body", {
+      actor: "human:ahormati",
+    });
+    const bundle = await loadBundle({ id: "t", root });
+    assert.equal(
+      bundle.concepts.get("x")?.frontmatter.generated?.by,
+      "human:ahormati",
+    );
+  });
+
+  it("stamps a v0.1 timestamp when writing in the v0.1 vocabulary", async () => {
+    await writeConcept(
+      root,
+      "metrics/revenue.md",
+      { type: "Metric", owner: "data-team", tags: ["finance"] },
+      "Body",
+      { vocabulary: "0.1" },
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    const concept = bundle.concepts.get("metrics/revenue");
+    assert.equal(typeof concept?.frontmatter.timestamp, "string");
+    assert.equal(concept?.frontmatter.generated, undefined);
 
     const source = await fs.readFile(path.join(root, "metrics/revenue.md"), "utf8");
     const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
     assert.deepEqual(keys, ["type", "tags", "timestamp", "owner"]);
   });
 
-  it("preserves a caller-provided timestamp verbatim", async () => {
+  it("preserves a caller-provided timestamp verbatim, without adding generated", async () => {
     await writeConcept(
       root,
       "x.md",
@@ -105,23 +136,44 @@ describe("authoring", () => {
       "Body",
     );
     const bundle = await loadBundle({ id: "t", root });
-    assert.equal(bundle.concepts.get("x")?.frontmatter.timestamp, "2020-05-04T00:00:00Z");
+    const frontmatter = bundle.concepts.get("x")?.frontmatter;
+    assert.equal(frontmatter?.timestamp, "2020-05-04T00:00:00Z");
+    // Writing both vocabularies into one document is exactly the half-migrated
+    // state the validator warns about; an explicit key must not produce it.
+    assert.equal(frontmatter?.generated, undefined);
   });
 
-  it("refreshes the timestamp when an update omits it", async () => {
+  it("preserves a caller-provided generated record verbatim", async () => {
     await writeConcept(
       root,
       "x.md",
-      { type: "Note", timestamp: "2020-01-01T00:00:00Z" },
+      {
+        type: "Note",
+        generated: { by: "human:ahormati", at: "2020-05-04T00:00:00Z" },
+      },
+      "Body",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+    assert.deepEqual(bundle.concepts.get("x")?.frontmatter.generated, {
+      by: "human:ahormati",
+      at: "2020-05-04T00:00:00Z",
+    });
+  });
+
+  it("refreshes generated when a rewrite omits it", async () => {
+    await writeConcept(
+      root,
+      "x.md",
+      { type: "Note", generated: { by: "human:x", at: "2020-01-01T00:00:00Z" } },
       "Old body",
     );
     const before = Date.now();
     await writeConcept(root, "x.md", { type: "Note" }, "New body");
 
     const bundle = await loadBundle({ id: "t", root });
-    const timestamp = bundle.concepts.get("x")?.frontmatter.timestamp;
-    assert.equal(typeof timestamp, "string");
-    assert.ok(Date.parse(timestamp as string) >= before);
+    const at = bundle.concepts.get("x")?.frontmatter.generated?.at;
+    assert.equal(typeof at, "string");
+    assert.ok(Date.parse(at as string) >= before);
   });
 
   it("patches frontmatter keys, preserving untouched keys, comments, and the body byte-for-byte", async () => {
@@ -132,12 +184,12 @@ describe("authoring", () => {
     const bundle = await loadBundle({ id: "t", root });
 
     const result = await updateConcept(bundle, "tables/orders", {
-      frontmatter: { title: "Order Facts", status: "active", owner: null },
+      frontmatter: { title: "Order Facts", status: "deprecated", owner: null },
     });
     assert.equal(result.id, "tables/orders");
     assert.equal(result.path, "tables/orders.md");
     assert.equal(result.title, "Order Facts");
-    assert.deepEqual(result.updatedKeys, ["title", "status", "timestamp"]);
+    assert.deepEqual(result.updatedKeys, ["title", "status", "generated"]);
     assert.deepEqual(result.deletedKeys, ["owner"]);
 
     const source = await fs.readFile(path.join(root, "tables/orders.md"), "utf8");
@@ -186,7 +238,7 @@ describe("authoring", () => {
     assert.ok(Date.parse(timestamp as string) >= before);
   });
 
-  it("gives a concept without a timestamp one in its spec-order slot", async () => {
+  it("gives a concept without provenance a generated key in its spec-order slot", async () => {
     const original =
       "---\n# provenance note\ntype: Table\ntags:\n  - sales\nowner: data-team\n---\n\nBody.\n";
     await fs.writeFile(path.join(root, "orders.md"), original);
@@ -197,7 +249,27 @@ describe("authoring", () => {
     const source = await fs.readFile(path.join(root, "orders.md"), "utf8");
     assert.match(source, /# provenance note\ntype: Table\n/);
     const keys = [...source.matchAll(/^(\w+):/gm)].map((match) => match[1]);
-    assert.deepEqual(keys, ["type", "tags", "timestamp", "owner"]);
+    assert.deepEqual(keys, ["type", "tags", "generated", "owner"]);
+  });
+
+  it("keeps refreshing timestamp in a bundle written in the v0.1 vocabulary", async () => {
+    // The bundle declares v0.1, so a v0.2-aware server must not start writing
+    // `generated` into it (spec §13.1 keeps `timestamp` readable, not mixable).
+    await fs.writeFile(path.join(root, "index.md"), '---\nokf_version: "0.1"\n---\n\n# Index\n');
+    await fs.writeFile(
+      path.join(root, "orders.md"),
+      "---\ntype: Table\ntimestamp: 2020-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+    const bundle = await loadBundle({ id: "t", root });
+
+    const before = Date.now();
+    const result = await updateConcept(bundle, "orders", { frontmatter: { owner: "core" } });
+    assert.deepEqual(result.updatedKeys, ["owner", "timestamp"]);
+
+    const reloaded = await loadBundle({ id: "t", root });
+    const frontmatter = reloaded.concepts.get("orders")?.frontmatter;
+    assert.ok(Date.parse(frontmatter?.timestamp as string) >= before);
+    assert.equal(frontmatter?.generated, undefined);
   });
 
   it("lets an explicit timestamp in the patch win over the refresh", async () => {
@@ -211,14 +283,30 @@ describe("authoring", () => {
     assert.equal(reloaded.concepts.get("x")?.frontmatter.timestamp, "1999-12-31T23:59:59Z");
   });
 
-  it("deletes the timestamp on explicit null instead of refreshing it", async () => {
+  it("deletes generated on explicit null instead of refreshing it", async () => {
     await writeConcept(root, "x.md", { type: "Note" }, "Body");
     const bundle = await loadBundle({ id: "t", root });
 
-    const result = await updateConcept(bundle, "x", { frontmatter: { timestamp: null } });
-    assert.deepEqual(result.deletedKeys, ["timestamp"]);
+    const result = await updateConcept(bundle, "x", { frontmatter: { generated: null } });
+    assert.deepEqual(result.deletedKeys, ["generated"]);
     const source = await fs.readFile(path.join(root, "x.md"), "utf8");
-    assert.doesNotMatch(source, /timestamp/);
+    assert.doesNotMatch(source, /generated/);
+  });
+
+  it("keepGenerated preserves the existing stamp byte-for-byte", async () => {
+    const original =
+      "---\ntype: Note\ngenerated: { by: human:ahormati, at: 2020-01-01T00:00:00Z } # by hand\n---\n\n# A\n\nOld.\n";
+    await fs.writeFile(path.join(root, "x.md"), original);
+    const bundle = await loadBundle({ id: "t", root });
+
+    const result = await updateConcept(bundle, "x", {
+      frontmatter: { owner: "core" },
+      section: { heading: "A", content: "New." },
+      keepGenerated: true,
+    });
+    assert.deepEqual(result.updatedKeys, ["owner"]);
+    const source = await fs.readFile(path.join(root, "x.md"), "utf8");
+    assert.match(source, /generated: \{ by: human:ahormati, at: 2020-01-01T00:00:00Z \} # by hand\n/);
   });
 
   it("keepTimestamp preserves the existing timestamp byte-for-byte", async () => {
@@ -294,7 +382,7 @@ describe("authoring", () => {
       frontmatter: { title: "X2" },
       section: { heading: "A", content: "New one." },
     });
-    assert.deepEqual(result.updatedKeys, ["title", "timestamp"]);
+    assert.deepEqual(result.updatedKeys, ["title", "generated"]);
     assert.equal(result.replacedSection, "A");
     const source = await fs.readFile(path.join(root, "x.md"), "utf8");
     assert.match(source, /title: X2/);
@@ -672,7 +760,7 @@ describe("authoring", () => {
     assert.deepEqual(skipped, []);
 
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
-    assert.match(rootIndex, /okf_version: "0.1"/);
+    assert.match(rootIndex, /okf_version: "0.2"/);
     // Directory entries link to the subdirectory's index file, not the bare
     // directory — trailing-slash links do not resolve in Obsidian.
     assert.match(rootIndex, /\[tables\]\(tables\/index\.md\)/);
@@ -725,7 +813,7 @@ describe("authoring", () => {
     await generateIndexes(bundle);
 
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf8");
-    assert.match(rootIndex, /okf_version: "0.1"/);
+    assert.match(rootIndex, /okf_version: "0.2"/);
     assert.match(rootIndex, /owner: data-team/);
   });
 
@@ -781,7 +869,7 @@ describe("authoring", () => {
     const rendered = renderIndexes(bundle);
 
     assert.deepEqual([...rendered.keys()].sort(), ["index.md", "tables/index.md"]);
-    assert.match(rendered.get("index.md")!, /okf_version: "0.1"/);
+    assert.match(rendered.get("index.md")!, /okf_version: "0.2"/);
     assert.match(rendered.get("index.md")!, /\[tables\]\(tables\/index\.md\)/);
     assert.match(
       rendered.get("tables/index.md")!,
