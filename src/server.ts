@@ -462,15 +462,39 @@ export function createOkfServer(
     {
       title: "Reload bundles",
       description:
-        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). Reports per-bundle counts and which concept IDs were added, removed, or changed. Without a bundle id, only loaded bundles reload (an unloaded discovered bundle has no stale index); naming an unloaded bundle loads it.",
+        "Re-read bundles from disk to pick up external edits (e.g. a human editing in Obsidian). With no bundle id it also re-runs config discovery, so an okf.config.json added or edited after the server started takes effect: newly declared bundles mount (reported under `mounted` and as an all-added delta), removed ones unmount (`unmounted`), and the rest reload their content. Returns `{ mounted, unmounted, bundles }` (and `notes` when relevant). Naming a bundle id skips discovery and reloads just that bundle, returning its delta directly.",
       inputSchema: {
         bundle: z
           .string()
           .optional()
-          .describe("Bundle ID to reload; omitted reloads all loaded bundles"),
+          .describe(
+            "Bundle ID to reload; omitted reloads all loaded bundles and re-runs config discovery",
+          ),
       },
     },
-    async ({ bundle }) => json(await store.reloadBundles(bundle)),
+    async ({ bundle }) => {
+      if (bundle !== undefined) return json(await store.reloadBundles(bundle));
+      const result = await store.reloadWithRediscovery();
+      // A rediscovered config may have added or removed a colocated root, which
+      // flips get_bundle_guide's visibility.
+      syncBundleGuideTool();
+      const notes = [...result.problems];
+      // hasWritableBundle can only turn true after startup here: a config
+      // declaring a writable bundle at launch already flips the server-wide
+      // gate on. So this fires exactly when re-discovery mounted a writable
+      // bundle the read-only server cannot author until it restarts.
+      if (options.writable !== true && store.hasWritableBundle()) {
+        notes.push(
+          'a mounted bundle declares "writable": true, but this server started read-only; restart it to enable authoring tools for that bundle',
+        );
+      }
+      return json({
+        mounted: result.mounted,
+        unmounted: result.unmounted,
+        ...(notes.length > 0 && { notes }),
+        bundles: result.stats,
+      });
+    },
   );
 
   const remoteBundleSummary = async (id: string, url: string) => {

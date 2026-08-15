@@ -130,6 +130,133 @@ describe("OkfStore.reloadBundles", () => {
   });
 });
 
+describe("OkfStore.reloadWithRediscovery", () => {
+  let a: string;
+  let b: string;
+  beforeEach(async () => {
+    a = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    b = await fs.mkdtemp(path.join(os.tmpdir(), "okf-store-test-"));
+    await writeDoc(a, "one.md", "type: Note", "One.");
+    await writeDoc(b, "two.md", "type: Note", "Two.");
+  });
+  afterEach(async () => {
+    await fs.rm(a, { recursive: true, force: true });
+    await fs.rm(b, { recursive: true, force: true });
+  });
+
+  it("mounts a bundle a config change added, reported as all-added and queryable", async () => {
+    const configs = [{ id: "a", root: a }];
+    const store = new OkfStore(configs, {
+      rediscover: async () => [
+        { id: "a", root: a },
+        { id: "b", root: b },
+      ],
+    });
+    await store.load();
+    assert.deepEqual(store.bundles().map((bundle) => bundle.id), ["a"]);
+
+    const result = await store.reloadWithRediscovery();
+    assert.deepEqual(result.mounted, ["b"]);
+    assert.deepEqual(result.unmounted, []);
+    assert.deepEqual(result.problems, []);
+    const bStat = result.stats.find((s) => s.bundle === "b");
+    assert.deepEqual(bStat?.added, ["two"]);
+    // The newly mounted bundle is now readable through the store.
+    assert.equal((await store.getConcept("b", "two"))?.frontmatter.type, "Note");
+    assert.equal(store.bundles().length, 2);
+  });
+
+  it("unmounts a bundle no longer declared, reported as all-removed", async () => {
+    const store = new OkfStore(
+      [
+        { id: "a", root: a },
+        { id: "b", root: b },
+      ],
+      { rediscover: async () => [{ id: "a", root: a }] },
+    );
+    await store.load();
+
+    const result = await store.reloadWithRediscovery();
+    assert.deepEqual(result.mounted, []);
+    assert.deepEqual(result.unmounted, ["b"]);
+    const bStat = result.stats.find((s) => s.bundle === "b");
+    assert.deepEqual(bStat?.removed, ["two"]);
+    assert.deepEqual(store.bundles().map((bundle) => bundle.id), ["a"]);
+  });
+
+  it("still refreshes surviving bundles' content on the same call", async () => {
+    const store = new OkfStore([{ id: "a", root: a }], {
+      rediscover: async () => [{ id: "a", root: a }],
+    });
+    await store.load();
+    await writeDoc(a, "three.md", "type: Note", "Three.");
+
+    const result = await store.reloadWithRediscovery();
+    assert.deepEqual(result.mounted, []);
+    const aStat = result.stats.find((s) => s.bundle === "a");
+    assert.deepEqual(aStat?.added, ["three"]);
+  });
+
+  it("skips a new id that collides with a remote mount, reporting the problem", async () => {
+    const store = new OkfStore([{ id: "a", root: a }], {
+      fetchImpl: fakeGitHub({ "note.md": "---\ntype: Note\n---\n\nShared.\n" }),
+      remotes: [{ id: "shared", url: "https://github.com/acme/kb/tree/main" }],
+      // A config that tries to declare a local bundle named like the remote.
+      rediscover: async () => [
+        { id: "a", root: a },
+        { id: "shared", root: b },
+      ],
+    });
+    await store.load();
+
+    const result = await store.reloadWithRediscovery();
+    assert.deepEqual(result.mounted, []);
+    assert.equal(result.problems.length, 1);
+    assert.match(result.problems[0]!, /shared/);
+    // The remote "shared" is untouched, the local imposter never mounts.
+    assert.equal((await store.getConcept("shared", "note"))?.frontmatter.type, "Note");
+  });
+
+  it("without a rediscover callback behaves like reloadBundles with an empty summary", async () => {
+    const store = new OkfStore([{ id: "a", root: a }]);
+    await store.load();
+    await writeDoc(a, "four.md", "type: Note", "Four.");
+
+    const result = await store.reloadWithRediscovery();
+    assert.deepEqual(result.mounted, []);
+    assert.deepEqual(result.unmounted, []);
+    assert.deepEqual(result.stats.find((s) => s.bundle === "a")?.added, ["four"]);
+  });
+
+  it("reports hasWritableBundle from the live config set", async () => {
+    const store = new OkfStore([{ id: "a", root: a }], {
+      rediscover: async () => [
+        { id: "a", root: a },
+        { id: "b", root: b, writable: true },
+      ],
+    });
+    await store.load();
+    assert.equal(store.hasWritableBundle(), false);
+    await store.reloadWithRediscovery();
+    assert.equal(store.hasWritableBundle(), true);
+  });
+
+  it("keeps current mounts when re-discovery throws, reporting the failure", async () => {
+    const store = new OkfStore([{ id: "a", root: a }], {
+      rediscover: async () => {
+        throw new Error("bad okf.config.json");
+      },
+    });
+    await store.load();
+
+    const result = await store.reloadWithRediscovery();
+    assert.equal(result.problems.length, 1);
+    assert.match(result.problems[0]!, /bad okf\.config\.json/);
+    // The working mount survives a broken config.
+    assert.equal((await store.getConcept("a", "one"))?.frontmatter.type, "Note");
+  });
+});
+
 describe("OkfStore lazy bundles", () => {
   let root: string;
   beforeEach(async () => {

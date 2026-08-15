@@ -57,9 +57,9 @@ export function watchBundles(
   options: WatchBundlesOptions = {},
 ): BundleWatcher {
   const debounceMs = options.debounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
-  const watchers: FSWatcher[] = [];
-  const watching: string[] = [];
+  const watchersById = new Map<string, FSWatcher>();
   const timers = new Map<string, NodeJS.Timeout>();
+  const deferred = new Map<string, BundleConfig>();
   let reloadChain = Promise.resolve();
   let closed = false;
 
@@ -82,6 +82,8 @@ export function watchBundles(
   };
 
   const startWatching = (config: BundleConfig): void => {
+    // Idempotent: rediscovery may re-announce a bundle already watched.
+    if (watchersById.has(config.id)) return;
     try {
       const root = path.resolve(config.root);
       // fs.watch on a missing path no longer throws on newer Node (it
@@ -97,38 +99,59 @@ export function watchBundles(
         },
       );
       watcher.on("error", (err) => options.onError?.(config.id, err as Error));
-      watchers.push(watcher);
-      watching.push(config.id);
+      watchersById.set(config.id, watcher);
     } catch (err) {
       options.onError?.(config.id, err as Error);
     }
   };
 
+  // Stop watching a bundle a config change removed: close its watcher and
+  // cancel any pending reload, so a vanished mount no longer fires reloads for
+  // an id the store would reject as unknown.
+  const stopWatching = (bundleId: string): void => {
+    deferred.delete(bundleId);
+    clearTimeout(timers.get(bundleId));
+    timers.delete(bundleId);
+    watchersById.get(bundleId)?.close();
+    watchersById.delete(bundleId);
+  };
+
   const discovered = new Set(store.discoveredBundles().map((d) => d.id));
-  const deferred = new Map<string, BundleConfig>();
   for (const config of configs) {
     if (discovered.has(config.id)) deferred.set(config.id, config);
     else startWatching(config);
   }
-  const unsubscribe =
-    deferred.size > 0
-      ? store.onHydrate((bundle) => {
-          if (closed) return;
-          const config = deferred.get(bundle.id);
-          if (config === undefined) return;
-          deferred.delete(bundle.id);
-          startWatching(config);
-        })
-      : undefined;
+  const unsubscribeHydrate = store.onHydrate((bundle) => {
+    if (closed) return;
+    const config = deferred.get(bundle.id);
+    if (config === undefined) return;
+    deferred.delete(bundle.id);
+    startWatching(config);
+  });
+  // Rediscovery (reload_bundles re-running config discovery) can mount, move,
+  // or unmount local bundles after startup; keep the watched set in step.
+  const unsubscribeMount = store.onMountChange((change) => {
+    if (closed) return;
+    for (const id of change.removed) stopWatching(id);
+    for (const config of change.changed) {
+      stopWatching(config.id);
+      startWatching(config);
+    }
+    for (const config of change.added) startWatching(config);
+  });
 
   return {
-    watching,
+    get watching() {
+      return [...watchersById.keys()];
+    },
     close() {
       closed = true;
-      unsubscribe?.();
+      unsubscribeHydrate();
+      unsubscribeMount();
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
-      for (const watcher of watchers) watcher.close();
+      for (const watcher of watchersById.values()) watcher.close();
+      watchersById.clear();
     },
   };
 }

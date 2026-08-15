@@ -94,6 +94,41 @@ export interface OkfStoreOptions {
   colocatedRemoteRoots?: ColocatedRemoteRootConfig[];
   /** Injectable fetch for remote bundles (tests). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * Re-resolve the local bundle set from disk (config files + CLI flag
+   * overlays), used by reloadWithRediscovery to pick up an `okf.config.json`
+   * added or edited after the server started. Returns the full set of local
+   * `BundleConfig`s the current configuration would mount; the store diffs it
+   * against what is mounted and adds/removes/updates accordingly. Omitted when
+   * mounts are fixed for the process (one-shot commands, tests).
+   */
+  rediscover?: () => Promise<BundleConfig[]>;
+}
+
+/** Result of a rediscovery reload: which local bundles the config change
+ * mounted or unmounted, plus the per-bundle content deltas (mounted bundles
+ * appear as all-added, unmounted as all-removed). */
+export interface RediscoverReloadResult {
+  /** Local bundle ids newly mounted from a config change. */
+  mounted: string[];
+  /** Local bundle ids no longer declared, now unmounted. */
+  unmounted: string[];
+  /** Non-fatal issues (a re-discovery error, an id-collision skip). */
+  problems: string[];
+  /** Per-bundle reload deltas, covering mounted, unmounted, and refreshed bundles. */
+  stats: BundleReloadStats[];
+}
+
+/**
+ * How reloadWithRediscovery changed the local mount set, for listeners that
+ * track mounts (e.g. `--watch`, which starts/stops watching directories).
+ * `changed` carries the new config of a bundle whose declaration changed (a new
+ * root, say) so a watcher can move to the new location.
+ */
+export interface MountChange {
+  added: BundleConfig[];
+  removed: string[];
+  changed: BundleConfig[];
 }
 
 /** A mounted colocated remote root: its bundle ids and root AGENTS.md guide. */
@@ -155,7 +190,9 @@ export interface DiscoveredBundle {
  *   siblings only; edges into a discovered bundle appear once it hydrates.
  * - reloadBundle(id) on a discovered bundle hydrates it; the no-arg
  *   reloadBundles() covers loaded bundles only.
- * - onHydrate lets `--watch` start watching a bundle when it loads.
+ * - onHydrate lets `--watch` start watching a bundle when it loads, and
+ *   onMountChange lets it follow bundles that reloadWithRediscovery mounts or
+ *   unmounts mid-session.
  */
 export class OkfStore {
   private loaded = new Map<string, LoadedBundle>();
@@ -167,6 +204,7 @@ export class OkfStore {
   /** In-flight lazy loads, so concurrent first accesses share one parse. */
   private readonly hydrating = new Map<string, Promise<LoadedBundle>>();
   private readonly hydrateListeners: ((bundle: LoadedBundle) => void)[] = [];
+  private readonly mountChangeListeners: ((change: MountChange) => void)[] = [];
   private readonly remotes = new Map<string, RemoteBundleConfig>();
   private readonly colocatedRoots = new Map<string, ColocatedRemoteRootConfig>();
   private readonly colocatedMounts = new Map<
@@ -174,14 +212,18 @@ export class OkfStore {
     { bundleIds: string[]; agentsGuide?: string }
   >();
   private readonly fetchImpl: typeof fetch;
+  /** Re-resolves the local bundle set from disk; see reloadWithRediscovery. */
+  private readonly rediscoverImpl?: () => Promise<BundleConfig[]>;
   /** Set by load(); queries before it get a call-load-first error. */
   private loadedOnce = false;
 
   constructor(
-    private readonly configs: BundleConfig[],
+    /** Local bundle mounts; mutated by reloadWithRediscovery as config files change. */
+    private configs: BundleConfig[],
     options: OkfStoreOptions = {},
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.rediscoverImpl = options.rediscover;
     const byId = new Map<string, BundleConfig | RemoteBundleConfig>();
     for (const config of [...configs, ...(options.remotes ?? [])]) {
       const existing = byId.get(config.id);
@@ -358,6 +400,20 @@ export class OkfStore {
     };
   }
 
+  /**
+   * Register a listener called after reloadWithRediscovery changes the local
+   * mount set — a config file added, removed, or edited a bundle. Lets `--watch`
+   * start watching newly mounted directories and stop watching removed ones.
+   * Returns an unsubscribe function.
+   */
+  onMountChange(listener: (change: MountChange) => void): () => void {
+    this.mountChangeListeners.push(listener);
+    return () => {
+      const index = this.mountChangeListeners.indexOf(listener);
+      if (index >= 0) this.mountChangeListeners.splice(index, 1);
+    };
+  }
+
   /** First load of a discovered bundle; concurrent callers share one parse. */
   private hydrate(id: string): Promise<LoadedBundle> {
     const inflight = this.hydrating.get(id);
@@ -474,6 +530,91 @@ export class OkfStore {
       }
     }
     return stats;
+  }
+
+  /** True when any mounted local bundle declares `writable: true` — the
+   * config-derived half of the server-wide authoring gate. */
+  hasWritableBundle(): boolean {
+    return this.configs.some((c) => c.writable === true);
+  }
+
+  /**
+   * Re-resolve local mounts from disk, then reload. Unlike reloadBundles this
+   * picks up an `okf.config.json` added or edited after startup: the injected
+   * `rediscover` callback returns the local bundle set the current config would
+   * mount, and the store diffs it against what is mounted — new bundles load
+   * (reported all-added), vanished ones unmount (all-removed), and a bundle
+   * whose config changed (new root, writability) reloads from the new config.
+   * Every still-present bundle also reloads its content, exactly as the no-arg
+   * reloadBundles does. With no `rediscover` configured this is reloadBundles
+   * with an empty mounted/unmounted summary.
+   */
+  async reloadWithRediscovery(): Promise<RediscoverReloadResult> {
+    const mounted: string[] = [];
+    const unmounted: string[] = [];
+    const problems: string[] = [];
+    const preStats: BundleReloadStats[] = [];
+    const addedConfigs: BundleConfig[] = [];
+    const changedConfigs: BundleConfig[] = [];
+    if (this.rediscoverImpl !== undefined) {
+      let next: BundleConfig[] | undefined;
+      try {
+        next = await this.rediscoverImpl();
+      } catch (err) {
+        // A broken config must not tear down a working index: keep the current
+        // mounts and report the problem rather than reloading into nothing.
+        problems.push(`re-discovery failed: ${(err as Error).message}`);
+      }
+      if (next !== undefined) {
+        const nextById = new Map(next.map((c) => [c.id, c]));
+        const currentById = new Map(this.configs.map((c) => [c.id, c]));
+        // Removals: mounted now, absent from the fresh config.
+        for (const [id] of currentById) {
+          if (nextById.has(id)) continue;
+          const previous = this.loaded.get(id);
+          this.loaded.delete(id);
+          this.pending.delete(id);
+          unmounted.push(id);
+          preStats.push(reloadStats(id, previous, undefined));
+        }
+        for (const [id, config] of [...nextById]) {
+          const current = currentById.get(id);
+          if (current === undefined) {
+            // A new local id that collides with a remote or colocated-remote
+            // mount cannot be added — drop it and say so rather than throwing.
+            if (this.remotes.has(id) || this.colocatedRootOf(id) !== undefined) {
+              problems.push(
+                `skipped new bundle "${id}": that id is already mounted from another source`,
+              );
+              nextById.delete(id);
+              continue;
+            }
+            mounted.push(id);
+            addedConfigs.push(config);
+          } else if (JSON.stringify(current) !== JSON.stringify(config)) {
+            // A changed config for a lazily-discovered bundle must take effect:
+            // drop the stale pending entry so the reload below loads it afresh.
+            this.pending.delete(id);
+            changedConfigs.push(config);
+          }
+        }
+        // Newly added configs carry no pending entry, so the reload below loads
+        // them eagerly (all-added) — an explicit reload wants them visible now.
+        this.configs = [...nextById.values()];
+      }
+    }
+    const stats = await this.reloadBundles();
+    // Tell mount listeners (e.g. --watch) once the reload has settled, so a
+    // watcher moves to newly mounted directories and drops removed ones.
+    if (addedConfigs.length + unmounted.length + changedConfigs.length > 0) {
+      const change: MountChange = {
+        added: addedConfigs,
+        removed: unmounted,
+        changed: changedConfigs,
+      };
+      for (const listener of this.mountChangeListeners) listener(change);
+    }
+    return { mounted, unmounted, problems, stats: [...preStats, ...stats] };
   }
 
   bundles(): LoadedBundle[] {

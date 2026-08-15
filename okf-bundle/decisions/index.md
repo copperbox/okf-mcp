@@ -15,5 +15,6 @@
 * [Permissive parsing](permissive-parsing.md) - Malformed documents are reported as problems while every valid concept keeps serving; the parser never throws.
 * [Plain markdown, no database, no embeddings](plain-markdown-no-database.md) - Why the knowledge base is just a directory of markdown with no database or embedding index.
 * [Read-only enforcement in three layers](read-only-enforcement.md) - How writability is enforced at the bundle flag, per-tool assertion, and tool-registration levels, and which commands respect it.
+* [reload_bundles re-runs config discovery](reload-bundles-re-runs-config-discovery.md) - Why the no-argument reload_bundles re-resolves local mounts from disk so a config file added or edited mid-session takes effect without a restart, and the boundaries of that re-discovery.
 * [Remote bundle sandbox](remote-bundle-sandbox.md) - The safety caps and guarantees around loading remote bundles from GitHub trees and archives.
 * [The 1.0 semver surface is three things](semver-surface.md) - What semver covers since 1.0.0 — MCP tools, CLI, and the curated index.ts barrel — and why the barrel was pruned before the bump.

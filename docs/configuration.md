@@ -84,6 +84,8 @@ Mounting it there means every project sees it alongside whatever that project de
 
 A global declaration is launched in **every** directory you open, including ones that configure nothing. That is fine: the server starts and serves an empty set, reporting `serving no bundles over stdio` on stderr and telling the agent that nothing is mounted for this directory. Only the one-shot CLI commands treat having nothing to mount as a usage error, since those were typed deliberately.
 
+Add an `okf.config.json` to such a directory (or edit an existing one) and the running server picks it up on the next `reload_bundles` — no restart needed. The no-argument form re-runs config discovery, so newly declared bundles mount (returned under `mounted`, and as an all-added delta), removed ones unmount (`unmounted`), and the rest reload their content. This re-discovery covers **local** bundles; new remote or colocated-remote mounts still need a restart (or the runtime `load_remote_bundle` tool). One caveat: if the server started read-only and the new config declares a `"writable"` bundle, the reload result says to restart — authoring tools are fixed at launch, so a mid-session bundle becomes writable only on the next start.
+
 ### Writability
 
 Writability is per bundle. `"writable": true` on a bundle enables authoring for it; a file-level `"writable": true` sets the default for every bundle in that file, and a per-bundle value still wins:
@@ -163,6 +165,6 @@ Notes:
 - Omit `--writable` for a read-only server. The flag is server-wide; per-bundle control needs a config file.
 - Flags do not disable discovery — they apply *above* every config layer, so they override rather than replace: a `--bundle` reusing a config file's id wins, and any other configured bundle still mounts. In a directory with no config files anywhere above it, flags are the only source and behave exactly as before. To guarantee that regardless of what config files exist, pass `--no-config` (or set `OKF_NO_CONFIG=1`).
 - Works from a standing start: point `--bundle` at an empty directory with `--writable` and the first `write_concept` creates the folder structure, indexes, and log.
-- `--watch` auto-reloads local bundles when `.md` files change on disk (see [CLI](cli.md)). Without it, call `reload_bundles` after editing bundle files outside the server.
+- `--watch` auto-reloads local bundles when `.md` files change on disk (see [CLI](cli.md)). Without it, call `reload_bundles` after editing bundle files outside the server. When a `reload_bundles` re-discovery mounts a new local bundle (or removes one), `--watch` follows it — it starts watching the new directory and stops watching a removed one.
 
 See also: [multi-bundle setups](multi-bundle.md), [colocated bundles](colocated-bundles.md), [teaching your agent](agent-instructions.md).
