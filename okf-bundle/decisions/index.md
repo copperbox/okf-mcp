@@ -6,6 +6,7 @@
 * [Capture policy lives in agent config, not the server](capture-policy-lives-in-agent-config.md) - The server teaches OKF mechanics but stays unopinionated about when knowledge is captured, and performs no git sync.
 * [Citation normalization shares one code path](citation-normalization.md) - Write-time citation normalization and the after-the-fact repair fixer share the same function so prevention and repair cannot drift.
 * [Bundle mounts layer through okf.config.json](config-file-layering.md) - Why mount declarations moved out of MCP client config into discovered config files, how the layers merge, and the global-declaration deployment shape it enables.
+* [Context-window frugality is server surface](context-window-frugality-is-server-surface.md) - Why the server actively steers agents toward cheap reads, and where those levers live.
 * [Cross-bundle edges are derived, not written](derived-cross-bundle-edges.md) - Why OKF gets no cross-bundle link syntax and how cross-bundle graph edges are derived from spec-clean data instead.
 * [Document-relative links are the recommended form](document-relative-links.md) - Why bundle-absolute links are discouraged and how link parsing and rewriting preserve author intent.
 * [Path-valued frontmatter fields are graph links](frontmatter-paths-are-graph-links.md) - Why the OKF v0.2 §6.2 frontmatter paths resolve into real graph edges, and why top-level `resource` is deliberately left out.

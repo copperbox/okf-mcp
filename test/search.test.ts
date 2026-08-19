@@ -184,6 +184,35 @@ describe("searchConcepts", () => {
     assert.equal(hits[0]?.section, "Trigger");
   });
 
+  it("lists matchedSections when the body matches in more than one section", () => {
+    const body =
+      "# Alpha\n\nA needle here.\n\n# Beta\n\nNothing relevant.\n\n# Gamma\n\nAnother needle.\n";
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/multi", type: "Note", body }])],
+      { query: "needle" },
+    );
+    assert.deepEqual(hits[0]?.matchedSections, ["Alpha", "Gamma"]);
+  });
+
+  it("omits matchedSections when one section matched — `section` already names it", () => {
+    const { hits } = searchConcepts(bundles, { query: "lags more than" });
+    assert.equal(hits[0]?.section, "Trigger");
+    assert.equal("matchedSections" in hits[0]!, false);
+  });
+
+  it("maps matchedSections by the verbatim phrase, not its individual keywords", () => {
+    const body =
+      "# Alpha\n\nthe full needle phrase lives here.\n\n# Beta\n\nOnly the word phrase.\n";
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/phrase", type: "Note", body }])],
+      { query: "needle phrase" },
+    );
+    // Beta contains "phrase" but not the whole query; the phrase match in
+    // Alpha wins, so no matchedSections list is needed.
+    assert.equal(hits[0]?.section, "Alpha");
+    assert.equal("matchedSections" in hits[0]!, false);
+  });
+
   it("omits the section when the body match precedes any heading", () => {
     const body = "The needle sits in the preamble.\n\n# Later\n\nMore text.\n";
     const { hits } = searchConcepts(

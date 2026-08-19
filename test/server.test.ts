@@ -807,6 +807,33 @@ describe("server tools", () => {
     assert.equal("body" in result, false);
   });
 
+  it("get_concept outline returns section shape without the body or links", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      outline: true,
+    })) as {
+      id: string;
+      frontmatter: { type: string };
+      sections: Array<{ heading: string; level: number; chars: number }>;
+    };
+    assert.equal(result.id, "tables/orders");
+    assert.equal(result.frontmatter.type, "BigQuery Table");
+    assert.deepEqual(result.sections.map((s) => s.heading), ["Schema", "Citations"]);
+    assert.equal(result.sections[0]?.level, 1);
+    assert.ok((result.sections[0]?.chars ?? 0) > 0);
+    assert.equal("body" in result, false);
+    assert.equal("links" in result, false);
+  });
+
+  it("get_concept section wins over outline when both are passed", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "Schema",
+      outline: true,
+    })) as { section: { heading: string } };
+    assert.equal(result.section.heading, "Schema");
+  });
+
   it("get_concept rejects an unknown section, listing what is available", async () => {
     const result = await callTool(client, "get_concept", {
       id: "tables/orders",
@@ -1753,6 +1780,14 @@ describe("server instructions", () => {
       "reload_bundles",
       "next page with `offset`",
       "`omitted` count",
+      // Context-frugality guidance: search first, section reads, one-shot orientation.
+      "search_concepts (text plus type/tag/path/link filters) is the entry",
+      "reserve list_concepts",
+      "Read sections, not whole documents",
+      "`matchedSections`",
+      "`outline: true`",
+      "Orient once per session",
+      "subagents that already inherit",
       "index.md",
       "log.md",
       // The v0.2 provenance/lifecycle vocabulary agents are expected to write.
@@ -1772,13 +1807,14 @@ describe("server instructions", () => {
       "instructions should not recommend the bundle-absolute link form",
     );
     // Instructions cost context in every session — keep them short. Raised
-    // from 40 for OKF v0.2: the provenance/trust/lifecycle vocabulary above is
-    // new spec surface an agent cannot write conformant documents without, and
-    // the pre-v0.2 guidance was already compressed to make room for it.
+    // from 40 for OKF v0.2 (provenance/trust/lifecycle vocabulary), then to 48
+    // for the context-frugality guidance (search-first entry point, section
+    // reads, once-per-session orientation) — lines that exist to save far more
+    // context than they cost.
     const lineCount = instructions.split("\n").length;
     assert.ok(
-      lineCount <= 45,
-      `instructions should stay under ~45 lines, got ${lineCount}`,
+      lineCount <= 48,
+      `instructions should stay under ~48 lines, got ${lineCount}`,
     );
     await client.close();
   });

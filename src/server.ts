@@ -144,21 +144,25 @@ bundle is published (GitHub resolves a leading-/ link from the repository root, 
 bundle-absolute links break when the bundle is a repo subfolder).
 index.md and log.md are reserved, generated files.
 
-Reading: orient with graph_summary and list_types / list_tags, narrow with
-search_concepts (text plus type/tag/path/link filters), then read specific concepts
-with get_concept and explore with get_neighbors / find_path — rather than dumping
-every document. search_concepts returns one relevance-sorted page of hits (default
-${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}/page; \`total\` counts every match): when it returns fewer hits than \`total\`
-and the page did not answer the question, request the next page with \`offset\` —
-later pages are strictly less relevant. An \`omitted\` count is low-relevance
-matches suppressed entirely; refine the query or filters rather than paging. When a get_bundle_guide tool is listed, call it before exploring:
-it says what each mounted bundle is for and which to use for what work.
+Reading: search_concepts (text plus type/tag/path/link filters) is the entry
+point; reserve list_concepts for when the whole catalog is genuinely needed.
+Read sections, not whole documents: get_concept's \`section\` argument returns one
+heading's subtree, \`outline: true\` lists sections without the body, and a hit's
+\`section\` / \`matchedSections\` feed \`section\` directly. Explore with
+get_neighbors / find_path. Search returns one relevance-sorted page (default
+${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}/page; \`total\` counts every match): when fewer hits than \`total\` return and
+the page did not answer, request the next page with \`offset\` — later pages are
+strictly less relevant. An \`omitted\` count is low-relevance matches suppressed
+entirely; refine the query or filters rather than paging.
 
-Colocated bundles may be discovered but not loaded yet (lazy mounting):
-list_bundles marks them loaded: false, any tool naming one loads it, and no-arg
-sweeps cover loaded bundles only, noting what they excluded.
-
-If bundle files may have changed outside this server (e.g. a human editing in
+Orient once per session, not once per task: graph_summary, list_types /
+list_tags, list_bundles, and get_bundle_guide (when listed, call it before
+exploring — it says what each mounted bundle is for) rarely change mid-session;
+don't repeat them, and don't re-fire them in subagents that already inherit
+their answers. Colocated bundles may be discovered but not loaded yet (lazy
+mounting): list_bundles marks them loaded: false, any tool naming one loads it,
+and no-arg sweeps cover loaded bundles only, noting what they excluded. If
+bundle files may have changed outside this server (e.g. a human editing in
 Obsidian), call reload_bundles before relying on current state.`;
   const writing = `Writing: call suggest_concept_path before creating a concept so placement matches
 where similar concepts live, and reuse existing types/tags. Prefer update_concept
@@ -376,7 +380,7 @@ export function createOkfServer(
     {
       title: "List bundles",
       description:
-        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose). Bundles with `loaded: false` were discovered under a colocated root but not yet parsed — any tool naming one loads it on the spot.",
+        "List configured OKF bundles with concept counts and each bundle's declared description (its one-line purpose). Bundles with `loaded: false` were discovered under a colocated root but not yet parsed — any tool naming one loads it on the spot. The answer rarely changes mid-session: call once and reuse it rather than re-listing.",
       inputSchema: {},
     },
     async () =>
@@ -435,7 +439,7 @@ export function createOkfServer(
     {
       title: "Get bundle guide",
       description:
-        "Describes what each mounted bundle is for and which to use for what work: each colocated root's AGENTS.md guide in full (read on demand, never truncated) plus every bundle's one-line description. Call before choosing which bundles to search or explore.",
+        "Describes what each mounted bundle is for and which to use for what work: each colocated root's AGENTS.md guide in full (read on demand, never truncated) plus every bundle's one-line description. Call once before choosing which bundles to search or explore — not again once its answer is in context.",
       inputSchema: {
         root: z
           .string()
@@ -665,7 +669,7 @@ export function createOkfServer(
     {
       title: "List concepts",
       description:
-        "List concepts (ID, type, title, description, resource, tags) with optional filtering. Use get_concept for full documents.",
+        "Enumerate concepts (ID, type, title, description, resource, tags) with optional filtering. Prefer search_concepts to find concepts relevant to a task; reach for this only when the whole catalog (or a whole subtree/type) is genuinely needed.",
       inputSchema: {
         bundle: bundleParam,
         pathPrefix: z.string().optional().describe("Concept ID prefix, e.g. tables/"),
@@ -688,7 +692,7 @@ export function createOkfServer(
     {
       title: "Get concept",
       description:
-        "Read one concept document: frontmatter, markdown body, outgoing links, and its body section headings. Pass `section` to fetch one section instead of the whole body.",
+        "Read one concept document: frontmatter, markdown body, outgoing links, and its body section headings. Prefer partial reads over the full document: `section` fetches one heading's subtree, `outline: true` fetches the document's shape (section headings with sizes) without the body.",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
@@ -698,13 +702,31 @@ export function createOkfServer(
           .describe(
             "Body section heading (case-insensitive), e.g. Schema; returns just that section (including its subsections) instead of the full body",
           ),
+        outline: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return the document's shape instead of its body: frontmatter plus each section's heading, level, and content size in characters — cheap section discovery before fetching one with `section`",
+          ),
       },
       _meta: entryPointMeta,
     },
-    async ({ bundle, id, section }) => {
+    async ({ bundle, id, section, outline }) => {
       const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
-      const sections = splitSections(concept.body).map((s) => s.heading);
+      const split = splitSections(concept.body);
+      const sections = split.map((s) => s.heading);
+      if (outline === true && section === undefined) {
+        const { body: _body, links: _links, ...rest } = concept;
+        return json({
+          ...rest,
+          sections: split.map((s) => ({
+            heading: s.heading,
+            level: s.level,
+            chars: s.content.length,
+          })),
+        });
+      }
       if (section === undefined) return json({ ...concept, sections });
       const match = extractSection(concept.body, section);
       if (!match) {
@@ -805,7 +827,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `Structured search over concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names where the match lives — \`section\` (and \`matchedSections\` when several matched) feed get_concept's \`section\` argument directly, so read those sections rather than whole documents. Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()

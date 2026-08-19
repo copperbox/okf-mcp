@@ -1,4 +1,4 @@
-import { deriveTitle, sectionAt } from "./parser.js";
+import { deriveTitle, sectionAt, splitSections } from "./parser.js";
 import { conceptStatus, isStale, trustTier } from "./provenance.js";
 import type { ConceptStatus, Concept, LoadedBundle, TrustTier } from "./types.js";
 
@@ -84,6 +84,13 @@ export interface SearchHit {
   snippet?: string;
   /** Heading of the section enclosing the first body match, when inside one. */
   section?: string;
+  /**
+   * Headings of every section containing a body match, in document order.
+   * Present only when more than one section matched — otherwise `section`
+   * already names the only one. Each entry (like `section`) can be passed to
+   * get_concept's `section` argument to read just that section.
+   */
+  matchedSections?: string[];
   /** Lifecycle status, defaulted to `stable` when undeclared (spec §5.4). */
   status: ConceptStatus;
   /** Trust tier derived from `verified` (spec §5.3). */
@@ -240,6 +247,26 @@ function bodyAnchor(
   return best;
 }
 
+/**
+ * Headings of every section containing a body match, in document order — the
+ * section-level map of a match. Like bodyAnchor, the whole phrase wins when it
+ * appears verbatim (individual keywords like "more" would flag unrelated
+ * sections); otherwise any matched keyword counts. Each heading is a valid
+ * get_concept `section` argument, so a reader can fetch just the matching
+ * sections instead of the whole document.
+ */
+function sectionsMatching(body: string, terms: string[], matchedTerms: string[]): string[] {
+  const phrase = terms.length > 1 ? terms.join(" ") : undefined;
+  const needles =
+    phrase !== undefined && body.toLowerCase().includes(phrase) ? [phrase] : matchedTerms;
+  const headings: string[] = [];
+  for (const section of splitSections(body)) {
+    const text = `${section.heading}\n${section.content}`.toLowerCase();
+    if (needles.some((needle) => text.includes(needle))) headings.push(section.heading);
+  }
+  return headings;
+}
+
 const TAG_HINT_LIMIT = 10;
 
 /**
@@ -332,6 +359,7 @@ export function searchConcepts(
       let matchedIn: MatchField[] | undefined;
       let snippet: string | undefined;
       let section: string | undefined;
+      let matchedSections: string[] | undefined;
       if (terms.length > 0) {
         const match = score(concept, terms, requireAll);
         if (match === undefined) continue;
@@ -344,6 +372,8 @@ export function searchConcepts(
             snippet = extractSnippet(concept.body, anchor.match, anchor.index);
             section = sectionAt(concept.body, anchor.index);
           }
+          const sections = sectionsMatching(concept.body, terms, match.matchedTerms);
+          if (sections.length > 1) matchedSections = sections;
         }
       }
       scored.push({
@@ -368,6 +398,7 @@ export function searchConcepts(
           ...(matchedIn !== undefined && { matchedIn }),
           ...(snippet !== undefined && { snippet }),
           ...(section !== undefined && { section }),
+          ...(matchedSections !== undefined && { matchedSections }),
         },
       });
     }

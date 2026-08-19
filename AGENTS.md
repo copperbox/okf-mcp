@@ -5,6 +5,10 @@ This project keeps a persistent knowledge base (the "brain") behind the `okf` MC
 - Before starting non-trivial work, check the brain: orient with `graph_summary`, then
   `search_concepts` for anything related to the task, and treat what you find as prior
   context.
+- Read the brain frugally: a search hit names the matching `section` (or
+  `matchedSections`) — fetch just that with `get_concept`'s `section` argument rather
+  than whole documents — and orientation calls (`graph_summary`, `list_bundles`,
+  `get_bundle_guide`) belong once per session, not once per step or per subagent.
 - When you learn something durable — a decision and its rationale, a gotcha, how a
   system actually works, a convention worth keeping — record it before finishing:
   call `suggest_concept_path` to pick a placement, then `write_concept`. Prefer
