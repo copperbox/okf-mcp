@@ -85,10 +85,12 @@ export interface SearchHit {
   /** Heading of the section enclosing the first body match, when inside one. */
   section?: string;
   /**
-   * Headings of every section containing a body match, in document order.
-   * Present only when more than one section matched — otherwise `section`
-   * already names the only one. Each entry (like `section`) can be passed to
-   * get_concept's `section` argument to read just that section.
+   * Headings of the sections the body match maps to, in document order:
+   * sections containing the verbatim query phrase when it appears, otherwise
+   * sections containing any matched keyword. Present only when more than one
+   * section matched — otherwise `section` already names the only one. Each
+   * entry (like `section`) can be passed to get_concept's `section` argument
+   * to read just that section.
    */
   matchedSections?: string[];
   /** Lifecycle status, defaulted to `stable` when undeclared (spec §5.4). */
@@ -225,13 +227,13 @@ function isLowSurrogate(text: string, index: number): boolean {
 /**
  * Where to anchor the body snippet: the whole phrase when it appears
  * verbatim, otherwise the earliest occurrence of any matched keyword.
+ * Takes the pre-lowercased body so callers pay for the copy once per hit.
  */
 function bodyAnchor(
-  body: string,
+  bodyLower: string,
   terms: string[],
   matchedTerms: string[],
 ): { index: number; match: string } | undefined {
-  const bodyLower = body.toLowerCase();
   if (terms.length > 1) {
     const phrase = terms.join(" ");
     const idx = bodyLower.indexOf(phrase);
@@ -248,17 +250,24 @@ function bodyAnchor(
 }
 
 /**
- * Headings of every section containing a body match, in document order — the
- * section-level map of a match. Like bodyAnchor, the whole phrase wins when it
- * appears verbatim (individual keywords like "more" would flag unrelated
- * sections); otherwise any matched keyword counts. Each heading is a valid
- * get_concept `section` argument, so a reader can fetch just the matching
- * sections instead of the whole document.
+ * The section-level map of a body match, in document order. When the whole
+ * query phrase appears verbatim in the body, only sections containing the
+ * phrase count (individual keywords like "more" would flag unrelated
+ * sections); otherwise sections containing any matched keyword count — the
+ * same rule bodyAnchor applies. Each heading is a valid get_concept `section`
+ * argument, so a reader can fetch just the matching sections instead of the
+ * whole document. Takes the pre-lowercased body alongside the original so
+ * callers pay for the copy once per hit.
  */
-function sectionsMatching(body: string, terms: string[], matchedTerms: string[]): string[] {
+function sectionsMatching(
+  body: string,
+  bodyLower: string,
+  terms: string[],
+  matchedTerms: string[],
+): string[] {
   const phrase = terms.length > 1 ? terms.join(" ") : undefined;
   const needles =
-    phrase !== undefined && body.toLowerCase().includes(phrase) ? [phrase] : matchedTerms;
+    phrase !== undefined && bodyLower.includes(phrase) ? [phrase] : matchedTerms;
   const headings: string[] = [];
   for (const section of splitSections(body)) {
     const text = `${section.heading}\n${section.content}`.toLowerCase();
@@ -367,12 +376,18 @@ export function searchConcepts(
         matchedTermCount = match.matchedTerms.length;
         matchedIn = match.matchedIn;
         if (matchedIn.includes("body")) {
-          const anchor = bodyAnchor(concept.body, terms, match.matchedTerms);
+          const bodyLower = concept.body.toLowerCase();
+          const anchor = bodyAnchor(bodyLower, terms, match.matchedTerms);
           if (anchor !== undefined) {
             snippet = extractSnippet(concept.body, anchor.match, anchor.index);
             section = sectionAt(concept.body, anchor.index);
           }
-          const sections = sectionsMatching(concept.body, terms, match.matchedTerms);
+          const sections = sectionsMatching(
+            concept.body,
+            bodyLower,
+            terms,
+            match.matchedTerms,
+          );
           if (sections.length > 1) matchedSections = sections;
         }
       }
