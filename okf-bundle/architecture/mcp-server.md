@@ -7,7 +7,7 @@ tags:
   - mcp
 generated:
   by: okf-mcp/1.3.0
-  at: 2026-08-14T21:18:23.093Z
+  at: 2026-08-19T21:13:54.515Z
 sources:
   - id: src-server-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/server.ts
@@ -28,7 +28,8 @@ sources:
 
 ## Wiring details worth remembering
 
-- Server **instructions** are composed from a shared OKF primer plus a writing block (only when writable) plus colocated-root `AGENTS.md` bundle guides, each budgeted at 4 000 characters — past that the server warns and injects a truncated guide pointing at `get_bundle_guide`. With **no bundles mounted** an extra block is prepended telling the agent that this is configuration, not an empty knowledge base (see [config-file layering](../decisions/config-file-layering.md)); a test caps the mounted instructions at ~40 lines.
+- Server **instructions** are composed from a shared OKF primer plus a writing block (only when writable) plus colocated-root `AGENTS.md` bundle guides, each budgeted at 4 000 characters — past that the server warns and injects a truncated guide pointing at `get_bundle_guide`. Since 1.4.0 the primer is context-frugality-first: search_concepts is named the entry point (list_concepts reserved for whole-catalog needs), section reads are preferred over whole documents, and orientation tools (graph_summary, list_types/list_tags, list_bundles, get_bundle_guide) are once-per-session — not to be re-fired in subagents that inherit context. With **no bundles mounted** an extra block is prepended telling the agent that this is configuration, not an empty knowledge base (see [config-file layering](../decisions/config-file-layering.md)); a test caps the mounted instructions at ~48 lines.
+- `get_concept` supports three read granularities: full document, one `section` subtree, and `outline: true` (frontmatter plus each section's heading/level/char count, no body or links) — pick the smallest that answers. search_concepts hits point into them via `section`/`matchedSections`.
 - `ServerOptions.writable` gates whether the authoring tools are registered at all; whether a *particular* write is allowed is `assertWritableBundle`, reading `LoadedBundle.readOnly`. Remote bundles are always read-only, and a local bundle is too when its config declares [`"writable": false`](../decisions/per-bundle-writability.md) — so the instructions tell agents to check `list_bundles`' `readOnly` before planning a write.
 - `get_bundle_guide` is dynamically enabled: hidden when no colocated root is mounted, `enable()`d (firing `tools/list_changed`) when a runtime mount introduces the first root.
 - `get_concept` and `search_concepts` carry `_meta["anthropic/alwaysLoad"]: true` so deferred-loading clients keep those schemas resident.

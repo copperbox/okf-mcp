@@ -1,5 +1,11 @@
 # Update Log
 
+## 2026-08-19
+* New decision: context-window frugality is server surface (1.4.0)
+* mcp-server: instructions rewritten context-frugality-first, get_concept outline mode (1.4.0)
+* search-scoring: documented matchedSections section-level match reporting (1.4.0)
+* Recorded matchedSections: body-matched hits now map to section headings (1.4.0)
+
 ## 2026-08-15
 * Migration to OKF 0.2 (okf-mcp migrate): citations-to-sources (28 files), timestamp-to-generated (29 files)
 * Record that --watch tracks rediscovered mounts via onMountChange
