@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-08-25
+* Record the separate trunks toggle
 * visualize: cross-bundle edges go quiet, gain rim ticks, hover emphasis, and bundle-pair trunks at overview zoom (1.5.0)
 * Point the html-rendering clause at the new cross-bundle rendering decision
 * Record the three-layer cross-bundle treatment in the graph html export

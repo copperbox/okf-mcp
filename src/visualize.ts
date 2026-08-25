@@ -151,6 +151,7 @@ export function exportGraphHtml(
     <h2>Layers</h2>
     <label class="ctl"><input type="checkbox" id="opt-intra" checked>intra-bundle</label>
     <label class="ctl"><input type="checkbox" id="opt-cross" checked>cross-bundle</label>
+    <label class="ctl"><input type="checkbox" id="opt-trunks" checked>trunks</label>
     <label class="ctl"><input type="checkbox" id="opt-arrows" checked>arrows</label>
     <label class="ctl"><input type="checkbox" id="opt-labels" checked>labels</label>
     <label class="ctl-range">cross-bundle opacity
@@ -338,6 +339,7 @@ export function exportGraphHtml(
   // there is nothing to invalidate and no change listeners to keep in sync.
   const optIntra = document.getElementById("opt-intra");
   const optCross = document.getElementById("opt-cross");
+  const optTrunks = document.getElementById("opt-trunks");
   const optArrows = document.getElementById("opt-arrows");
   const optLabels = document.getElementById("opt-labels");
   const optCrossAlpha = document.getElementById("opt-cross-alpha");
@@ -417,8 +419,12 @@ export function exportGraphHtml(
     // mesh nobody can read, so they trade places with one trunk per community
     // pair: detail is the individual lines' share of the layer and
     // 1 - detail is the trunks', crossing over across a narrow band of zoom
-    // so neither pops in.
-    const detail = Math.min(Math.max((view.k - 0.85) / 0.5, 0), 1);
+    // so neither pops in. Turning trunks off opts out of the trade entirely:
+    // pinning detail to 1 keeps every individual line at full strength at any
+    // zoom, and the trunk pass below never runs because it is the complement.
+    const detail = optTrunks.checked
+      ? Math.min(Math.max((view.k - 0.85) / 0.5, 0), 1)
+      : 1;
     for (const e of edges) {
       // Fully faded out means there is nothing to draw and nothing to compute,
       // including the arrowhead.

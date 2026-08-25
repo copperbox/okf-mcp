@@ -12,7 +12,7 @@ tags:
 status: stable
 generated:
   by: okf-mcp/1.4.0
-  at: 2026-08-25T17:12:46.783Z
+  at: 2026-08-25T18:07:14.366Z
 ---
 
 A large colocated export is mostly cross-bundle edges. The original renderer gave
@@ -66,10 +66,16 @@ cross-bundle story.
 
 ## Escape hatches
 
-A LAYERS block in the panel toggles `intra-bundle`, `cross-bundle`, `arrows`, and
-`labels` independently and sets the cross-bundle opacity. Two fixes ride along
-with it: edges always render beneath nodes, and arrowheads are suppressed below
-`view.k < 1`, where a filled triangle reads as noise rather than direction.
+A LAYERS block in the panel toggles `intra-bundle`, `cross-bundle`, `trunks`,
+`arrows`, and `labels` independently and sets the cross-bundle opacity.
 
-Related: [Cross-bundle edges are derived, not written](./derived-cross-bundle-edges.md),
-[CLI surface](../architecture/cli.md).
+`trunks` is separate from `cross-bundle` on purpose: the trunk view is lossy, so
+opting out of the semantic zoom must not mean opting out of the layer. Switching
+it off pins `detail` to 1, which restores every individual cross-bundle line at
+any zoom and stops the trunk pass through its existing `detail < 1` guard. Rim
+ticks and the hover emphasis answer to `cross-bundle` alone, so hiding the
+aggregate never hides a node's own outside links.
+
+Two fixes ride along with the block: edges always render beneath nodes, and
+arrowheads are suppressed below `view.k < 1`, where a filled triangle reads as
+noise rather than direction.

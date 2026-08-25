@@ -163,12 +163,13 @@ describe("exportGraphHtml", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     // The controls sit in #panel directly below the legend.
     assert.match(html, /<div id="legend"><\/div>\s*<div id="controls">/);
-    // Four checkboxes, every one of them on by default.
-    for (const id of ["opt-intra", "opt-cross", "opt-arrows", "opt-labels"]) {
+    // Five checkboxes, every one of them on by default.
+    for (const id of ["opt-intra", "opt-cross", "opt-trunks", "opt-arrows", "opt-labels"]) {
       assert.match(html, new RegExp(`<input type="checkbox" id="${id}" checked>`));
     }
     assert.match(html, /id="opt-intra" checked>intra-bundle</);
     assert.match(html, /id="opt-cross" checked>cross-bundle</);
+    assert.match(html, /id="opt-trunks" checked>trunks</);
     assert.match(html, /id="opt-arrows" checked>arrows</);
     assert.match(html, /id="opt-labels" checked>labels</);
     // The opacity slider's range and default: it sets the quiet base alpha
@@ -252,8 +253,12 @@ describe("exportGraphHtml", () => {
 
   it("cross-fades individual cross-bundle edges against the trunks on zoom", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
-    // One threshold shared by both halves: 0 below k = 0.85, 1 at k = 1.35.
-    assert.match(html, /const detail = Math\.min\(Math\.max\(\(view\.k - 0\.85\) \/ 0\.5, 0\), 1\);/);
+    // One threshold shared by both halves: 0 below k = 0.85, 1 at k = 1.35 —
+    // unless trunks are switched off, which pins it to 1 at every zoom.
+    assert.match(
+      html,
+      /const detail = optTrunks\.checked\s*\? Math\.min\(Math\.max\(\(view\.k - 0\.85\) \/ 0\.5, 0\), 1\)\s*: 1;/,
+    );
     // Individual cross edges scale by detail and are skipped outright at zero.
     assert.match(html, /if \(e\.cross && detail === 0\) continue;/);
     assert.match(html, /ctx\.globalAlpha = e\.cross \? style\.alpha \* detail : style\.alpha;/);
@@ -276,6 +281,21 @@ describe("exportGraphHtml", () => {
     const nodePass = html.indexOf("for (const n of nodes) {\n      ctx.globalAlpha = fade(n);");
     assert.ok(trunks < loud && loud < nodePass);
     assert.doesNotMatch(html, /if \(optCross\.checked && \(hovered \|\| selected\) && detail/);
+  });
+
+  it("lets the trunks be switched off without losing the cross-bundle layer", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Its own checkbox, independent of the cross-bundle layer it aggregates.
+    assert.match(html, /id="opt-trunks" checked>trunks</);
+    assert.match(html, /const optTrunks = document\.getElementById\("opt-trunks"\);/);
+    // Off pins detail to 1, which is what restores the individual lines at
+    // every zoom — and the trunk pass, gated on detail < 1, stops running.
+    assert.match(html, /: 1;/);
+    assert.match(html, /if \(optCross\.checked && detail < 1 && crossPairs\.length\) \{/);
+    // The rim ticks and the hover emphasis answer to opt-cross, not opt-trunks,
+    // so hiding the aggregate never hides a node's own outside links.
+    assert.doesNotMatch(html, /optTrunks\.checked && \(hovered \|\| selected\)/);
+    assert.doesNotMatch(html, /n\.crossDegree > 0 && optTrunks\.checked/);
   });
 
   it("labels each trunk with its edge count on a dark disc", () => {
