@@ -139,22 +139,172 @@ describe("exportGraphHtml", () => {
     assert.match(html, /click the legend to focus a community/);
   });
 
-  it("emphasizes cross-bundle edges and draws direction arrowheads", () => {
+  it("keeps cross-bundle edges quiet by default and draws direction arrowheads", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
-    // Cross-bundle edges get the d3 reference treatment: bright gold instead
-    // of the old muted amber, more opaque and wider than intra-bundle links,
-    // keeping the screen-space-constant dash pattern.
-    assert.match(html, /#f2b705/);
-    assert.doesNotMatch(html, /#e0b45c/);
-    assert.match(html, /\(e\.cross \? 0\.9 : 0\.55\) \* a/);
-    assert.match(html, /\(e\.cross \? 1\.6 : 1\) \/ view\.k/);
-    assert.match(html, /\[5 \/ view\.k, 4 \/ view\.k\]/);
+    // Cross-bundle edges are the quietest layer: desaturated gold, thin, and
+    // with the slider value as their base alpha rather than a multiplier on a
+    // hardcoded one.
+    assert.match(html, /const base = e\.cross \? Number\(optCrossAlpha\.value\) : 0\.55;/);
+    assert.match(html, /alpha: base \* a,/);
+    assert.match(html, /color: e\.cross \? "#8a7a45" : "#7d8590",/);
+    assert.match(html, /\(e\.cross \? 1\.1 : 1\) \/ view\.k/);
+    // No dash anywhere: it is invisible at overview scale and only adds ink.
+    assert.doesNotMatch(html, /setLineDash/);
+    assert.doesNotMatch(html, /\[5 \/ view\.k, 4 \/ view\.k\]/);
     // Every edge ends in a filled triangle at the target, backed off by the
     // node radius so it is not buried under the circle, sized in screen
     // space, and sharing the edge's color and fade alpha.
     assert.match(html, /arrowhead/i);
     assert.match(html, /radius\(e\.target\)/);
     assert.match(html, /ctx\.closePath\(\);\s*ctx\.fill\(\);/);
+  });
+
+  it("offers layer controls with sane defaults below the legend", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // The controls sit in #panel directly below the legend.
+    assert.match(html, /<div id="legend"><\/div>\s*<div id="controls">/);
+    // Four checkboxes, every one of them on by default.
+    for (const id of ["opt-intra", "opt-cross", "opt-arrows", "opt-labels"]) {
+      assert.match(html, new RegExp(`<input type="checkbox" id="${id}" checked>`));
+    }
+    assert.match(html, /id="opt-intra" checked>intra-bundle</);
+    assert.match(html, /id="opt-cross" checked>cross-bundle</);
+    assert.match(html, /id="opt-arrows" checked>arrows</);
+    assert.match(html, /id="opt-labels" checked>labels</);
+    // The opacity slider's range and default: it sets the quiet base alpha
+    // directly, so the default is the quiet 0.16 and the top of the range
+    // stops short of full opacity.
+    assert.match(html, /cross-bundle opacity/);
+    assert.match(
+      html,
+      /<input type="range" id="opt-cross-alpha" min="0\.02" max="0\.9" step="0\.02" value="0\.16">/,
+    );
+    // A switched-off layer is skipped entirely rather than drawn faintly.
+    assert.match(html, /if \(!\(e\.cross \? optCross : optIntra\)\.checked\) return null;/);
+    assert.match(html, /const style = edgeStyle\(e\);\s*if \(!style\) continue;/);
+    // The slider still composes with the legend-focus / selection / search
+    // fade rather than replacing it.
+    assert.match(html, /alpha: base \* a,/);
+    // Arrowheads are off below 1:1 regardless of the toggle; labels keep the
+    // existing zoom threshold on top of theirs.
+    assert.match(html, /const arrows = optArrows\.checked && view\.k >= 1;/);
+    assert.match(html, /if \(optLabels\.checked && view\.k > 1\.4\) \{/);
+    // Edges still draw strictly beneath the nodes.
+    assert.ok(html.indexOf("const style = edgeStyle(e);") < html.indexOf("for (const n of nodes) {\n      ctx.globalAlpha = fade(n);"));
+    // A long legend scrolls on its own so the controls stay reachable — but
+    // only vertically; a long community name is clipped, not scrolled.
+    assert.match(html, /#legend \{ max-height: 40vh; overflow-y: auto; overflow-x: hidden; \}/);
+    assert.match(html, /toggle layers in the panel/);
+  });
+
+  it("brings back the cross-bundle edges of the hovered or selected node", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Hover counts alongside selection for edge emphasis.
+    assert.match(
+      html,
+      /return e\.cross && \(e\.source === hovered \|\| e\.target === hovered \|\|\s*e\.source === selected \|\| e\.target === selected\);/,
+    );
+    // Bright gold, near-opaque, and wider than the quiet pass.
+    assert.match(html, /ctx\.globalAlpha = 0\.95;\s*ctx\.strokeStyle = "#f2b705";\s*ctx\.lineWidth = 1\.8 \/ view\.k;/);
+    // Skipped entirely when the cross-bundle layer is off or nothing is
+    // hovered or selected.
+    assert.match(html, /if \(optCross\.checked && \(hovered \|\| selected\)\) \{/);
+    // Drawn after the quiet edge pass but before the nodes.
+    const quiet = html.indexOf("const style = edgeStyle(e);");
+    const loud = html.indexOf("if (!emphasized(e)) continue;");
+    const nodePass = html.indexOf("for (const n of nodes) {\n      ctx.globalAlpha = fade(n);");
+    assert.ok(quiet < loud && loud < nodePass);
+  });
+
+  it("marks nodes with outside links with a gold rim tick sized by cross-degree", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Cross-degree is counted where degree is counted.
+    assert.match(html, /degree: 0, crossDegree: 0 \}/);
+    assert.match(html, /if \(cross\) \{ source\.crossDegree \+= 1; target\.crossDegree \+= 1; \}/);
+    // Drawn only for nodes with outside links, and only while the layer is on.
+    assert.match(html, /if \(n\.crossDegree > 0 && optCross\.checked\) \{/);
+    // Swept by cross-degree, capped short of a full ring.
+    assert.match(html, /const sweep = Math\.min\(0\.4 \+ 0\.5 \* Math\.sqrt\(n\.crossDegree\), 2\.4\);/);
+    // Offset and weight are world units like the radius, not screen units, so
+    // the tick shrinks with the node at overview scale.
+    assert.match(html, /ctx\.lineWidth = Math\.max\(1\.4, 0\.3 \* r\);/);
+    assert.match(html, /ctx\.arc\(n\.x, n\.y, r \+ 0\.5, -Math\.PI \/ 2 - sweep \/ 2, -Math\.PI \/ 2 \+ sweep \/ 2\);/);
+    // It inherits the node's fade alpha rather than setting its own.
+    const tick = html.indexOf("if (n.crossDegree > 0 && optCross.checked) {");
+    assert.equal(html.slice(tick, html.indexOf("}", tick)).includes("globalAlpha"), false);
+  });
+
+  it("groups cross-bundle edges into one trunk per community pair", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // Grouped once at startup, by unordered community pair, counting members.
+    assert.match(html, /const a = ca < cb \? ca : cb;\s*const b = ca < cb \? cb : ca;/);
+    assert.match(html, /pair = \{ a, b, count: 0 \}/);
+    assert.match(html, /pair\.count \+= 1;/);
+    // A cross-bundle edge whose endpoints share a community has no pair.
+    assert.match(html, /if \(ca === cb\) continue;/);
+    // Centroids are recomputed per frame rather than read back out of step(),
+    // which stops running once alpha decays.
+    assert.match(html, /function centroids\(\) \{/);
+    assert.match(html, /for \(const c of acc\.values\(\)\) \{ c\.x \/= c\.count; c\.y \/= c\.count; \}/);
+    // Two centroids on the same point draw nothing.
+    assert.match(html, /if \(dx \* dx \+ dy \* dy < 1\) continue;/);
+  });
+
+  it("cross-fades individual cross-bundle edges against the trunks on zoom", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // One threshold shared by both halves: 0 below k = 0.85, 1 at k = 1.35.
+    assert.match(html, /const detail = Math\.min\(Math\.max\(\(view\.k - 0\.85\) \/ 0\.5, 0\), 1\);/);
+    // Individual cross edges scale by detail and are skipped outright at zero.
+    assert.match(html, /if \(e\.cross && detail === 0\) continue;/);
+    assert.match(html, /ctx\.globalAlpha = e\.cross \? style\.alpha \* detail : style\.alpha;/);
+    // Trunks scale by the complement. The tuned constant is free to move, the
+    // shape of the expression is not.
+    assert.match(html, /const alpha = [\d.]+ \* \(1 - detail\) \* pairFade\(p\);/);
+    // Gold, round-capped, width by sqrt(count) in screen space.
+    assert.match(html, /ctx\.strokeStyle = "#f2b705";\s*ctx\.lineCap = "round";/);
+    assert.match(html, /ctx\.lineWidth = \([\d.]+ \+ [\d.]+ \* Math\.sqrt\(p\.count\)\) \/ view\.k;/);
+    assert.match(html, /ctx\.lineCap = "butt";/);
+    // The trunk layer rides the cross-bundle checkbox and vanishes once the
+    // individual edges are at full strength.
+    assert.match(html, /if \(optCross\.checked && detail < 1 && crossPairs\.length\) \{/);
+    // Legend focus uses the same either-endpoint rule as the edges.
+    assert.match(html, /focused !== null && p\.a !== focused && p\.b !== focused \? 0\.12 : 1/);
+    // Trunks sit under the nodes, and the hover/select emphasis pass is not
+    // gated behind the zoom so drill-down survives at overview scale.
+    const trunks = html.indexOf("if (optCross.checked && detail < 1 && crossPairs.length) {");
+    const loud = html.indexOf("if (optCross.checked && (hovered || selected)) {");
+    const nodePass = html.indexOf("for (const n of nodes) {\n      ctx.globalAlpha = fade(n);");
+    assert.ok(trunks < loud && loud < nodePass);
+    assert.doesNotMatch(html, /if \(optCross\.checked && \(hovered \|\| selected\) && detail/);
+  });
+
+  it("labels each trunk with its edge count on a dark disc", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // The count is drawn at the trunk midpoint, at a fixed screen size.
+    assert.match(html, /labels\.push\(\{ x: \(a\.x \+ b\.x\) \/ 2, y: \(a\.y \+ b\.y\) \/ 2, text: String\(p\.count\), alpha \}\);/);
+    assert.match(html, /ctx\.font = 11 \/ view\.k \+ "px system-ui, sans-serif";/);
+    assert.match(html, /ctx\.textBaseline = "middle";/);
+    // On its own disc in the page background color, so it stays legible where
+    // the midpoint lands over a cluster.
+    assert.match(html, /ctx\.fillStyle = "#11151c";\s*ctx\.beginPath\(\);\s*ctx\.arc\(l\.x, l\.y, \(7 \+ 3 \* \(l\.text\.length - 1\)\) \/ view\.k, 0, 2 \* Math\.PI\);/);
+    assert.match(html, /ctx\.fillText\(l\.text, l\.x, l\.y\);/);
+    // The baseline is put back so the node label pass is unaffected.
+    assert.match(html, /ctx\.textBaseline = "alphabetic";/);
+    assert.match(html, /zoom out for bundle-pair trunks/);
+  });
+
+  it("draws no trunks for a graph with a single community", () => {
+    const single: ConceptGraph = {
+      nodes: [node({ id: "a" }), node({ id: "b" })],
+      edges: [{ from: "a", to: "b", kind: "cross-bundle" }],
+      warnings: [],
+    };
+    const html = exportGraphHtml(single, { communityOf: communityAssigner("bundle") });
+    const data = embeddedGraphData(html);
+    // Both endpoints land in one community, so the pair loop skips the only
+    // cross edge and the trunk pass has nothing to iterate.
+    assert.deepEqual(new Set(data.nodes.map((n) => n.community)), new Set(["brain"]));
+    assert.match(html, /if \(ca === cb\) continue;/);
   });
 
   it("includes a search box that filters case-insensitively on id, title, and tags", () => {

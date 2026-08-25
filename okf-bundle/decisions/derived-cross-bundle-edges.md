@@ -8,8 +8,8 @@ tags:
   - links
   - bundles
 generated:
-  by: okf-mcp/1.3.0
-  at: 2026-08-14T01:19:53.725Z
+  by: okf-mcp/1.4.0
+  at: 2026-08-25T17:12:58.936Z
 sources:
   - id: src-canonical-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/canonical.ts
@@ -17,6 +17,9 @@ sources:
   - id: src-graph-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/graph.ts
     title: src/graph.ts
+verified:
+  by: claude-opus-5
+  at: 2026-08-25T17:20:00Z
 ---
 
 OKF §6 links resolve within one bundle, and the project deliberately adds **no new cross-bundle link syntax** — that would make bundles unreadable by anything but this server. Instead, cross-bundle graph edges (`kind: "cross-bundle"`) are *derived, read-only* from data that is already spec-clean:
@@ -28,6 +31,6 @@ Consequences:
 
 - Such references classify as `concept` rather than `missing`; `validate` warns on a dangling `../` into a mounted sibling — in a body link or in a frontmatter path, which names the offending field — while unmounted folders stay silent.
 - A URL that derived a cross-bundle edge is not also emitted as an external node.
-- `graph_summary` reports `crossBundleEdges`; `get_neighbors`/`find_path`/`export_graph` accept `crossBundle: true`, namespacing node IDs as `bundle:concept`; derived edges render dashed in dot/mermaid and gold in the HTML view.
+- `graph_summary` reports `crossBundleEdges`; `get_neighbors`/`find_path`/`export_graph` accept `crossBundle: true`, namespacing node IDs as `bundle:concept`; derived edges render dashed in dot/mermaid, and the HTML view gives them [their own quiet/aggregated treatment](./cross-bundle-edges-in-the-html-view.md).
 - The recommended way to reference across bundles by hand is a `sources` entry with the other bundle's canonical URL (a `# Citations` entry in a v0.1 bundle), or a `references/` stub concept when a real edge matters; `promote_concept` leaves exactly such a stub behind when moving a concept between bundles, in whichever vocabulary the source bundle uses.
 - Limitation: GitHub refs containing `/` are unsupported in canonical URLs.

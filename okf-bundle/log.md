@@ -1,5 +1,10 @@
 # Update Log
 
+## 2026-08-25
+* visualize: cross-bundle edges go quiet, gain rim ticks, hover emphasis, and bundle-pair trunks at overview zoom (1.5.0)
+* Point the html-rendering clause at the new cross-bundle rendering decision
+* Record the three-layer cross-bundle treatment in the graph html export
+
 ## 2026-08-19
 * New decision: context-window frugality is server surface (1.4.0)
 * mcp-server: instructions rewritten context-frugality-first, get_concept outline mode (1.4.0)
