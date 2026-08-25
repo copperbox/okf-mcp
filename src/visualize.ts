@@ -647,17 +647,33 @@ export function exportGraphHtml(
   }
 
   let pressed = null;
+  let pressAt = null;
   let panFrom = null;
   let moved = false;
+  // No click is perfectly still: a mouse drifts a pixel or two between press
+  // and release, and pinning the node there reheated the simulation, so
+  // selecting anything shoved the whole graph around. Nothing drags or pans
+  // until the pointer clears this radius in screen pixels — and clearing it is
+  // also what makes a gesture a drag rather than a click.
+  const DRAG_SLOP = 4;
   canvas.addEventListener("mousedown", (ev) => {
     moved = false;
+    panFrom = null;
+    pressAt = { x: ev.offsetX, y: ev.offsetY };
     pressed = nodeAt(ev.offsetX, ev.offsetY);
-    if (pressed) dragging = pressed;
-    else panFrom = { x: ev.offsetX - view.x, y: ev.offsetY - view.y };
   });
   canvas.addEventListener("mousemove", (ev) => {
-    if (dragging) {
+    if (pressAt && !moved) {
+      const dx = ev.offsetX - pressAt.x;
+      const dy = ev.offsetY - pressAt.y;
+      if (dx * dx + dy * dy < DRAG_SLOP * DRAG_SLOP) return;
       moved = true;
+      // The anchor is taken here rather than at mousedown so the view does not
+      // jump by the slop radius the moment a pan begins.
+      if (pressed) dragging = pressed;
+      else panFrom = { x: ev.offsetX - view.x, y: ev.offsetY - view.y };
+    }
+    if (dragging) {
       const p = toWorld(ev.offsetX, ev.offsetY);
       dragging.x = p.x;
       dragging.y = p.y;
@@ -666,7 +682,6 @@ export function exportGraphHtml(
       return;
     }
     if (panFrom) {
-      moved = true;
       view.x = ev.offsetX - panFrom.x;
       view.y = ev.offsetY - panFrom.y;
       hideTooltip();
@@ -678,18 +693,18 @@ export function exportGraphHtml(
     else hideTooltip();
   });
   window.addEventListener("mouseup", () => {
-    // Only clicks that began on the canvas (pressed or panFrom set) may
-    // rebuild the details panel: a mouseup elsewhere — notably on the
-    // panel's own link — must not replaceChildren() mid-click, which would
-    // detach the anchor before its click activation and swallow the
-    // navigation.
-    if (!moved && (pressed || panFrom)) {
+    // Only clicks that began on the canvas (pressAt set) may rebuild the
+    // details panel: a mouseup elsewhere — notably on the panel's own link —
+    // must not replaceChildren() mid-click, which would detach the anchor
+    // before its click activation and swallow the navigation.
+    if (!moved && pressAt) {
       if (pressed) selected = selected === pressed ? null : pressed;
       else { selected = null; setFocus(null); }
       renderDetails();
     }
     dragging = null;
     pressed = null;
+    pressAt = null;
     panFrom = null;
   });
   canvas.addEventListener("wheel", (ev) => {

@@ -283,6 +283,24 @@ describe("exportGraphHtml", () => {
     assert.doesNotMatch(html, /if \(optCross\.checked && \(hovered \|\| selected\) && detail/);
   });
 
+  it("does not drag or reheat the simulation until the pointer clears the slop", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // mousedown only records where the press landed; it starts no gesture.
+    assert.match(html, /const DRAG_SLOP = 4;/);
+    assert.match(html, /pressAt = \{ x: ev\.offsetX, y: ev\.offsetY \};/);
+    assert.doesNotMatch(html, /pressed = nodeAt\(ev\.offsetX, ev\.offsetY\);\s*if \(pressed\) dragging = pressed;/);
+    // Both drag and pan begin only once the pointer clears the radius, and the
+    // pan anchor is taken there so the view does not jump by the slop.
+    assert.match(html, /if \(dx \* dx \+ dy \* dy < DRAG_SLOP \* DRAG_SLOP\) return;/);
+    assert.match(
+      html,
+      /moved = true;[\s\S]{0,200}if \(pressed\) dragging = pressed;\s*else panFrom = \{ x: ev\.offsetX - view\.x, y: ev\.offsetY - view\.y \};/,
+    );
+    // A press that never clears the radius is still a click on mouseup.
+    assert.match(html, /if \(!moved && pressAt\) \{/);
+    assert.match(html, /pressAt = null;/);
+  });
+
   it("explains the rim tick and every edge color in a key below the layers", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     // The key sits below the layer controls, not above them.
