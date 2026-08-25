@@ -116,8 +116,18 @@ export function exportGraphHtml(
      rather than buying a second, horizontal scrollbar. */
   #legend { max-height: 40vh; overflow-y: auto; overflow-x: hidden; }
   #controls { margin-top: 8px; padding-top: 8px; border-top: 1px solid #30363d; }
-  #controls h2 { margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  #controls h2, #key h2 { margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     text-transform: uppercase; color: #8b949e; }
+  #key { margin-top: 8px; padding-top: 8px; border-top: 1px solid #30363d;
+    color: #8b949e; font-size: 11px; }
+  .key-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .key-mark { flex: none; width: 16px; display: flex; justify-content: center; }
+  .key-line { width: 16px; height: 2px; border-radius: 1px; }
+  .key-trunk { width: 16px; height: 5px; border-radius: 3px; background: #f2b705; opacity: 0.5; }
+  /* The rim tick is an arc on a circle in the canvas; inset on a round div is
+     the cheap CSS equivalent, so the key looks like what it labels. */
+  .key-node { width: 11px; height: 11px; border-radius: 50%; background: #7d8590;
+    box-shadow: inset 0 3px 0 #f2b705; }
   .ctl { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
   .ctl input { accent-color: #58a6ff; margin: 0; }
   .ctl-range { display: block; padding-top: 4px; color: #8b949e; font-size: 11px; cursor: pointer; }
@@ -157,6 +167,19 @@ export function exportGraphHtml(
     <label class="ctl-range">cross-bundle opacity
       <input type="range" id="opt-cross-alpha" min="0.02" max="0.9" step="0.02" value="0.16">
     </label>
+  </div>
+  <div id="key">
+    <h2>Key</h2>
+    <div class="key-row"><span class="key-mark"><span class="key-node"></span></span>
+      has links outside its bundle (arc grows with count)</div>
+    <div class="key-row"><span class="key-mark"><span class="key-line" style="background:#7d8590"></span></span>
+      link inside a bundle</div>
+    <div class="key-row"><span class="key-mark"><span class="key-line" style="background:#8a7a45"></span></span>
+      link between bundles</div>
+    <div class="key-row"><span class="key-mark"><span class="key-line" style="background:#f2b705"></span></span>
+      links of the hovered or selected node</div>
+    <div class="key-row"><span class="key-mark"><span class="key-trunk"></span></span>
+      one bundle pair, zoomed out (number = links)</div>
   </div>
 </div>
 <div id="details"></div>

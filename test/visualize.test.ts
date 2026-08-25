@@ -283,6 +283,29 @@ describe("exportGraphHtml", () => {
     assert.doesNotMatch(html, /if \(optCross\.checked && \(hovered \|\| selected\) && detail/);
   });
 
+  it("explains the rim tick and every edge color in a key below the layers", () => {
+    const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
+    // The key sits below the layer controls, not above them.
+    assert.ok(html.indexOf('<div id="controls">') < html.indexOf('<div id="key">'));
+    assert.match(html, /<div id="key">\s*<h2>Key<\/h2>/);
+    // Every swatch color is one the renderer actually draws with.
+    assert.match(html, /class="key-line" style="background:#7d8590"/);
+    assert.match(html, /class="key-line" style="background:#8a7a45"/);
+    assert.match(html, /class="key-line" style="background:#f2b705"/);
+    assert.match(html, /\.key-trunk \{[^}]*background: #f2b705;/);
+    // The rim tick swatch is a gold cap on a round node, like the canvas arc.
+    assert.match(html, /\.key-node \{[^}]*border-radius: 50%;[^}]*box-shadow: inset 0 3px 0 #f2b705;/);
+    for (const label of [
+      "has links outside its bundle",
+      "link inside a bundle",
+      "link between bundles",
+      "links of the hovered or selected node",
+      "one bundle pair, zoomed out",
+    ]) {
+      assert.ok(html.includes(label), label);
+    }
+  });
+
   it("lets the trunks be switched off without losing the cross-bundle layer", () => {
     const html = exportGraphHtml(graph, { communityOf: communityAssigner("type") });
     // Its own checkbox, independent of the cross-bundle layer it aggregates.
