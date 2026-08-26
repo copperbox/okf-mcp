@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cross-bundle edge clutter: five variations</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #000; color: #fff; }
+  body { font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 940px; margin: 0 auto; padding: 28px 18px 80px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 17px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h3 { font-size: 13px; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: 0.08em; color: #9aa3ad; }
+  p { margin: 0 0 10px; }
+  .sub { color: #9aa3ad; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    background: #141414; border: 1px solid #262626; border-radius: 4px; padding: 0 4px; }
+  pre { background: #0b0b0b; border: 1px solid #232323; border-radius: 8px; padding: 10px 12px;
+    overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    color: #d6dbe1; }
+  section.variant { border: 1px solid #232323; border-radius: 10px; padding: 16px; margin: 0 0 18px;
+    background: #060606; }
+  .tag { display: inline-block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    border: 1px solid #333; border-radius: 999px; padding: 1px 8px; color: #9aa3ad; margin-left: 6px;
+    vertical-align: 2px; }
+  .tag.win { border-color: #3d5c2a; color: #a5d06a; }
+  .tag.mid { border-color: #5c4a1a; color: #e0b64a; }
+  .tag.big { border-color: #5c2a2a; color: #e08a8a; }
+  canvas { width: 100%; height: 250px; display: block; border: 1px solid #1d1d1d; border-radius: 8px;
+    background: #08090b; margin: 10px 0 8px; }
+  .cap { color: #7d8590; font-size: 12.5px; margin: 0 0 12px; }
+  ul { margin: 0 0 10px; padding-left: 18px; }
+  li { margin-bottom: 4px; }
+  .cols { display: flex; flex-wrap: wrap; gap: 16px; }
+  .cols > div { flex: 1 1 260px; min-width: 240px; }
+  .cols h3 { margin-top: 0; }
+  #zoombar { position: sticky; top: 0; z-index: 5; background: rgba(0,0,0,0.92);
+    border-bottom: 1px solid #232323; padding: 10px 18px; display: flex; align-items: center;
+    gap: 12px; flex-wrap: wrap; backdrop-filter: blur(4px); }
+  #zoombar label { font-size: 13px; color: #9aa3ad; }
+  #zoom { flex: 1 1 220px; accent-color: #f2b705; }
+  #zoomval { font-family: ui-monospace, monospace; font-size: 12.5px; color: #f2b705; min-width: 92px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 0 0 10px; }
+  th, td { border-bottom: 1px solid #232323; text-align: left; padding: 7px 8px; vertical-align: top; }
+  th { color: #9aa3ad; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .rec { border: 1px solid #3d5c2a; background: #0a0f06; border-radius: 10px; padding: 16px; }
+  .nojs { border: 1px solid #5c4a1a; background: #0f0c04; border-radius: 8px; padding: 10px 12px;
+    color: #e0b64a; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="zoombar">
+  <label for="zoom">Simulated zoom (all diagrams below react)</label>
+  <input type="range" id="zoom" min="0.45" max="2.2" step="0.01" value="0.6">
+  <span id="zoomval">k = 0.60</span>
+</div>
+<main>
+
+<h1>Cross-bundle edges are eating the canvas</h1>
+<p class="sub">Five ways to fix the zoomed-out view of a large colocated bundle graph, with live mock renders.
+All diagrams share one synthetic graph: 6 bundles, 96 concepts, 74 cross-bundle links. Drag the zoom
+slider at the top to see how each option behaves at overview vs. reading distance.</p>
+
+<h3>What actually goes wrong</h3>
+<p>In <code>src/visualize.ts</code> the edge pass runs before the node pass, but every cross-bundle edge is
+drawn at <code>globalAlpha 0.9</code>, in saturated gold, <code>1.6 / view.k</code> wide, dashed, with an
+arrowhead. Three separate things compound at low <code>view.k</code>:</p>
+<ul>
+  <li><strong>Screen-space constant width.</strong> Dividing by <code>view.k</code> means zooming out does not
+  thin the lines. Node radii, by contrast, shrink with the world. Ink per screen pixel climbs as you zoom out.</li>
+  <li><strong>Highest contrast is given to the highest-count element.</strong> Gold at 0.9 alpha against
+  <code>#11151c</code> is the loudest thing on the canvas, and in a colocated graph cross-bundle edges are the
+  most numerous thing on the canvas.</li>
+  <li><strong>Dashes and arrowheads add ink without adding information at overview scale.</strong> A 5px dash
+  gap is invisible at k=0.5 but the arrow triangles are still filled at full alpha, so dense targets grow a gold halo.</li>
+</ul>
+<p>So the fix is not one knob. Each variation below picks a different lever: <em>aggregate</em> the lines,
+<em>quiet</em> them, <em>route</em> them, <em>gate</em> them, or <em>replace</em> them.</p>
+
+<div class="nojs" id="nojs">This page renders its diagrams with an inline script. With scripts off you still get the full
+written spec for each variation; only the canvases are blank.</div>
+
+<h3>Baseline: what ships today</h3>
+<canvas id="c-base" width="900" height="250" aria-label="Current renderer: dense gold dashed cross-bundle edges obscuring clusters"></canvas>
+<p class="cap">Current renderer. At k below ~0.8 the gold mesh is opaque enough that cluster shape, node size,
+and community color are all guesses.</p>
+
+<section class="variant">
+  <h2>A. Semantic zoom: bundle-pair trunks<span class="tag win">highest payoff</span></h2>
+  <canvas id="c-a" width="900" height="250" aria-label="Variation A: cross-bundle edges collapsed into thick trunk lines between bundle centroids"></canvas>
+  <p class="cap">Below the threshold, all cross edges between a bundle pair collapse to one trunk whose width
+  encodes the count. Push the slider past ~1.0 and individual edges cross-fade in.</p>
+  <div class="cols">
+    <div>
+      <h3>How</h3>
+      <p>Group cross edges by unordered bundle pair once, after layout settles. Draw one line per pair between
+      the two community centroids, width proportional to <code>sqrt(count)</code>, plus a small count label.
+      Cross-fade on <code>view.k</code> so nothing pops.</p>
+<pre>const t = clamp((view.k - 0.85) / 0.5, 0, 1);
+// trunks at (1 - t), individual cross edges at t
+</pre>
+      <p>Centroids are already computed every tick for cluster gravity, so the extra cost is one pass over
+      edges per frame.</p>
+    </div>
+    <div>
+      <h3>Trade</h3>
+      <ul>
+        <li>The overview answers the question people actually zoom out to ask: <em>which bundles talk to each
+        other, and how much?</em></li>
+        <li>Individual provenance is unavailable at overview scale by design. Mitigate by making a trunk
+        clickable to list its member edges in the details panel.</li>
+        <li>Needs a stable community centroid, so it is coupled to <code>CommunityMode</code>. In
+        <code>type</code> or <code>tag</code> mode the trunks mean something different, which may be fine or may
+        need to be disabled outside <code>bundle</code> mode.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>B. Quiet by default, loud on demand<span class="tag win">cheapest real fix</span></h2>
+  <canvas id="c-b" width="900" height="250" aria-label="Variation B: muted cross-bundle edges with one node's links highlighted"></canvas>
+  <p class="cap">Cross edges drop to a low-alpha neutral and lose the dash; one node is shown in a simulated
+  hover state, and gold rim ticks mark every node that has external links so the information survives the fade.</p>
+  <div class="cols">
+    <div>
+      <h3>How</h3>
+      <p>Invert the current emphasis. Cross edges become the quietest layer, not the loudest, and the gold is
+      spent on the node rim instead of the line:</p>
+<pre>ctx.globalAlpha = (e.cross ? 0.16 : 0.5) * a;
+ctx.strokeStyle = e.cross ? "#8a7a45" : "#7d8590";
+ctx.lineWidth   = (e.cross ? 1.1 : 1) / view.k;
+ctx.setLineDash([]);            // drop dashes entirely
+// arrowheads only when view.k > 1
+</pre>
+      <p>Then draw a gold arc on each node's rim sized by its cross-degree, and light the full cross edges to
+      alpha 0.95 for the hovered or selected node only. Legend focus keeps its current "either endpoint" rule.</p>
+    </div>
+    <div>
+      <h3>Trade</h3>
+      <ul>
+        <li>Small diff, no new data structures, no layout coupling. This is the one to ship first.</li>
+        <li>Cross-bundle structure is no longer readable passively; you have to point at something. For a
+        graph this dense that is arguably correct, but it is a real loss for screenshots.</li>
+        <li>Rim ticks recover the "this concept reaches outside its bundle" signal at zero line cost, and they
+        scale with the world, so they never dominate.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>C. Bundled corridors<span class="tag mid">moderate</span></h2>
+  <canvas id="c-c" width="900" height="250" aria-label="Variation C: cross-bundle edges drawn as curves bundled into corridors between clusters"></canvas>
+  <p class="cap">Same edges, same alpha as today, routed as quadratic curves pulled toward their bundle-pair
+  axis. Parallel links merge into a few readable corridors instead of a uniform crosshatch.</p>
+  <div class="cols">
+    <div>
+      <h3>How</h3>
+      <p>A cheap approximation of hierarchical edge bundling: for each cross edge, take the midpoint of the two
+      owning centroids, then pull the quadratic control point most of the way toward it.</p>
+<pre>const m  = midpoint(centroid[src.community],
+                    centroid[dst.community]);
+const cx = lerp(midpoint(src, dst).x, m.x, 0.85);
+ctx.quadraticCurveTo(cx, cy, dst.x, dst.y);
+</pre>
+      <p>Optionally offset each corridor slightly by pair index so overlapping corridors between different pairs
+      stay separable.</p>
+    </div>
+    <div>
+      <h3>Trade</h3>
+      <ul>
+        <li>Keeps every individual edge visible and traceable, which A and B both give up. Best option if
+        someone's job is following a specific link across bundles.</li>
+        <li>Preserves ink volume. It reorganizes clutter rather than removing it, so with 6+ bundles and
+        hundreds of cross edges the corridors themselves get crowded.</li>
+        <li>Curves cost more per frame than lines, and the arrowhead math has to use the curve tangent rather
+        than the straight-line direction.</li>
+        <li>Pairs well with B's alpha reduction; on its own it does not solve the zoomed-out case.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>D. Explicit layer controls<span class="tag win">smallest diff</span></h2>
+  <canvas id="c-d" width="900" height="250" aria-label="Variation D: mock control strip with cross-bundle edges dimmed by a slider"></canvas>
+  <p class="cap">Mocked control strip drawn into the canvas. Cross edges render under everything at a
+  user-set opacity, with arrowheads and dashes as separate toggles.</p>
+  <div class="cols">
+    <div>
+      <h3>How</h3>
+      <p>Add four checkboxes and one slider to <code>#panel</code>, below the legend: <code>intra-bundle</code>,
+      <code>cross-bundle</code>, <code>arrows</code>, <code>labels</code>, plus a cross-edge opacity slider
+      defaulting to about 0.25. Multiply the slider into the existing per-edge alpha and skip the arrowhead
+      block when the toggle is off.</p>
+      <p>The one structural change worth bundling in here: keep the edge pass strictly beneath the node pass and
+      stop drawing arrowheads while <code>view.k &lt; 1</code>, since a filled triangle at overview scale is
+      pure noise.</p>
+    </div>
+    <div>
+      <h3>Trade</h3>
+      <ul>
+        <li>Half an hour of work, no algorithmic risk, and it makes every other variation easier to evaluate
+        because you can A/B by dragging a slider.</li>
+        <li>Pushes the problem onto the reader. A good default still matters; controls are not a substitute for
+        one.</li>
+        <li>Panel real estate is finite, and the panel is already carrying stats, search, and a legend that
+        grows with bundle count.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>E. Two-level graph with drill-down<span class="tag big">largest change</span></h2>
+  <canvas id="c-e" width="900" height="250" aria-label="Variation E: bundle-level meta graph at low zoom, concept-level graph at high zoom"></canvas>
+  <p class="cap">Zoomed out, the graph <em>is</em> the bundle meta-graph: one node per bundle sized by concept
+  count, weighted arcs between them. Zoom past the threshold and concepts appear.</p>
+  <div class="cols">
+    <div>
+      <h3>How</h3>
+      <p>Build a second graph at export time: nodes are bundles, edges are pair counts. Render the meta-graph
+      alone below <code>k ≈ 0.9</code>, cross-fade to the concept graph above it, and cull concept nodes outside
+      the viewport so large exports stay at 60fps. Clicking a bundle node zooms to fit that cluster.</p>
+      <p>The force simulation is <code>O(n²)</code> per tick today; this is also the natural place to fix that,
+      since the meta-graph only needs to settle over a handful of nodes.</p>
+    </div>
+    <div>
+      <h3>Trade</h3>
+      <ul>
+        <li>The only option that genuinely scales past a few thousand concepts. It changes what the overview
+        means rather than trying to make a hairball legible.</li>
+        <li>Biggest implementation surface: second layout, transition state, viewport culling, and a new
+        interaction model on top of the existing pan/zoom/select.</li>
+        <li>A single-bundle export degenerates to one node, so the meta level needs to be suppressed unless the
+        export spans multiple bundles.</li>
+        <li>For very dense pairs, a bundle-by-bundle adjacency matrix beside the graph reads better than arcs
+        and is easy to add once the pair counts exist.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<h3>Side by side</h3>
+<table>
+  <thead>
+    <tr><th>Option</th><th>Fixes overview</th><th>Keeps per-edge detail</th><th>Effort</th><th>Risk</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>A</strong> trunks</td><td>Yes, directly</td><td>Only above threshold</td><td>Medium</td><td>Coupled to community mode</td></tr>
+    <tr><td><strong>B</strong> quiet/loud</td><td>Yes</td><td>On hover only</td><td>Small</td><td>Passive structure lost</td></tr>
+    <tr><td><strong>C</strong> corridors</td><td>Partly</td><td>Yes</td><td>Medium</td><td>Still ink-heavy when dense</td></tr>
+    <tr><td><strong>D</strong> controls</td><td>With a good default</td><td>Yes</td><td>Tiny</td><td>Defers the decision</td></tr>
+    <tr><td><strong>E</strong> two-level</td><td>Yes, by redefining it</td><td>After drill-down</td><td>Large</td><td>New interaction model</td></tr>
+  </tbody>
+</table>
+
+<div class="rec">
+  <h3 style="margin-top:0">Recommendation</h3>
+  <p><strong>Ship D, then B, then A.</strong> They compose into one coherent design rather than three competing ones:</p>
+  <ul>
+    <li><strong>D</strong> first, as scaffolding. The toggles and the opacity slider cost almost nothing and let
+    you tune the defaults for the other two empirically instead of by argument. Fold in the two unambiguous
+    fixes while you are there: edges strictly under nodes, no arrowheads below k=1.</li>
+    <li><strong>B</strong> next, as the new default. Cross edges become the quiet layer, the dash goes away, and
+    the gold moves to node rim ticks. This alone makes the current screenshots readable.</li>
+    <li><strong>A</strong> last, as the overview payoff. With B's alpha already low, trunks read cleanly on top
+    and turn the zoomed-out view into a real bundle-dependency diagram.</li>
+  </ul>
+  <p style="margin-bottom:0">Hold <strong>C</strong> unless someone reports needing to trace individual
+  cross-bundle links at a distance; it is the wrong tool for the reported problem, which is overview
+  legibility. Hold <strong>E</strong> until export size actually hurts frame rate, at which point the
+  <code>O(n²)</code> tick loop is the more urgent half of that work anyway.</p>
+</div>
+
+</main>
+<script>
+(() => {
+  "use strict";
+  var nojs = document.getElementById("nojs");
+  if (nojs) nojs.remove();
+
+  // Deterministic synthetic graph, shared by every diagram.
+  function lcg(seed) { var s = seed >>> 0; return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+  var rnd = lcg(20260825);
+  var B = 6, PER = 16;
+  var bundles = [];
+  for (var i = 0; i < B; i++) {
+    var a = (2 * Math.PI * i) / B - Math.PI / 2;
+    bundles.push({ i: i, x: Math.cos(a) * 235, y: Math.sin(a) * 118,
+      color: "hsl(" + ((i * 137.508) % 360).toFixed(1) + " 62% 58%)", size: 0 });
+  }
+  var nodes = [];
+  for (var b = 0; b < B; b++) {
+    for (var j = 0; j < PER; j++) {
+      var ang = j * 2.399963, r = 13 * Math.sqrt(j + 1);
+      nodes.push({ b: b, x: bundles[b].x + r * Math.cos(ang), y: bundles[b].y + r * Math.sin(ang),
+        deg: 0, cross: 0 });
+    }
+    bundles[b].size = PER;
+  }
+  var intra = [], cross = [];
+  for (var n = 0; n < nodes.length; n++) {
+    var links = 1 + (rnd() < 0.4 ? 1 : 0);
+    for (var l = 0; l < links; l++) {
+      var base = Math.floor(n / PER) * PER;
+      var t = base + Math.floor(rnd() * PER);
+      if (t === n) continue;
+      intra.push({ s: nodes[n], t: nodes[t] });
+      nodes[n].deg++; nodes[t].deg++;
+    }
+  }
+  for (var c = 0; c < 74; c++) {
+    var si = Math.floor(rnd() * nodes.length), ti = Math.floor(rnd() * nodes.length);
+    if (nodes[si].b === nodes[ti].b) { ti = (ti + PER) % nodes.length; }
+    if (nodes[si].b === nodes[ti].b) continue;
+    cross.push({ s: nodes[si], t: nodes[ti] });
+    nodes[si].deg++; nodes[ti].deg++;
+    nodes[si].cross++; nodes[ti].cross++;
+  }
+  var pairs = new Map();
+  cross.forEach(function (e) {
+    var lo = Math.min(e.s.b, e.t.b), hi = Math.max(e.s.b, e.t.b), key = lo + ":" + hi;
+    var p = pairs.get(key);
+    if (!p) { p = { a: lo, z: hi, count: 0 }; pairs.set(key, p); }
+    p.count++;
+  });
+  var pairList = Array.from(pairs.values());
+  var hoverNode = nodes.reduce(function (best, x) { return x.cross > best.cross ? x : best; }, nodes[0]);
+
+  function radius(n) { return Math.min(3 + 1.5 * Math.sqrt(n.deg), 13); }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  function begin(cv, k) {
+    var dpr = window.devicePixelRatio || 1;
+    var w = cv.clientWidth || 900, h = 250;
+    cv.width = w * dpr; cv.height = h * dpr;
+    var g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.save();
+    g.translate(w / 2, h / 2);
+    var fit = clamp(w / 760, 0.5, 1.15);
+    g.scale(k * fit, k * fit);
+    return { g: g, w: w, h: h, k: k * fit };
+  }
+
+  function drawIntra(g, k, alpha) {
+    g.setLineDash([]);
+    g.globalAlpha = alpha;
+    g.strokeStyle = "#7d8590";
+    g.lineWidth = 1 / k;
+    g.beginPath();
+    intra.forEach(function (e) { g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); });
+    g.stroke();
+  }
+
+  function arrowhead(g, e, k, color) {
+    var dx = e.t.x - e.s.x, dy = e.t.y - e.s.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    var size = 6 / k, back = radius(e.t) + 1 / k;
+    if (d <= back + size) return;
+    var ux = dx / d, uy = dy / d;
+    var tx = e.t.x - ux * back, ty = e.t.y - uy * back;
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(tx, ty);
+    g.lineTo(tx - (ux - 0.45 * uy) * size, ty - (uy + 0.45 * ux) * size);
+    g.lineTo(tx - (ux + 0.45 * uy) * size, ty - (uy - 0.45 * ux) * size);
+    g.closePath();
+    g.fill();
+  }
+
+  function drawNodes(g, k, opts) {
+    opts = opts || {};
+    g.globalAlpha = 1;
+    nodes.forEach(function (n) {
+      g.fillStyle = bundles[n.b].color;
+      g.beginPath();
+      g.arc(n.x, n.y, radius(n), 0, 2 * Math.PI);
+      g.fill();
+      if (opts.ports && n.cross > 0) {
+        g.strokeStyle = "#f2b705";
+        g.lineWidth = 2.2 / k;
+        g.beginPath();
+        g.arc(n.x, n.y, radius(n) + 2 / k, -0.5, -0.5 + Math.min(n.cross, 4) * 0.55);
+        g.stroke();
+      }
+      if (opts.highlight === n) {
+        g.strokeStyle = "#fff";
+        g.lineWidth = 1.8 / k;
+        g.beginPath();
+        g.arc(n.x, n.y, radius(n) + 1.5 / k, 0, 2 * Math.PI);
+        g.stroke();
+      }
+    });
+    g.globalAlpha = 1;
+  }
+
+  function drawBaseline(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    drawIntra(g, s.k, 0.55);
+    cross.forEach(function (e) {
+      g.globalAlpha = 0.9;
+      g.strokeStyle = "#f2b705";
+      g.lineWidth = 1.6 / s.k;
+      g.setLineDash([5 / s.k, 4 / s.k]);
+      g.beginPath(); g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); g.stroke();
+      g.setLineDash([]);
+      arrowhead(g, e, s.k, "#f2b705");
+    });
+    drawNodes(g, s.k, {});
+    g.restore();
+    label(g, s, "current renderer");
+  }
+
+  function drawA(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    var t = clamp((k - 0.85) / 0.5, 0, 1);
+    drawIntra(g, s.k, 0.55);
+    if (t > 0) {
+      g.setLineDash([]);
+      cross.forEach(function (e) {
+        g.globalAlpha = 0.75 * t;
+        g.strokeStyle = "#f2b705";
+        g.lineWidth = 1.2 / s.k;
+        g.beginPath(); g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); g.stroke();
+      });
+    }
+    if (t < 1) {
+      pairList.forEach(function (p) {
+        var A = bundles[p.a], Z = bundles[p.z];
+        g.globalAlpha = 0.55 * (1 - t);
+        g.strokeStyle = "#f2b705";
+        g.lineCap = "round";
+        g.lineWidth = (1.5 + 1.5 * Math.sqrt(p.count)) / s.k;
+        g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(Z.x, Z.y); g.stroke();
+        g.lineCap = "butt";
+        g.globalAlpha = 0.95 * (1 - t);
+        g.fillStyle = "#0b0b0b";
+        var mx = (A.x + Z.x) / 2, my = (A.y + Z.y) / 2;
+        g.beginPath(); g.arc(mx, my, 9 / s.k, 0, 2 * Math.PI); g.fill();
+        g.fillStyle = "#f2b705";
+        g.font = "600 " + (10 / s.k) + "px ui-monospace, monospace";
+        g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText(String(p.count), mx, my);
+      });
+    }
+    drawNodes(g, s.k, {});
+    g.restore();
+    label(g, s, t < 0.5 ? "A - trunks (overview)" : "A - individual edges (detail)");
+  }
+
+  function drawB(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    g.setLineDash([]);
+    g.globalAlpha = 0.16;
+    g.strokeStyle = "#8a7a45";
+    g.lineWidth = 1.1 / s.k;
+    g.beginPath();
+    cross.forEach(function (e) {
+      if (e.s === hoverNode || e.t === hoverNode) return;
+      g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y);
+    });
+    g.stroke();
+    drawIntra(g, s.k, 0.5);
+    g.globalAlpha = 0.95;
+    g.strokeStyle = "#f2b705";
+    g.lineWidth = 1.8 / s.k;
+    cross.forEach(function (e) {
+      if (e.s !== hoverNode && e.t !== hoverNode) return;
+      g.beginPath(); g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); g.stroke();
+      if (k > 1) arrowhead(g, e, s.k, "#f2b705");
+    });
+    drawNodes(g, s.k, { ports: true, highlight: hoverNode });
+    g.restore();
+    label(g, s, "B - quiet by default, hovered node lit");
+  }
+
+  function drawC(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    drawIntra(g, s.k, 0.5);
+    g.setLineDash([]);
+    g.globalAlpha = 0.5;
+    g.strokeStyle = "#f2b705";
+    g.lineWidth = 1.1 / s.k;
+    cross.forEach(function (e) {
+      var A = bundles[e.s.b], Z = bundles[e.t.b];
+      var mx = (A.x + Z.x) / 2, my = (A.y + Z.y) / 2;
+      var ex = (e.s.x + e.t.x) / 2, ey = (e.s.y + e.t.y) / 2;
+      var cx = ex + (mx - ex) * 0.85, cy = ey + (my - ey) * 0.85;
+      g.beginPath();
+      g.moveTo(e.s.x, e.s.y);
+      g.quadraticCurveTo(cx, cy, e.t.x, e.t.y);
+      g.stroke();
+    });
+    drawNodes(g, s.k, {});
+    g.restore();
+    label(g, s, "C - bundled corridors");
+  }
+
+  function drawD(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    g.setLineDash([]);
+    g.globalAlpha = 0.28;
+    g.strokeStyle = "#f2b705";
+    g.lineWidth = 1.2 / s.k;
+    g.beginPath();
+    cross.forEach(function (e) { g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); });
+    g.stroke();
+    drawIntra(g, s.k, 0.55);
+    if (k > 1) { cross.forEach(function (e) { g.globalAlpha = 0.28; arrowhead(g, e, s.k, "#f2b705"); }); }
+    drawNodes(g, s.k, {});
+    g.restore();
+    chips(g, s);
+    label(g, s, "D - layer controls, cross opacity 0.28");
+  }
+
+  function drawE(cv, k) {
+    var s = begin(cv, k), g = s.g;
+    var t = clamp((k - 0.9) / 0.45, 0, 1);
+    if (t < 1) {
+      g.globalAlpha = 1 - t;
+      pairList.forEach(function (p) {
+        var A = bundles[p.a], Z = bundles[p.z];
+        g.strokeStyle = "#5c6672";
+        g.lineWidth = (1 + 1.6 * Math.sqrt(p.count)) / s.k;
+        g.lineCap = "round";
+        g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(Z.x, Z.y); g.stroke();
+        g.lineCap = "butt";
+      });
+      bundles.forEach(function (b, i) {
+        g.fillStyle = b.color;
+        g.beginPath(); g.arc(b.x, b.y, 26 / s.k, 0, 2 * Math.PI); g.fill();
+        g.fillStyle = "#08090b";
+        g.font = "600 " + (12 / s.k) + "px system-ui, sans-serif";
+        g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText("b" + i, b.x, b.y);
+      });
+    }
+    if (t > 0) {
+      g.globalAlpha = t;
+      drawIntra(g, s.k, 0.55 * t);
+      g.globalAlpha = 0.2 * t;
+      g.strokeStyle = "#8a7a45";
+      g.lineWidth = 1.1 / s.k;
+      g.beginPath();
+      cross.forEach(function (e) { g.moveTo(e.s.x, e.s.y); g.lineTo(e.t.x, e.t.y); });
+      g.stroke();
+      g.globalAlpha = t;
+      nodes.forEach(function (n) {
+        g.fillStyle = bundles[n.b].color;
+        g.beginPath(); g.arc(n.x, n.y, radius(n), 0, 2 * Math.PI); g.fill();
+      });
+    }
+    g.restore();
+    label(g, s, t < 0.5 ? "E - bundle meta-graph" : "E - concept level");
+  }
+
+  function label(g, s, text) {
+    g.globalAlpha = 1;
+    g.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    g.fillStyle = "#7d8590";
+    g.textAlign = "left"; g.textBaseline = "alphabetic";
+    g.fillText(text, 10, s.h - 10);
+  }
+
+  function chips(g, s) {
+    g.globalAlpha = 1;
+    var items = [["intra", true], ["cross", true], ["arrows", false], ["labels", false]];
+    var x = 10, y = 12;
+    g.font = "11px system-ui, sans-serif";
+    g.textBaseline = "middle";
+    items.forEach(function (it) {
+      var w = g.measureText(it[0]).width + 26;
+      g.fillStyle = it[1] ? "#1c1a10" : "#101010";
+      g.strokeStyle = it[1] ? "#5c4a1a" : "#262626";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.rect(x, y, w, 20);
+      g.fill(); g.stroke();
+      g.fillStyle = it[1] ? "#f2b705" : "#5c6672";
+      g.beginPath(); g.arc(x + 11, y + 10, 4, 0, 2 * Math.PI); g.fill();
+      g.fillStyle = it[1] ? "#e9edf1" : "#7d8590";
+      g.fillText(it[0], x + 20, y + 10);
+      x += w + 6;
+    });
+    g.fillStyle = "#262626";
+    g.fillRect(x + 4, y + 9, 90, 2);
+    g.fillStyle = "#f2b705";
+    g.fillRect(x + 4, y + 9, 25, 2);
+    g.beginPath(); g.arc(x + 29, y + 10, 5, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = "#7d8590";
+    g.fillText("cross opacity", x + 102, y + 10);
+  }
+
+  var painters = [
+    [document.getElementById("c-base"), drawBaseline],
+    [document.getElementById("c-a"), drawA],
+    [document.getElementById("c-b"), drawB],
+    [document.getElementById("c-c"), drawC],
+    [document.getElementById("c-d"), drawD],
+    [document.getElementById("c-e"), drawE]
+  ];
+  var slider = document.getElementById("zoom");
+  var readout = document.getElementById("zoomval");
+  function renderAll() {
+    var k = parseFloat(slider.value);
+    readout.textContent = "k = " + k.toFixed(2);
+    painters.forEach(function (p) { if (p[0]) p[1](p[0], k); });
+  }
+  slider.addEventListener("input", renderAll);
+  window.addEventListener("resize", renderAll);
+  renderAll();
+})();
+</script>
+</body>
+</html>
