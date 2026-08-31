@@ -465,10 +465,15 @@ export function searchConcepts(
   };
 }
 
+/**
+ * Every concept touching a resolved link, body or §6.2 frontmatter — the
+ * same edge set buildGraph walks, so `orphanOnly` agrees with the orphan
+ * list graph_summary reports.
+ */
 function collectLinkedIds(bundle: LoadedBundle): Set<string> {
   const linked = new Set<string>();
   for (const concept of bundle.concepts.values()) {
-    for (const link of concept.links) {
+    for (const link of [...concept.links, ...concept.frontmatterLinks]) {
       if (link.resolvedId !== undefined) {
         linked.add(concept.id);
         linked.add(link.resolvedId);

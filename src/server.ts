@@ -27,13 +27,13 @@ import {
   exportGraph,
   findPath,
   getNeighbors,
+  graphShape,
   graphSummary,
   listTags,
   listTypes,
   neighborsInGraph,
   pathInGraph,
   qualifyNodeId,
-  summarizeGraph,
 } from "./graph.js";
 import { deriveTitle, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
@@ -219,37 +219,61 @@ const PROBLEM_CAP = 50;
 /** Most diff lines concept_diff returns (concept_history caps commits at 200 too). */
 const DIFF_LINE_CAP = 200;
 
+/** Concepts list_concepts returns per page unless the caller asks for more. */
+const DEFAULT_LIST_LIMIT = 50;
+
+/**
+ * The one truncation contract every cap site speaks: slice `items` at `cap`,
+ * always report the true `total`, and carry a steering `note` only when the
+ * slice dropped something. Call sites spread the pieces under their own
+ * field names, but the shape is the same everywhere: a `note` key means
+ * truncated, and the true total is always present alongside it.
+ */
+function capList<T>(items: T[], cap: number, note: (total: number) => string) {
+  const truncated = items.length > cap;
+  return {
+    items: truncated ? items.slice(0, cap) : items,
+    total: items.length,
+    ...(truncated && { note: note(items.length) }),
+  };
+}
+
 /**
  * Cap a graph summary's orphan list: `orphanCount` is always the true count,
  * `orphans` holds at most ORPHAN_CAP ids, and a truncated list points at the
  * query that returns the rest.
  */
 function capOrphans({ orphans, ...rest }: GraphSummary) {
+  const capped = capList(
+    orphans,
+    ORPHAN_CAP,
+    () => "truncated; list all via search_concepts {orphanOnly: true}",
+  );
   return {
     ...rest,
-    orphanCount: orphans.length,
-    orphans: orphans.slice(0, ORPHAN_CAP),
-    ...(orphans.length > ORPHAN_CAP && {
-      orphansNote: "truncated; list all via search_concepts {orphanOnly: true}",
-    }),
+    orphanCount: capped.total,
+    orphans: capped.items,
+    ...(capped.note !== undefined && { note: capped.note }),
   };
 }
 
 /**
- * Cap a validation report's problem lists at PROBLEM_CAP each; a capped
- * report carries the true totals and a note so the truncation is visible.
+ * Cap a validation report's problem lists at PROBLEM_CAP each. The true
+ * totals are always present; a capped report adds a note so the truncation
+ * is visible.
  */
 function capProblems(report: ValidationReport) {
-  const capped =
-    report.errors.length > PROBLEM_CAP || report.warnings.length > PROBLEM_CAP;
-  if (!capped) return report;
+  const errors = capList(report.errors, PROBLEM_CAP, () => "");
+  const warnings = capList(report.warnings, PROBLEM_CAP, () => "");
   return {
     ...report,
-    errors: report.errors.slice(0, PROBLEM_CAP),
-    warnings: report.warnings.slice(0, PROBLEM_CAP),
-    errorsTotal: report.errors.length,
-    warningsTotal: report.warnings.length,
-    note: `showing first ${PROBLEM_CAP} per list; fix these first`,
+    errors: errors.items,
+    warnings: warnings.items,
+    errorsTotal: errors.total,
+    warningsTotal: warnings.total,
+    ...((errors.note !== undefined || warnings.note !== undefined) && {
+      note: `showing first ${PROBLEM_CAP} per list; fix these first`,
+    }),
   };
 }
 
@@ -266,9 +290,14 @@ const GRAPH_EDGE_CAP = 600;
  * note), and slim each node to id + title + type unless detail is "full".
  */
 function capNeighbors(result: NeighborsResult, detail: "concise" | "full") {
-  const truncated = result.nodes.length > NEIGHBOR_NODE_CAP;
   // The center is always nodes[0] (BFS starts there), so it survives the cap.
-  const nodes = truncated ? result.nodes.slice(0, NEIGHBOR_NODE_CAP) : result.nodes;
+  const capped = capList(
+    result.nodes,
+    NEIGHBOR_NODE_CAP,
+    (total) =>
+      `showing ${NEIGHBOR_NODE_CAP} of ${total} nodes; lower depth or narrow direction`,
+  );
+  const nodes = capped.items;
   const kept = new Set(nodes.map((n) => n.id));
   const slim = ({ id, title, type }: GraphNode) => ({
     id,
@@ -278,13 +307,13 @@ function capNeighbors(result: NeighborsResult, detail: "concise" | "full") {
   return {
     center: result.center,
     depth: result.depth,
+    nodesTotal: capped.total,
     nodes: detail === "full" ? nodes : nodes.map(slim),
-    edges: truncated
-      ? result.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
-      : result.edges,
-    ...(truncated && {
-      note: `showing ${NEIGHBOR_NODE_CAP} of ${result.nodes.length} nodes; lower depth or narrow direction`,
-    }),
+    edges:
+      capped.note !== undefined
+        ? result.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
+        : result.edges,
+    ...(capped.note !== undefined && { note: capped.note }),
   };
 }
 
@@ -765,7 +794,7 @@ export function createOkfServer(
           .positive()
           .max(500)
           .optional()
-          .describe("Concepts per page (default 50)"),
+          .describe(`Concepts per page (default ${DEFAULT_LIST_LIMIT})`),
         offset: z
           .number()
           .int()
@@ -778,7 +807,7 @@ export function createOkfServer(
       const { hits, total } = searchConcepts(await selectBundles(bundle), {
         ...(pathPrefix !== undefined && { pathPrefix }),
         ...(type !== undefined && { types: [type] }),
-        limit: limit ?? 50,
+        limit: limit ?? DEFAULT_LIST_LIMIT,
         ...(offset !== undefined && { offset }),
       });
       return sweepJson(
@@ -1070,7 +1099,7 @@ export function createOkfServer(
     {
       title: "Graph summary",
       description:
-        "Compact overview of a bundle's link graph: counts, types, tags, orphans (first 25 plus an `orphanCount`; list all via search_concepts with orphanOnly), derived cross-bundle edge count. Call this before broader graph exploration.",
+        `Compact overview of a bundle's link graph: counts, types, tags, orphans (first ${ORPHAN_CAP} plus an \`orphanCount\`; list all via search_concepts with orphanOnly), derived cross-bundle edge count. Call this before broader graph exploration.`,
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
@@ -1173,10 +1202,10 @@ export function createOkfServer(
         bundle: bundleParam,
         format: z.enum(["json", "dot", "mermaid"]).optional(),
         detail: z
-          .enum(["summary", "ids", "full"])
+          .enum(["summary", "concise", "ids", "full"])
           .optional()
           .describe(
-            'json format only — summary (default): counts + hubs; ids: bare ids and [from, to] pairs; full: complete nodes/edges',
+            'json format only — summary (default; "concise" is an alias, matching the read tools\' ladder): counts + hubs; ids: bare ids and [from, to] pairs; full: complete nodes/edges',
           ),
         includeExternal: z
           .boolean()
@@ -1192,30 +1221,39 @@ export function createOkfServer(
         : buildGraph(await store.bundle(bundle), options);
       const chosenFormat = format ?? "json";
       if (chosenFormat !== "json") return markdown(exportGraph(graph, chosenFormat));
-      const level = detail ?? "summary";
-      if (level === "summary") return json(summarizeGraph(graph));
-      const truncated =
-        graph.nodes.length > GRAPH_NODE_CAP || graph.edges.length > GRAPH_EDGE_CAP;
+      const level = detail === "concise" ? "summary" : (detail ?? "summary");
+      if (level === "summary") return json(graphShape(graph));
+      // Slice nodes first, then keep only edges whose endpoints survived: a
+      // capped export must still be a self-contained graph, so edges into the
+      // truncated remainder are dropped and counted as truncated in the note.
       const nodes = graph.nodes.slice(0, GRAPH_NODE_CAP);
-      const edges = graph.edges.slice(0, GRAPH_EDGE_CAP);
-      const note = truncated
-        ? {
-            note:
-              `showing ${nodes.length} of ${graph.nodes.length} nodes and ` +
-              `${edges.length} of ${graph.edges.length} edges; filter (bundle, ` +
-              `includeExternal: false) or use detail: "summary"`,
-          }
-        : {};
+      const kept = new Set(nodes.map((n) => n.id));
+      const reachable =
+        nodes.length < graph.nodes.length
+          ? graph.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
+          : graph.edges;
+      const edges = reachable.slice(0, GRAPH_EDGE_CAP);
+      const truncated = nodes.length < graph.nodes.length || edges.length < graph.edges.length;
+      const totals = {
+        nodesTotal: graph.nodes.length,
+        edgesTotal: graph.edges.length,
+        ...(truncated && {
+          note:
+            `showing ${nodes.length} of ${graph.nodes.length} nodes and ` +
+            `${edges.length} of ${graph.edges.length} edges; filter (bundle, ` +
+            `includeExternal: false) or use detail: "summary"`,
+        }),
+      };
       if (level === "ids") {
         return json({
           nodes: nodes.map((n) => n.id),
           edges: edges.map((e) =>
             e.kind !== undefined ? [e.from, e.to, e.kind] : [e.from, e.to],
           ),
-          ...note,
+          ...totals,
         });
       }
-      return json({ nodes, edges, warnings: graph.warnings, ...note });
+      return json({ nodes, edges, warnings: graph.warnings, ...totals });
     },
   );
 
@@ -1288,7 +1326,7 @@ export function createOkfServer(
     {
       title: "Validate bundle",
       description:
-        "Report OKF v0.2 conformance errors and soft warnings; each list is capped at 50 per bundle, with errorsTotal/warningsTotal carrying the true counts when capped",
+        `Report OKF v0.2 conformance errors and soft warnings; each list is capped at ${PROBLEM_CAP} per bundle, with errorsTotal/warningsTotal carrying the true counts`,
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>

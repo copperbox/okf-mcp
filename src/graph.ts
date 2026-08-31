@@ -445,7 +445,7 @@ function dedupeEdges(edges: GraphEdge[]): GraphEdge[] {
 
 export type GraphFormat = "json" | "dot" | "mermaid";
 
-/** Hub nodes summarizeGraph reports, highest degree first. */
+/** Hub nodes graphShape reports, highest degree first. */
 const HUB_CAP = 10;
 
 /** Compact shape of a built graph: counts plus its highest-degree hubs. */
@@ -459,11 +459,13 @@ export interface GraphShape {
 }
 
 /**
- * Summarize an already-built graph without returning it: node/edge counts,
+ * The shape of an already-built graph without returning it: node/edge counts,
  * counts by node type and edge kind, and the top HUB_CAP nodes by degree —
- * the cheap first look before an ids or full export.
+ * the cheap first look before an ids or full export. Distinct from
+ * graphSummary, which summarizes a bundle (concepts, tags, orphans) rather
+ * than a built graph.
  */
-export function summarizeGraph(graph: ConceptGraph): GraphShape {
+export function graphShape(graph: ConceptGraph): GraphShape {
   const degree = new Map<string, number>();
   for (const edge of graph.edges) {
     degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);

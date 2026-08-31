@@ -16,7 +16,7 @@ import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
 import { fakeArchiveServer, makeTarGz } from "./archives.js";
 import { fakeGitHub } from "./fake-github.js";
-import { commitAll, initRepo } from "./helpers.js";
+import { commitAll, git, initRepo } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
@@ -1158,18 +1158,33 @@ describe("detail ladder caps", () => {
   it("export_graph ids and full cap nodes with a truncation note; summary counts everything", async () => {
     const ids = (await callJson(client, "export_graph", { detail: "ids" })) as {
       nodes: string[];
+      edges: string[][];
+      nodesTotal: number;
+      edgesTotal: number;
       note?: string;
     };
     assert.equal(ids.nodes.length, 300);
+    assert.equal(ids.nodesTotal, 321);
+    assert.equal(ids.edgesTotal, 320);
     assert.match(ids.note ?? "", /300 of 321 nodes/);
     assert.match(ids.note ?? "", /summary/);
+    // A capped export stays a self-contained graph: no edge dangles into
+    // the truncated remainder.
+    const keptIds = new Set(ids.nodes);
+    assert.ok(ids.edges.length > 0);
+    assert.ok(ids.edges.every((e) => keptIds.has(e[0]!) && keptIds.has(e[1]!)));
+    assert.match(ids.note ?? "", new RegExp(`${ids.edges.length} of 320 edges`));
 
     const full = (await callJson(client, "export_graph", { detail: "full" })) as {
-      nodes: unknown[];
+      nodes: Array<{ id: string }>;
+      edges: Array<{ from: string; to: string }>;
       note?: string;
     };
     assert.equal(full.nodes.length, 300);
     assert.match(full.note ?? "", /300 of 321 nodes/);
+    const keptFull = new Set(full.nodes.map((n) => n.id));
+    assert.ok(full.edges.length > 0);
+    assert.ok(full.edges.every((e) => keptFull.has(e.from) && keptFull.has(e.to)));
 
     const summary = (await callJson(client, "export_graph", {})) as {
       nodes: number;
@@ -1178,11 +1193,20 @@ describe("detail ladder caps", () => {
     assert.equal(summary.nodes, 321);
     assert.deepEqual(summary.hubs[0], { id: "hub", degree: 320 });
   });
+
+  it("export_graph accepts the read tools' \"concise\" as an alias for summary", async () => {
+    const concise = (await callJson(client, "export_graph", {
+      detail: "concise",
+    })) as { nodes: number; hubs: unknown[] };
+    assert.equal(concise.nodes, 321);
+    assert.ok(Array.isArray(concise.hubs));
+  });
 });
 
 describe("git tools", () => {
   let tmp: string;
   let client: Client;
+  let addAlpha: string;
   before(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-git-"));
 
@@ -1192,10 +1216,20 @@ describe("git tools", () => {
     await fs.writeFile(alpha, "---\ntype: Note\ntitle: Alpha\n---\n\nFirst draft.\n");
     await initRepo(repoRoot);
     await commitAll(repoRoot, "add alpha");
+    addAlpha = (await git(repoRoot, "rev-parse", "HEAD")).trim();
     await fs.appendFile(alpha, "\nSecond thoughts.\n");
     await commitAll(repoRoot, "update alpha");
     await fs.appendFile(alpha, "\nThird pass.\n");
     await commitAll(repoRoot, "polish alpha");
+
+    // The truncation test gets its own concept so its bulk commit cannot
+    // disturb what the alpha history/diff tests pin.
+    const bulk = path.join(repoRoot, "notes", "bulk.md");
+    await fs.writeFile(bulk, "---\ntype: Note\ntitle: Bulk\n---\n\nSeed.\n");
+    await commitAll(repoRoot, "add bulk");
+    const bulkLines = Array.from({ length: 300 }, (_, i) => `Line ${i}.`).join("\n");
+    await fs.appendFile(bulk, `\n${bulkLines}\n`);
+    await commitAll(repoRoot, "bulk edit");
 
     const plainRoot = path.join(tmp, "plain");
     await fs.mkdir(path.join(plainRoot, "notes"), { recursive: true });
@@ -1264,7 +1298,7 @@ describe("git tools", () => {
     const result = await callTool(client, "concept_diff", {
       bundle: "repo",
       id: "notes/alpha",
-      ref: "HEAD~2",
+      ref: addAlpha,
     });
     assert.ok(!result.isError);
     const diff = textContent(result);
@@ -1278,13 +1312,8 @@ describe("git tools", () => {
     assert.match(textContent(result), /not a git repository/);
   });
 
-  // Keep this last: it grows the repo the earlier diff tests assert against.
   it("concept_diff caps the output at 200 lines with a truncation note", async () => {
-    const repoRoot = path.join(tmp, "repo");
-    const bulk = Array.from({ length: 300 }, (_, i) => `Line ${i}.`).join("\n");
-    await fs.appendFile(path.join(repoRoot, "notes", "alpha.md"), `\n${bulk}\n`);
-    await commitAll(repoRoot, "bulk edit");
-    const result = await callTool(client, "concept_diff", { bundle: "repo", id: "notes/alpha" });
+    const result = await callTool(client, "concept_diff", { bundle: "repo", id: "notes/bulk" });
     assert.ok(!result.isError);
     const lines = textContent(result).split("\n");
     assert.equal(lines.length, 201);
@@ -2663,11 +2692,11 @@ describe("response caps", () => {
     const summary = (await callJson(client, "graph_summary", { bundle: "caps" })) as {
       orphanCount: number;
       orphans: string[];
-      orphansNote?: string;
+      note?: string;
     };
     assert.equal(summary.orphanCount, 60);
     assert.equal(summary.orphans.length, 25);
-    assert.match(summary.orphansNote ?? "", /orphanOnly/);
+    assert.match(summary.note ?? "", /orphanOnly/);
   });
 
   it("validate_bundle caps each problem list at 50 with true totals", async () => {
