@@ -8,7 +8,7 @@ tags:
   - philosophy
 generated:
   by: okf-mcp/1.5.0
-  at: 2026-08-31T02:07:50.000Z
+  at: 2026-08-31T02:17:23.834Z
 sources:
   - id: src-server-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/server.ts
@@ -19,8 +19,8 @@ Every byte a tool returns occupies the agent's context for the rest of its sessi
 
 The decision (1.4.0): frugality is not left to client configuration — the server steers, through six levers.
 
-- **Instructions** name search_concepts the entry point, tell agents to read sections rather than documents, and declare orientation once-per-session. They are themselves budgeted: a test caps them (~48 lines), because instructions are the one cost every session pays unconditionally.
-- **Tool descriptions** carry the same routing (`list_concepts` defers to search; `list_bundles`/`get_bundle_guide` say "call once"; `read_document` routes concept reads to `get_concept`).
+- **Instructions** name search_concepts the entry point, tell agents to read sections rather than documents, and declare orientation once-per-session. They are themselves budgeted: a test caps the shared+writing blocks at 3,600 characters, because instructions are the one cost every session pays unconditionally. Since 2.0 each fact has one home: per-call mechanics (search paging, `omitted`, limit semantics) live in the owning tool's schema text, instructions carry only cross-tool routing, and only the first colocated root's guide is inlined — extra roots get a one-line pointer at `get_bundle_guide`.
+- **Tool descriptions** carry the per-call mechanics plus local routing (`list_concepts` defers to search; `list_bundles`/`get_bundle_guide` say "call once"; `read_document` routes concept reads to `get_concept`).
 - **Search hits point into sections**: `section`/`matchedSections` on body matches feed [`get_concept`'s `section` argument](../architecture/search-scoring.md).
 - **`get_concept` offers graduated reads**: `outline: true` (shape only), `section` (one subtree), full body — see the [server surface](../architecture/mcp-server.md).
 - **Responses are shaped, not just routed** (2.0 Stage 1): JSON serializes compact (no pretty-printing), `list_concepts` paginates (default 50, with `total`), `read_document` takes `startLine`/`endLine` slices (with `totalLines`), and unbounded arrays are capped by default — `validate_bundle` at 50 problems per list (with `errorsTotal`/`warningsTotal`), `graph_summary` at 25 orphans (with `orphanCount`), `concept_diff` at 200 lines. Every truncated result carries a one-clause steering note saying what to call next, and prose inside machine payloads (the sweep-exclusion note, the read-only error, the unknown-section error) stays to one actionable clause.

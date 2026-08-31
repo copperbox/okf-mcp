@@ -862,39 +862,6 @@ describe("server tools", () => {
     assert.deepEqual([...new Set(result.sources.map((s) => s.cited))], [false]);
   });
 
-  it("get_citations classifies external, concept, and missing targets", async () => {
-    assert.deepEqual(await callJson(client, "get_citations", { id: "tables/orders" }), [
-      {
-        index: 1,
-        text: "BigQuery table schema",
-        target: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
-        kind: "external",
-      },
-      {
-        index: 2,
-        text: "Customer dimension table",
-        target: "/tables/customers.md",
-        kind: "concept",
-      },
-      {
-        index: 3,
-        text: "Retired ingestion runbook",
-        target: "/playbooks/retired-runbook",
-        kind: "missing",
-      },
-    ]);
-  });
-
-  it("get_citations returns an empty list for a concept without a Citations section", async () => {
-    assert.deepEqual(await callJson(client, "get_citations", { id: "datasets/sales" }), []);
-  });
-
-  it("get_citations rejects an unknown concept", async () => {
-    const result = await callTool(client, "get_citations", { id: "tables/nope" });
-    assert.ok(result.isError);
-    assert.match(textContent(result), /unknown concept/);
-  });
-
   it("validate_bundle reports citation warnings", async () => {
     const [report] = (await callJson(client, "validate_bundle", { bundle: "acme" })) as Array<{
       warnings: Array<{ path?: string; message: string }>;
@@ -1505,7 +1472,7 @@ describe("authoring tools", () => {
   });
 
   describe("citation hygiene (issue #78)", () => {
-    it("write_concept normalizes ordered-list citations so get_citations sees them", async () => {
+    it("write_concept normalizes ordered-list citations to the [n] form", async () => {
       const client = await connectLocal({ writable: true });
       const write = await callTool(client, "write_concept", {
         path: "notes/sourced.md",
@@ -1514,13 +1481,9 @@ describe("authoring tools", () => {
       });
       assert.notEqual(write.isError, true);
 
-      const citations = (await callJson(client, "get_citations", {
-        id: "notes/sourced",
-      })) as Array<{ index: number; target: string }>;
-      assert.deepEqual(
-        citations.map((c) => ({ index: c.index, target: c.target })),
-        [{ index: 1, target: "https://example.com" }],
-      );
+      const stored = await fs.readFile(path.join(root, "notes/sourced.md"), "utf8");
+      assert.ok(stored.includes("[1] [Example](https://example.com)"));
+      assert.ok(!stored.includes("1. [Example]"));
       const reports = (await callJson(client, "validate_bundle", {})) as Array<{
         warnings: Array<{ message: string }>;
       }>;
@@ -1548,10 +1511,8 @@ describe("authoring tools", () => {
 
       const source = await fs.readFile(path.join(root, "notes/sourced.md"), "utf8");
       assert.equal(source.match(/# Citations/g)?.length, 1);
-      const citations = (await callJson(client, "get_citations", {
-        id: "notes/sourced",
-      })) as Array<{ target: string }>;
-      assert.deepEqual(citations.map((c) => c.target), ["https://example.com"]);
+      assert.ok(source.includes("[1] [Example](https://example.com)"));
+      assert.ok(!source.includes("[9] [Old]"), "the replaced entry must be gone");
     });
   });
 
@@ -2022,10 +1983,8 @@ describe("server instructions", () => {
       "update_concept",
       "append_log_entry",
       "reload_bundles",
-      "next page with `offset`",
-      "`omitted` count",
       // Context-frugality guidance: search first, section reads, one-shot orientation.
-      "search_concepts (text plus type/tag/path/link filters) is the entry",
+      "search_concepts is the entry point",
       "reserve list_concepts",
       "Read sections, not whole documents",
       "`matchedSections`",
@@ -2050,16 +2009,19 @@ describe("server instructions", () => {
       !instructions.includes("prefer the bundle-absolute form"),
       "instructions should not recommend the bundle-absolute link form",
     );
-    // Instructions cost context in every session — keep them short. Raised
-    // from 40 for OKF v0.2 (provenance/trust/lifecycle vocabulary), then to 48
-    // for the context-frugality guidance (search-first entry point, section
-    // reads, once-per-session orientation) — lines that exist to save far more
-    // context than they cost.
-    const lineCount = instructions.split("\n").length;
+    // Instructions cost context in every session — keep them short. With no
+    // bundle guides configured, the whole string is the shared block plus the
+    // writing block; per-call mechanics (paging, `omitted`, limit semantics)
+    // belong in each tool's own schema text, not here, so growth past this
+    // budget means something leaked into the wrong home.
     assert.ok(
-      lineCount <= 48,
-      `instructions should stay under ~48 lines, got ${lineCount}`,
+      instructions.length <= 3600,
+      `shared+writing instructions should stay under 3,600 chars, got ${instructions.length}`,
     );
+    // Paging mechanics live on search_concepts itself; the instructions must
+    // not restate them (definition hygiene, 2.0).
+    assert.ok(!instructions.includes("next page with `offset`"));
+    assert.ok(!instructions.includes("low-relevance matches suppressed"));
     await client.close();
   });
 
@@ -2137,6 +2099,44 @@ describe("server instructions", () => {
     );
     assert.ok(guide.includes("/vault/AGENTS.md"), "pointer should name the full file");
     await client.close();
+  });
+
+  it("inlines only the first root's guide; extra roots cost one pointer line each", async () => {
+    // Guides are uncapped in aggregate if every root injects its own (each up
+    // to BUNDLE_GUIDE_BUDGET); past the first root, a mounted root may only
+    // add a bounded pointer at get_bundle_guide.
+    const store = () => new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const first = {
+      text: "- acme: warehouse schema tables and their playbooks.\n",
+      source: "/vault/AGENTS.md",
+    };
+    const extras = [
+      { text: "guide two, long enough to notice if inlined.\n".repeat(20), source: "/two/AGENTS.md" },
+      { text: "guide three, long enough to notice if inlined.\n".repeat(20), source: "/three/AGENTS.md" },
+    ];
+    const one = await connectClient(store(), { bundleGuides: [first] });
+    const three = await connectClient(store(), { bundleGuides: [first, ...extras] });
+    const withOne = one.getInstructions() ?? "";
+    const withThree = three.getInstructions() ?? "";
+
+    assert.ok(withThree.includes("- acme: warehouse schema tables"), "first guide is inlined");
+    for (const extra of extras) {
+      assert.ok(
+        !withThree.includes("long enough to notice if inlined"),
+        "extra roots' guide text must not be inlined",
+      );
+      assert.ok(
+        withThree.includes(`Bundle root ${path.dirname(extra.source)} has a guide`),
+        `pointer line should name the root of ${extra.source}`,
+      );
+    }
+    assert.ok(withThree.includes("get_bundle_guide"), "pointer names the tool");
+    assert.ok(
+      withThree.length - withOne.length <= 2 * 120,
+      `each extra root should add at most 120 chars, two added ${withThree.length - withOne.length}`,
+    );
+    await one.close();
+    await three.close();
   });
 
   it("points at get_bundle_guide for bundle orientation, even without guides", async () => {
@@ -2323,17 +2323,6 @@ describe("colocated cross-bundle tools", () => {
     for (const summary of summaries) {
       assert.equal(summary.crossBundleEdges, 1, summary.bundle);
     }
-  });
-
-  it("get_citations classifies a resolving ../sibling citation as concept", async () => {
-    const citations = (await callJson(client, "get_citations", {
-      bundle: "ops",
-      id: "runbook",
-    })) as Array<{ index: number; kind: string }>;
-    assert.deepEqual(
-      citations.map((c) => c.kind),
-      ["concept", "missing"],
-    );
   });
 
   it("validate_bundle warns on dangling ../sibling links only", async () => {

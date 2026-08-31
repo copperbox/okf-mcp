@@ -18,12 +18,7 @@ import {
   updateConcept,
   writeConcept,
 } from "./authoring.js";
-import {
-  colocatedSiblings,
-  readBundleDocument,
-  readColocatedAgentsGuide,
-  resolveOutsideLink,
-} from "./bundle.js";
+import { readBundleDocument, readColocatedAgentsGuide } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import type { GraphNode, GraphSummary, NeighborsResult } from "./graph.js";
 import {
@@ -40,7 +35,7 @@ import {
   qualifyNodeId,
   summarizeGraph,
 } from "./graph.js";
-import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
+import { deriveTitle, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
 import {
   conceptSources,
@@ -147,16 +142,12 @@ bundle is published (GitHub resolves a leading-/ link from the repository root, 
 bundle-absolute links break when the bundle is a repo subfolder).
 index.md and log.md are reserved, generated files.
 
-Reading: search_concepts (text plus type/tag/path/link filters) is the entry
-point; reserve list_concepts for when the whole catalog is genuinely needed.
-Read sections, not whole documents: get_concept's \`section\` argument returns one
-heading's subtree, \`outline: true\` lists sections without the body, and a hit's
-\`section\` / \`matchedSections\` feed \`section\` directly. Explore with
-get_neighbors / find_path. Search returns one relevance-sorted page (default
-${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}/page; \`total\` counts every match): when fewer hits than \`total\` return and
-the page did not answer, request the next page with \`offset\` — later pages are
-strictly less relevant. An \`omitted\` count is low-relevance matches suppressed
-entirely; refine the query or filters rather than paging.
+Reading: search_concepts is the entry point (its own description covers the
+filters, paging, and \`omitted\`); reserve list_concepts for when the whole
+catalog is genuinely needed. Read sections, not whole documents: get_concept's
+\`section\` argument returns one heading's subtree, \`outline: true\` lists
+sections without the body, and a search hit's \`section\` / \`matchedSections\`
+feed \`section\` directly. Explore with get_neighbors / find_path.
 
 Orient once per session, not once per task: graph_summary, list_types /
 list_tags, list_bundles, and get_bundle_guide (when listed, call it before
@@ -187,7 +178,16 @@ before planning a write.`;
   const authoring = options.writable
     ? writing
     : "This server is read-only; authoring tools are not available.";
-  const guides = (options.bundleGuides ?? []).map(renderBundleGuide);
+  // Only the first root's guide is injected (renderBundleGuide caps it at
+  // BUNDLE_GUIDE_BUDGET); every further root costs one pointer line, so the
+  // instructions stay bounded no matter how many roots are mounted.
+  const [firstGuide, ...restGuides] = options.bundleGuides ?? [];
+  const guides = firstGuide === undefined ? [] : [renderBundleGuide(firstGuide)];
+  for (const guide of restGuides) {
+    guides.push(
+      `Bundle root ${path.dirname(guide.source)} has a guide — call get_bundle_guide before exploring it.`,
+    );
+  }
   // Say it up front rather than letting the agent infer it from empty sweeps.
   const empty =
     mounted === false
@@ -886,32 +886,6 @@ export function createOkfServer(
   );
 
   server.registerTool(
-    "get_citations",
-    {
-      title: "Get citations (deprecated)",
-      description:
-        "Deprecated: use get_sources. Numbered citation entries under a concept's `# Citations` heading — the OKF v0.1 form, superseded by frontmatter `sources` in v0.2 (spec §13.1). Each is classified as an external URL, a concept (in the bundle, or reached by a relative `../` link into a mounted colocated sibling bundle), or missing (a relative target that does not resolve)",
-      inputSchema: {
-        bundle: bundleParam,
-        id: z.string().describe("Concept ID, e.g. tables/orders"),
-      },
-    },
-    async ({ bundle, id }) => {
-      const loadedBundle = await store.bundle(bundle);
-      const concept = await store.getConcept(bundle, id);
-      if (!concept) throw new Error(`unknown concept: ${id}`);
-      const siblings = colocatedSiblings(loadedBundle, store.bundles());
-      const { citations } = extractCitations(
-        concept.body,
-        concept.path,
-        (cid) => loadedBundle.concepts.has(cid),
-        (linkPath) => resolveOutsideLink(linkPath, siblings) !== undefined,
-      );
-      return json(citations);
-    },
-  );
-
-  server.registerTool(
     "read_document",
     {
       title: "Read document",
@@ -956,7 +930,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names where the match lives — \`section\` (and \`matchedSections\` when several matched) feed get_concept's \`section\` argument directly, so read those sections rather than whole documents. Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names the matching \`section\` (and \`matchedSections\` when several matched). Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer — later pages are strictly less relevant. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()
@@ -1369,7 +1343,7 @@ export function createOkfServer(
             .object({ type: z.string().min(1) })
             .passthrough()
             .describe(
-              "YAML frontmatter; `type` is required, extra keys are preserved. `generated: {by, at}` defaults to this server's actor and the current UTC time when omitted (supply one to backdate or to credit a different actor). Record provenance in `sources` (spec §5.1), lifecycle in `status`/`stale_after` (§5.4-5.5), and sign-off in `verified` (§5.2). In a bundle declaring okf_version 0.1 the legacy `timestamp` is stamped instead",
+              'YAML frontmatter; `type` is required, extra keys are preserved, e.g. {type: "table", title: "Orders", description: "Daily order facts.", tags: ["sales"], sources: [{resource: "https://x.co/doc", id: "doc"}]}. `generated: {by, at}` defaults to this server\'s actor and the current UTC time (supply one to backdate or to credit a different actor); lifecycle goes in `status`/`stale_after` (§5.4-5.5), sign-off in `verified` (§5.2). In a bundle declaring okf_version 0.1 the legacy `timestamp` is stamped instead',
             ),
           body: z
             .string()
@@ -1417,7 +1391,7 @@ export function createOkfServer(
             .record(z.unknown())
             .optional()
             .describe(
-              "Frontmatter keys to set/overwrite; an explicit null deletes a key. Including `generated` or `timestamp` (a value, or null to delete) overrides the default refresh",
+              'Frontmatter keys to set/overwrite; an explicit null deletes a key, e.g. {description: "Daily order facts.", tags: ["sales"], sources: [{resource: "https://x.co/doc", id: "doc"}], stale_after: null}. Including `generated` or `timestamp` (a value, or null to delete) overrides the default refresh',
             ),
           section: z
             .object({

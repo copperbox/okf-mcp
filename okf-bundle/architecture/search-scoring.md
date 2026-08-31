@@ -13,6 +13,9 @@ sources:
   - id: src-search-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/search.ts
     title: src/search.ts
+verified:
+  by: process:claude-code
+  at: 2026-08-30T00:00:00Z
 ---
 
 `searchConcepts` (`src/search.ts`) is pure substring filtering and scoring — no embeddings, no external index (see [no database](../decisions/plain-markdown-no-database.md)). This area evolved most recently (0.22.x), so check here before touching relevance behavior.
