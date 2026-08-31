@@ -25,6 +25,7 @@ import {
   resolveOutsideLink,
 } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
+import type { GraphSummary } from "./graph.js";
 import {
   buildGraph,
   buildMultiGraph,
@@ -54,6 +55,7 @@ import type { ColocatedRootMount, OkfStore } from "./store.js";
 import { suggestConceptPath } from "./suggest.js";
 import type { ConceptFrontmatter, ConceptStatus, LoadedBundle } from "./types.js";
 import { CONCEPT_STATUSES, okfUri } from "./types.js";
+import type { ValidationReport } from "./validate.js";
 import { validateBundle } from "./validate.js";
 import { PACKAGE_VERSION } from "./version.js";
 
@@ -200,11 +202,54 @@ rather than reporting the knowledge base as empty.`,
 }
 
 function json(data: unknown): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
 
 function markdown(text: string): CallToolResult {
   return { content: [{ type: "text", text }] };
+}
+
+/** Most orphan ids graph_summary returns inline; the full list stays queryable. */
+const ORPHAN_CAP = 25;
+
+/** Most problems validate_bundle returns per list; totals still count them all. */
+const PROBLEM_CAP = 50;
+
+/** Most diff lines concept_diff returns (concept_history caps commits at 200 too). */
+const DIFF_LINE_CAP = 200;
+
+/**
+ * Cap a graph summary's orphan list: `orphanCount` is always the true count,
+ * `orphans` holds at most ORPHAN_CAP ids, and a truncated list points at the
+ * query that returns the rest.
+ */
+function capOrphans({ orphans, ...rest }: GraphSummary) {
+  return {
+    ...rest,
+    orphanCount: orphans.length,
+    orphans: orphans.slice(0, ORPHAN_CAP),
+    ...(orphans.length > ORPHAN_CAP && {
+      orphansNote: "truncated; list all via search_concepts {orphanOnly: true}",
+    }),
+  };
+}
+
+/**
+ * Cap a validation report's problem lists at PROBLEM_CAP each; a capped
+ * report carries the true totals and a note so the truncation is visible.
+ */
+function capProblems(report: ValidationReport) {
+  const capped =
+    report.errors.length > PROBLEM_CAP || report.warnings.length > PROBLEM_CAP;
+  if (!capped) return report;
+  return {
+    ...report,
+    errors: report.errors.slice(0, PROBLEM_CAP),
+    warnings: report.warnings.slice(0, PROBLEM_CAP),
+    errorsTotal: report.errors.length,
+    warningsTotal: report.warnings.length,
+    note: `showing first ${PROBLEM_CAP} per list; fix these first`,
+  };
 }
 
 const bundleParam = z
@@ -219,8 +264,7 @@ const entryPointMeta = { "anthropic/alwaysLoad": true };
 function assertWritableBundle(bundle: { id: string; readOnly: boolean }): void {
   if (bundle.readOnly) {
     throw new Error(
-      `bundle "${bundle.id}" is read-only: remote bundles cannot be modified, ` +
-        `and a local bundle is read-only when its config declares "writable": false`,
+      `bundle "${bundle.id}" is read-only (remote, or config "writable": false) — pick a writable bundle`,
     );
   }
 }
@@ -287,10 +331,8 @@ export function createOkfServer(
     result.content.push({
       type: "text",
       text:
-        `Note: ${excluded.length} discovered bundle(s) are not loaded and were ` +
-        `excluded from this sweep: ${excluded.map((d) => d.id).join(", ")}. ` +
-        "Pass one as the `bundle` argument to load and include it (first access " +
-        "loads a bundle); list_bundles shows every bundle's loaded state.",
+        `excluded ${excluded.length} unloaded bundle(s): ` +
+        `${excluded.map((d) => d.id).join(", ")} — name one as \`bundle\` to load it`,
     });
     return result;
   };
@@ -391,7 +433,7 @@ export function createOkfServer(
           okfVersion: bundle.okfVersion,
           description: bundle.description,
           concepts: bundle.concepts.size,
-          reservedFiles: bundle.reserved.map((f) => f.path),
+          reservedFileCount: bundle.reserved.length,
           problems: bundle.problems.length,
           readOnly: bundle.readOnly,
           loaded: true,
@@ -674,17 +716,33 @@ export function createOkfServer(
         bundle: bundleParam,
         pathPrefix: z.string().optional().describe("Concept ID prefix, e.g. tables/"),
         type: z.string().optional().describe("Only this frontmatter type"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe("Concepts per page (default 50)"),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Skip this many concepts; page until `total` is reached"),
       },
     },
-    async ({ bundle, pathPrefix, type }) =>
-      sweepJson(
-        searchConcepts(await selectBundles(bundle), {
-          ...(pathPrefix !== undefined && { pathPrefix }),
-          ...(type !== undefined && { types: [type] }),
-          limit: 500,
-        }).hits.map(({ score: _score, ...hit }) => hit),
+    async ({ bundle, pathPrefix, type, limit, offset }) => {
+      const { hits, total } = searchConcepts(await selectBundles(bundle), {
+        ...(pathPrefix !== undefined && { pathPrefix }),
+        ...(type !== undefined && { types: [type] }),
+        limit: limit ?? 50,
+        ...(offset !== undefined && { offset }),
+      });
+      return sweepJson(
+        { total, hits: hits.map(({ score: _score, ...hit }) => hit) },
         bundle === undefined,
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -731,9 +789,7 @@ export function createOkfServer(
       const match = extractSection(concept.body, section);
       if (!match) {
         throw new Error(
-          `concept "${concept.id}" has no section "${section}"; available sections: ${
-            sections.join(", ") || "(none)"
-          }`,
+          `no section "${section}" in "${concept.id}" — sections: ${sections.join(", ") || "(none)"}`,
         );
       }
       const { body: _body, links: _links, ...rest } = concept;
@@ -808,17 +864,38 @@ export function createOkfServer(
     {
       title: "Read document",
       description:
-        "Read the raw markdown of any bundle document by path — reserved files (index.md, log.md) as well as concepts. A missing index.md is synthesized from frontmatter (spec §6) and marked with `synthesized: true` in the result",
+        "Read the raw file text of any bundle document by path — reserved files (index.md, log.md) as well as concepts; for concepts prefer get_concept outline/section reads. `startLine`/`endLine` return just that slice with a `totalLines` count. A missing index.md is synthesized from frontmatter (spec §6) and marked with `synthesized: true` in the result",
       inputSchema: {
         bundle: bundleParam,
         path: z
           .string()
           .describe("Bundle-relative path, e.g. log.md or tables/orders.md"),
+        startLine: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("First line to return (1-based, inclusive)"),
+        endLine: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Last line to return (1-based, inclusive)"),
       },
     },
-    async ({ bundle, path: relPath }) => {
+    async ({ bundle, path: relPath, startLine, endLine }) => {
       const { text, synthesized } = await readDocument(bundle, relPath);
-      return { ...markdown(text), ...(synthesized && { synthesized: true }) };
+      if (startLine === undefined && endLine === undefined) {
+        return { ...markdown(text), ...(synthesized && { synthesized: true }) };
+      }
+      const lines = text.split("\n");
+      const slice = lines.slice((startLine ?? 1) - 1, endLine ?? lines.length);
+      return {
+        ...markdown(slice.join("\n")),
+        totalLines: lines.length,
+        ...(synthesized && { synthesized: true }),
+      };
     },
   );
 
@@ -949,14 +1026,14 @@ export function createOkfServer(
     {
       title: "Graph summary",
       description:
-        "Compact overview of a bundle's link graph: counts, types, tags, orphans, derived cross-bundle edge count. Call this before broader graph exploration.",
+        "Compact overview of a bundle's link graph: counts, types, tags, orphans (first 25 plus an `orphanCount`; list all via search_concepts with orphanOnly), derived cross-bundle edge count. Call this before broader graph exploration.",
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
       sweepJson(
         bundle !== undefined
-          ? graphSummary(await store.bundle(bundle), store.bundles())
-          : store.bundles().map((b) => graphSummary(b, store.bundles())),
+          ? capOrphans(graphSummary(await store.bundle(bundle), store.bundles()))
+          : store.bundles().map((b) => capOrphans(graphSummary(b, store.bundles()))),
         bundle === undefined,
       ),
   );
@@ -1119,7 +1196,13 @@ export function createOkfServer(
     async ({ bundle, id, ref }) => {
       const { bundle: target, concept, notGit } = await resolveGitConcept(bundle, id);
       if (notGit) return notGit;
-      return markdown(await fileDiff(target.root, concept.path, ref));
+      const diff = await fileDiff(target.root, concept.path, ref);
+      const lines = diff.split("\n");
+      if (lines.length <= DIFF_LINE_CAP) return markdown(diff);
+      return markdown(
+        `${lines.slice(0, DIFF_LINE_CAP).join("\n")}\n` +
+          `[diff truncated: first ${DIFF_LINE_CAP} of ${lines.length} lines]`,
+      );
     },
   );
 
@@ -1127,14 +1210,17 @@ export function createOkfServer(
     "validate_bundle",
     {
       title: "Validate bundle",
-      description: "Report OKF v0.2 conformance errors and soft warnings",
+      description:
+        "Report OKF v0.2 conformance errors and soft warnings; each list is capped at 50 per bundle, with errorsTotal/warningsTotal carrying the true counts when capped",
       inputSchema: { bundle: bundleParam },
     },
     async ({ bundle }) =>
       sweepJson(
-        await Promise.all(
-          (await selectBundles(bundle)).map((b) => validateBundle(b, store.bundles())),
-        ),
+        (
+          await Promise.all(
+            (await selectBundles(bundle)).map((b) => validateBundle(b, store.bundles())),
+          )
+        ).map(capProblems),
         bundle === undefined,
       ),
   );

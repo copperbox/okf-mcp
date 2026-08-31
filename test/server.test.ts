@@ -345,7 +345,7 @@ describe("lazy colocated bundles", () => {
     assert.deepEqual(JSON.parse(textContent(swept)), []);
     const note = swept.content[1];
     assert.ok(note?.type === "text");
-    assert.match(note.text, /2 discovered bundle\(s\)/);
+    assert.match(note.text, /2 unloaded bundle\(s\)/);
     assert.match(note.text, /acme, ops/);
 
     // Naming a bundle hydrates it and carries no note.
@@ -358,7 +358,7 @@ describe("lazy colocated bundles", () => {
     assert.equal((JSON.parse(textContent(partial)) as { total: number }).total, 1);
     const partialNote = partial.content[1];
     assert.ok(partialNote?.type === "text");
-    assert.match(partialNote.text, /1 discovered bundle\(s\)[\s\S]*acme/);
+    assert.match(partialNote.text, /1 unloaded bundle\(s\)[\s\S]*acme/);
 
     // Once everything is loaded the note disappears.
     await callTool(client, "list_types", { bundle: "acme" });
@@ -955,6 +955,53 @@ describe("server tools", () => {
     await assert.rejects(fs.access(path.join(FIXTURE, "tables", "index.md")));
   });
 
+  it("read_document returns a line slice with the file's total line count", async () => {
+    const whole = textContent(
+      await callTool(client, "read_document", { path: "tables/orders.md" }),
+    );
+    const lines = whole.split("\n");
+    const result = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      startLine: 2,
+      endLine: 3,
+    });
+    assert.ok(!result.isError);
+    assert.equal(textContent(result), lines.slice(1, 3).join("\n"));
+    assert.equal((result as { totalLines?: number }).totalLines, lines.length);
+
+    // Either bound alone works: startLine reads to the end, endLine from line 1.
+    const tail = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      startLine: lines.length,
+    });
+    assert.equal(textContent(tail), lines.at(-1));
+    const head = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      endLine: 1,
+    });
+    assert.equal(textContent(head), lines[0]);
+  });
+
+  it("list_concepts paginates with limit/offset and reports the true total", async () => {
+    const all = (await callJson(client, "list_concepts", { bundle: "acme" })) as {
+      total: number;
+      hits: Array<{ id: string }>;
+    };
+    assert.ok(all.total >= 3);
+    assert.equal(all.hits.length, all.total);
+
+    const page = (await callJson(client, "list_concepts", {
+      bundle: "acme",
+      limit: 2,
+      offset: 1,
+    })) as { total: number; hits: Array<{ id: string }> };
+    assert.equal(page.total, all.total);
+    assert.deepEqual(
+      page.hits.map((h) => h.id),
+      all.hits.slice(1, 3).map((h) => h.id),
+    );
+  });
+
   it("suggest_concept_path ranks directories by existing type placement", async () => {
     const suggestions = (await callJson(client, "suggest_concept_path", {
       bundle: "acme",
@@ -1078,6 +1125,19 @@ describe("git tools", () => {
     const result = await callTool(client, "concept_diff", { bundle: "plain", id: "notes/beta" });
     assert.ok(!result.isError);
     assert.match(textContent(result), /not a git repository/);
+  });
+
+  // Keep this last: it grows the repo the earlier diff tests assert against.
+  it("concept_diff caps the output at 200 lines with a truncation note", async () => {
+    const repoRoot = path.join(tmp, "repo");
+    const bulk = Array.from({ length: 300 }, (_, i) => `Line ${i}.`).join("\n");
+    await fs.appendFile(path.join(repoRoot, "notes", "alpha.md"), `\n${bulk}\n`);
+    await commitAll(repoRoot, "bulk edit");
+    const result = await callTool(client, "concept_diff", { bundle: "repo", id: "notes/alpha" });
+    assert.ok(!result.isError);
+    const lines = textContent(result).split("\n");
+    assert.equal(lines.length, 201);
+    assert.match(lines.at(-1)!, /^\[diff truncated: first 200 of \d+ lines\]$/);
   });
 });
 
@@ -2378,5 +2438,53 @@ describe("get_bundle_guide tool", () => {
     assert.equal(unknown.isError, true);
     assert.match(textContent(unknown), /unknown colocated root: \/nope/);
     assert.match(textContent(unknown), new RegExp(ROOT_URL));
+  });
+});
+
+describe("response caps", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-caps-test-"));
+    // 60 unlinked concepts, each carrying one deterministic frontmatter
+    // warning (`title` should be a string), to overflow both caps.
+    for (let i = 0; i < 60; i++) {
+      await fs.writeFile(
+        path.join(root, `note-${String(i).padStart(2, "0")}.md`),
+        "---\ntype: Note\ntitle: 7\n---\n\nAlone.\n",
+      );
+    }
+    client = await connectClient(new OkfStore([{ id: "caps", root }]));
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("graph_summary caps orphans at 25 and reports the true orphanCount", async () => {
+    const summary = (await callJson(client, "graph_summary", { bundle: "caps" })) as {
+      orphanCount: number;
+      orphans: string[];
+      orphansNote?: string;
+    };
+    assert.equal(summary.orphanCount, 60);
+    assert.equal(summary.orphans.length, 25);
+    assert.match(summary.orphansNote ?? "", /orphanOnly/);
+  });
+
+  it("validate_bundle caps each problem list at 50 with true totals", async () => {
+    const [report] = (await callJson(client, "validate_bundle", {
+      bundle: "caps",
+    })) as Array<{
+      errors: unknown[];
+      warnings: unknown[];
+      errorsTotal?: number;
+      warningsTotal?: number;
+      note?: string;
+    }>;
+    assert.equal(report!.warnings.length, 50);
+    assert.ok((report!.warningsTotal ?? 0) >= 60);
+    assert.equal(report!.errorsTotal, report!.errors.length);
+    assert.match(report!.note ?? "", /first 50/);
   });
 });

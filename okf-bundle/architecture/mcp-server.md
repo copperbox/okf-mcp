@@ -12,6 +12,9 @@ sources:
   - id: src-server-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/server.ts
     title: src/server.ts
+verified:
+  by: process:claude-code
+  at: 2026-08-30T00:00:00Z
 ---
 
 `createOkfServer(store, options)` in `src/server.ts` builds the MCP server; the [store](okf-store.md) is injected, never constructed by the server. `ServerOptions` carries `writable`, `bundleGuides`, `searchLimit`, `searchCutoff`.
