@@ -224,17 +224,19 @@ const DEFAULT_LIST_LIMIT = 50;
 
 /**
  * The one truncation contract every cap site speaks: slice `items` at `cap`,
- * always report the true `total`, and carry a steering `note` only when the
- * slice dropped something. Call sites spread the pieces under their own
- * field names, but the shape is the same everywhere: a `note` key means
- * truncated, and the true total is always present alongside it.
+ * always report the true `total`, and flag the cut with `truncated`. A caller
+ * that wants a steering note passes a builder, which runs only when the slice
+ * dropped something. Call sites spread the pieces under their own field names,
+ * but the shape is the same everywhere: `truncated` means the list was cut,
+ * and the true total is always present alongside it.
  */
-function capList<T>(items: T[], cap: number, note: (total: number) => string) {
+function capList<T>(items: T[], cap: number, note?: (total: number) => string) {
   const truncated = items.length > cap;
   return {
     items: truncated ? items.slice(0, cap) : items,
     total: items.length,
-    ...(truncated && { note: note(items.length) }),
+    truncated,
+    ...(truncated && note !== undefined && { note: note(items.length) }),
   };
 }
 
@@ -253,7 +255,7 @@ function capOrphans({ orphans, ...rest }: GraphSummary) {
     ...rest,
     orphanCount: capped.total,
     orphans: capped.items,
-    ...(capped.note !== undefined && { note: capped.note }),
+    ...(capped.truncated && { note: capped.note }),
   };
 }
 
@@ -263,15 +265,15 @@ function capOrphans({ orphans, ...rest }: GraphSummary) {
  * is visible.
  */
 function capProblems(report: ValidationReport) {
-  const errors = capList(report.errors, PROBLEM_CAP, () => "");
-  const warnings = capList(report.warnings, PROBLEM_CAP, () => "");
+  const errors = capList(report.errors, PROBLEM_CAP);
+  const warnings = capList(report.warnings, PROBLEM_CAP);
   return {
     ...report,
     errors: errors.items,
     warnings: warnings.items,
     errorsTotal: errors.total,
     warningsTotal: warnings.total,
-    ...((errors.note !== undefined || warnings.note !== undefined) && {
+    ...((errors.truncated || warnings.truncated) && {
       note: `showing first ${PROBLEM_CAP} per list; fix these first`,
     }),
   };
@@ -309,11 +311,10 @@ function capNeighbors(result: NeighborsResult, detail: "concise" | "full") {
     depth: result.depth,
     nodesTotal: capped.total,
     nodes: detail === "full" ? nodes : nodes.map(slim),
-    edges:
-      capped.note !== undefined
-        ? result.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
-        : result.edges,
-    ...(capped.note !== undefined && { note: capped.note }),
+    edges: capped.truncated
+      ? result.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
+      : result.edges,
+    ...(capped.truncated && { note: capped.note }),
   };
 }
 
