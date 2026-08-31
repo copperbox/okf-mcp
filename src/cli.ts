@@ -19,6 +19,8 @@ import type {
   ResolvedColocatedRoot,
   ResolvedConfig,
 } from "./config.js";
+import type { FeatureGroup } from "./features.js";
+import { ALL_FEATURE_GROUPS, parseFeatureList } from "./features.js";
 import { buildGraph, buildMultiGraph, exportGraph, graphSummary } from "./graph.js";
 import type { GraphFormat } from "./graph.js";
 import { packBundle } from "./pack.js";
@@ -181,6 +183,10 @@ Options:
                           keeps that bundle read-only even here, and a bundle
                           declaring "writable": true enables authoring without
                           this flag.
+  --features a,b          mcp only, experimental: advertise only these feature
+                          groups (${ALL_FEATURE_GROUPS.join(", ")});
+                          default all. Also settable as "features" in
+                          okf.config.json. Write tools still require --writable.
   --watch                 mcp only: auto-reload local bundles when .md files
                           change on disk (remote bundles still reload only via
                           the reload_bundles tool). Lazily mounted colocated
@@ -388,6 +394,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       "no-config": { type: "boolean" },
       "search-limit": { type: "string" },
       "search-cutoff": { type: "string" },
+      features: { type: "string" },
       actor: { type: "string" },
       all: { type: "boolean" },
       help: { type: "boolean" },
@@ -435,6 +442,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const [command = "mcp", ...rest] = positionals;
   let searchLimit: number | undefined;
   let searchCutoff: number | undefined;
+  let features: FeatureGroup[] | undefined;
   try {
     searchLimit = parseNumericFlag("--search-limit", values["search-limit"], {
       integer: true,
@@ -444,12 +452,19 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       min: 0,
       max: 1,
     });
+    if (values.features !== undefined) {
+      features = parseFeatureList(
+        values.features.split(",").map((v) => v.trim()).filter((v) => v !== ""),
+        "--features",
+      );
+    }
   } catch (err) {
     console.error(`error: ${(err as Error).message}`);
     return 2;
   }
   searchLimit ??= resolved.searchLimit;
   searchCutoff ??= resolved.searchCutoff;
+  features ??= resolved.features;
   const actor = values.actor ?? resolved.actor;
   // Colocated roots from config carry their own --only/--writable/canonical
   // URL; roots named on the command line share the global --only.
@@ -651,6 +666,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         bundleGuides: guides,
         ...(searchLimit !== undefined && { searchLimit }),
         ...(searchCutoff !== undefined && { searchCutoff }),
+        ...(features !== undefined && { features }),
         ...(actor !== undefined && { actor }),
       });
       await server.connect(new StdioServerTransport());

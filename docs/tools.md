@@ -4,6 +4,20 @@ Resources: one `text/markdown` resource per document, at `okf://<bundle>/<path>`
 
 The server declares MCP server-level instructions — a short primer on OKF conventions that clients inject into the agent's context. Authoring guidance is included only when the server runs with `--writable`. The two entry-point tools, `search_concepts` and `get_concept`, declare `anthropic/alwaysLoad` in their `_meta` so deferred-loading clients keep their schemas visible.
 
+## Feature groups (experimental)
+
+Every tool belongs to exactly one feature group, and the experimental [`features` config option](configuration.md#features-experimental) (or `--features`) gates advertisement group by group — tools in an omitted group never appear in `tools/list`, trimming the fixed per-session context cost. The groups (defined in `src/features.ts`):
+
+| Group | Tools |
+|---|---|
+| `read` | `search_concepts`, `get_concept`, `list_concepts`, `read_document`, `get_sources`, `suggest_concept_path`, `list_types`, `list_tags`, `list_bundles`, `get_bundle_guide` |
+| `graph` | `graph_summary`, `get_neighbors`, `find_path`, `export_graph` |
+| `write` | `write_concept`, `update_concept`, `delete_concept`, `rename_concept`, `promote_concept`, `append_log_entry` — additionally requires writability |
+| `remote` | `list_remote_bundles`, `load_remote_bundle`, `load_colocated_remote_bundles`, `reload_bundles` |
+| `maintenance` | `validate_bundle`, `regenerate_indexes`, `concept_history`, `concept_diff` |
+
+The default is every group, so nothing changes unless `features` is configured.
+
 ## Read tools
 
 | Tool | Purpose |

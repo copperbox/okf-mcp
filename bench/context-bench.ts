@@ -25,6 +25,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { createOkfServer } from "../src/server.js";
+import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
 import { PACKAGE_VERSION } from "../src/version.js";
 
@@ -293,10 +294,24 @@ interface FixedCosts {
   toolDefsTokens: number;
 }
 
+/**
+ * Fixed tool-definition cost of one feature-set configuration: what tools/list
+ * advertises when the server is started with those `features` (experimental
+ * feature-group toolset gating).
+ */
+interface FeatureSetCost {
+  label: string;
+  toolCount: number;
+  toolDefsBytes: number;
+  toolDefsTokens: number;
+}
+
 interface BenchResults {
   version: string;
   generatedAt: string;
   fixed: FixedCosts;
+  /** Absent in baselines recorded before feature-group gating existed. */
+  featureSets?: FeatureSetCost[];
   calls: CallResult[];
   callTotalBytes: number;
   callTotalTokens: number;
@@ -312,6 +327,42 @@ interface BenchResults {
 function responseSize(result: CallToolResult): number {
   return Buffer.byteLength(JSON.stringify(result.content), "utf8");
 }
+
+/**
+ * Serialized size of every tool definition a server configured with `options`
+ * advertises — the fixed cost a client injects into the model's context.
+ */
+async function measureToolDefs(
+  store: OkfStore,
+  options: ServerOptions,
+): Promise<{ toolCount: number; toolDefsBytes: number }> {
+  const server = createOkfServer(store, options);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "context-bench-fixed", version: PACKAGE_VERSION });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const { tools } = await client.listTools();
+  const toolDefsBytes = tools.reduce(
+    (sum, tool) => sum + Buffer.byteLength(JSON.stringify(tool), "utf8"),
+    0,
+  );
+  await client.close();
+  return { toolCount: tools.length, toolDefsBytes };
+}
+
+/**
+ * Feature-set configurations whose fixed tool-definition cost the bench
+ * reports. Measured writable so "all features" prices the full catalog and
+ * the gated sets show what a features-scoped session saves.
+ */
+const FEATURE_SETS: { label: string; options: ServerOptions }[] = [
+  { label: "all features (writable)", options: { writable: true } },
+  { label: "all features (read-only)", options: {} },
+  { label: 'features ["read"]', options: { writable: true, features: ["read"] } },
+  {
+    label: 'features ["read","graph"]',
+    options: { writable: true, features: ["read", "graph"] },
+  },
+];
 
 async function runBench(): Promise<BenchResults> {
   const synthRoot = await fs.mkdtemp(path.join(os.tmpdir(), "okf-bench-"));
@@ -370,12 +421,24 @@ async function runBench(): Promise<BenchResults> {
 
     await client.close();
 
+    // Fixed-cost measurement per feature set (experimental toolset gating).
+    const featureSets: FeatureSetCost[] = [];
+    for (const set of FEATURE_SETS) {
+      const measured = await measureToolDefs(store, set.options);
+      featureSets.push({
+        label: set.label,
+        ...measured,
+        toolDefsTokens: estimateTokens(measured.toolDefsBytes),
+      });
+    }
+
     const callTotalBytes = calls.reduce((sum, c) => sum + c.bytes, 0);
     const callTotalTokens = calls.reduce((sum, c) => sum + c.tokens, 0);
     return {
       version: PACKAGE_VERSION,
       generatedAt: new Date().toISOString(),
       fixed,
+      featureSets,
       calls,
       callTotalBytes,
       callTotalTokens,
@@ -434,6 +497,14 @@ function printTable(results: BenchResults): void {
       results.fixed.toolDefsTokens,
     ),
   );
+  if (results.featureSets !== undefined) {
+    console.log("fixed cost by feature set (tool definitions):");
+    for (const set of results.featureSets) {
+      console.log(
+        row(`${set.label} (${set.toolCount} tools)`, set.toolDefsBytes, set.toolDefsTokens),
+      );
+    }
+  }
   console.log("-".repeat(63));
   console.log(row("calls total", results.callTotalBytes, results.callTotalTokens, ""));
   console.log(

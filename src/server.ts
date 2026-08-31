@@ -19,6 +19,8 @@ import {
   writeConcept,
 } from "./authoring.js";
 import { readBundleDocument, readColocatedAgentsGuide } from "./bundle.js";
+import type { FeatureGroup } from "./features.js";
+import { ALL_FEATURE_GROUPS, featureGroupOf } from "./features.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
 import type { GraphNode, GraphSummary, NeighborsResult } from "./graph.js";
 import {
@@ -100,6 +102,14 @@ export interface ServerOptions {
    * and §5.3 derives the human-reviewed trust tier from that prefix.
    */
   actor?: string;
+  /**
+   * Experimental: feature groups to advertise (`FEATURE_GROUPS` keys —
+   * read, graph, write, remote, maintenance). Tools in an omitted group are
+   * registered but disabled, so their definitions never reach clients.
+   * Default: every group. Composes with `writable`: write tools require BOTH
+   * the write feature and writability.
+   */
+  features?: FeatureGroup[];
 }
 
 /** This server's own actor id, used when nothing else is configured (spec §7). */
@@ -364,15 +374,40 @@ export function createOkfServer(
   store: OkfStore,
   options: ServerOptions = {},
 ): McpServer {
+  const enabledFeatures = new Set<FeatureGroup>(options.features ?? ALL_FEATURE_GROUPS);
+  const featureEnabled = (tool: string): boolean => {
+    const group = featureGroupOf(tool);
+    if (group === undefined) {
+      throw new Error(
+        `tool "${tool}" is not assigned to a feature group — add it to FEATURE_GROUPS in src/features.ts`,
+      );
+    }
+    return enabledFeatures.has(group);
+  };
   const server = new McpServer(
     { name: "okf-mcp", version: PACKAGE_VERSION },
     {
       instructions: serverInstructions(
-        options,
+        // The writing guidance applies only when write tools are advertised,
+        // which takes the write feature on top of writability.
+        { ...options, writable: options.writable === true && enabledFeatures.has("write") },
         store.bundles().length > 0 || store.discoveredBundles().length > 0,
       ),
     },
   );
+
+  /**
+   * registerTool with feature gating: a tool whose group is off is registered
+   * but immediately disabled — the same mechanism get_bundle_guide uses for
+   * its mount-dependent visibility — so its definition never reaches clients
+   * via tools/list and calls to it fail. featureEnabled throws for a tool no
+   * group claims, so every new tool must be added to FEATURE_GROUPS.
+   */
+  const registerTool: McpServer["registerTool"] = (name, config, handler) => {
+    const tool = server.registerTool(name, config, handler);
+    if (!featureEnabled(name)) tool.disable();
+    return tool;
+  };
 
   const selectBundles = async (bundle: string | undefined) =>
     bundle !== undefined ? [await store.bundle(bundle)] : store.bundles();
@@ -477,7 +512,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_bundles",
     {
       title: "List bundles",
@@ -536,7 +571,7 @@ export function createOkfServer(
     };
   };
 
-  const bundleGuideTool = server.registerTool(
+  const bundleGuideTool = registerTool(
     "get_bundle_guide",
     {
       title: "Get bundle guide",
@@ -576,14 +611,16 @@ export function createOkfServer(
    * tools/list_changed), and off again should none remain.
    */
   const syncBundleGuideTool = () => {
-    const mounted = store.mountedColocatedRoots().length > 0;
+    // A disabled read feature outranks mount state: never re-enable the tool.
+    const mounted =
+      featureEnabled("get_bundle_guide") && store.mountedColocatedRoots().length > 0;
     if (mounted === bundleGuideTool.enabled) return;
     if (mounted) bundleGuideTool.enable();
     else bundleGuideTool.disable();
   };
   syncBundleGuideTool();
 
-  server.registerTool(
+  registerTool(
     "reload_bundles",
     {
       title: "Reload bundles",
@@ -635,7 +672,7 @@ export function createOkfServer(
     };
   };
 
-  server.registerTool(
+  registerTool(
     "load_remote_bundle",
     {
       title: "Load remote bundle",
@@ -681,7 +718,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "load_colocated_remote_bundles",
     {
       title: "Load colocated remote bundles",
@@ -743,7 +780,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_remote_bundles",
     {
       title: "List remote bundles",
@@ -766,7 +803,7 @@ export function createOkfServer(
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "list_concepts",
     {
       title: "List concepts",
@@ -809,7 +846,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "get_concept",
     {
       title: "Get concept",
@@ -870,7 +907,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "get_sources",
     {
       title: "Get sources",
@@ -906,7 +943,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "read_document",
     {
       title: "Read document",
@@ -946,7 +983,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "search_concepts",
     {
       title: "Search concepts",
@@ -1037,7 +1074,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_types",
     {
       title: "List types",
@@ -1049,7 +1086,7 @@ export function createOkfServer(
       sweepJson(listTypes(await selectBundles(bundle)), bundle === undefined),
   );
 
-  server.registerTool(
+  registerTool(
     "list_tags",
     {
       title: "List tags",
@@ -1061,7 +1098,7 @@ export function createOkfServer(
       sweepJson(listTags(await selectBundles(bundle)), bundle === undefined),
   );
 
-  server.registerTool(
+  registerTool(
     "suggest_concept_path",
     {
       title: "Suggest concept path",
@@ -1090,7 +1127,7 @@ export function createOkfServer(
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "graph_summary",
     {
       title: "Graph summary",
@@ -1130,7 +1167,7 @@ export function createOkfServer(
       "Traverse the multi-bundle graph: node IDs become bundle:concept and derived cross-bundle edges (citation/resource URLs matching another mounted bundle's canonical location) are followed",
     );
 
-  server.registerTool(
+  registerTool(
     "get_neighbors",
     {
       title: "Get neighbors",
@@ -1164,7 +1201,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "find_path",
     {
       title: "Find path",
@@ -1189,7 +1226,7 @@ export function createOkfServer(
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "export_graph",
     {
       title: "Export graph",
@@ -1262,7 +1299,7 @@ export function createOkfServer(
     return { bundle, concept, notGit };
   };
 
-  server.registerTool(
+  registerTool(
     "concept_history",
     {
       title: "Concept history",
@@ -1281,7 +1318,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "concept_diff",
     {
       title: "Concept diff",
@@ -1309,7 +1346,7 @@ export function createOkfServer(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "validate_bundle",
     {
       title: "Validate bundle",
@@ -1356,7 +1393,7 @@ export function createOkfServer(
       await store.reloadBundle(target.id);
     }
 
-    server.registerTool(
+    registerTool(
       "write_concept",
       {
         title: "Write concept",
@@ -1404,7 +1441,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "update_concept",
       {
         title: "Update concept",
@@ -1485,7 +1522,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "delete_concept",
       {
         title: "Delete concept",
@@ -1522,7 +1559,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "rename_concept",
       {
         title: "Rename concept",
@@ -1552,7 +1589,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "promote_concept",
       {
         title: "Promote concept",
@@ -1605,7 +1642,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "append_log_entry",
       {
         title: "Append log entry",
@@ -1638,7 +1675,7 @@ export function createOkfServer(
       },
     );
 
-    server.registerTool(
+    registerTool(
       "regenerate_indexes",
       {
         title: "Regenerate indexes",

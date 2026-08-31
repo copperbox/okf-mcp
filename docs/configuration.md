@@ -52,7 +52,7 @@ Layers apply lowest precedence first:
    filesystem root down to the working directory
 3. CLI flags
 
-Bundles and remote bundles are keyed by id, colocated roots by resolved path or URL. A higher layer **replaces** an entry with the same key and **adds** everything else, so layers accumulate rather than shadow one another. Scalars (`searchLimit`, `searchCutoff`, `actor`) are last-wins.
+Bundles and remote bundles are keyed by id, colocated roots by resolved path or URL. A higher layer **replaces** an entry with the same key and **adds** everything else, so layers accumulate rather than shadow one another. Scalars (`searchLimit`, `searchCutoff`, `features`, `actor`) are last-wins.
 
 ```
 ~/.config/okf/config.json      { "bundles": { "user": { "path": "~/notes", "writable": true } } }
@@ -135,6 +135,7 @@ Every key is optional.
 
   "searchLimit": 10,
   "searchCutoff": 0.25,
+  "features": ["read", "graph"],   // experimental: advertise only these tool groups
 
   "actor": "human:ahormati"
 }
@@ -145,6 +146,14 @@ Every key is optional.
 Who to record as `generated.by` on every write (OKF spec §5.2, §7). Defaults to `okf-mcp/<version>`, the spec's `<producer>/<version>` form for an agent or tool. Also settable per-invocation with `--actor`, and per-call with `update_concept`'s `actor` parameter.
 
 Set it to `human:<id>` **only** for a single-human deployment. `search_concepts`' `minTrust` filter derives the human-reviewed tier from that prefix (§5.3), so a shared server claiming it would mark everything it writes as human-reviewed — which is exactly the signal the tier exists to carry.
+
+### `features` (experimental)
+
+Which feature groups of tools the server advertises: any of `read`, `graph`, `write`, `remote`, `maintenance` (the groups are listed in [tools.md](tools.md#feature-groups-experimental)). Omitted means every group — the default behavior is unchanged. Tools in an omitted group are registered but disabled, so their definitions never reach clients via `tools/list`; that trims the fixed per-session context cost when a deployment only ever reads (`["read"]` advertises 9 tools instead of the full catalog). Last-wins across layers, like the other scalars, and also settable with `--features read,graph`.
+
+`features` composes with writability rather than replacing it: write tools appear only when **both** the `write` feature is on and the server is writable (`--writable` or a bundle declaring `"writable": true`). Listing `write` alone never enables authoring.
+
+This option is experimental — group names and defaults may change.
 
 Paths are resolved against the config file's own directory and a leading `~` expands to your home directory. The file is strict JSON — no comments. Unknown keys are ignored with a warning, so a config written for a newer version still loads.
 

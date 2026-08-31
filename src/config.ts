@@ -21,6 +21,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import type { FeatureGroup } from "./features.js";
+import { parseFeatureList } from "./features.js";
 import type {
   BundleConfig,
   ColocatedRemoteRootConfig,
@@ -83,6 +85,11 @@ export interface OkfConfigFile {
   searchLimit?: number;
   searchCutoff?: number;
   /**
+   * Experimental: feature groups the server advertises (FEATURE_GROUPS keys —
+   * read, graph, write, remote, maintenance). Omitted means every group.
+   */
+  features?: string[];
+  /**
    * Actor recorded as `generated.by` on every write (OKF spec §5.2, §7).
    * Defaults to `okf-mcp/<version>`. Set it to `human:<id>` only for a
    * single-human deployment: §5.3 derives the human-reviewed trust tier from
@@ -109,11 +116,21 @@ export interface ResolvedConfig {
   colocatedRemoteRoots: ColocatedRemoteRootConfig[];
   searchLimit?: number;
   searchCutoff?: number;
+  /** Experimental: feature groups to advertise; omitted means every group. */
+  features?: FeatureGroup[];
   actor?: string;
   /** Absolute paths of the config files that applied, lowest precedence first. */
   sources: string[];
   /** Non-fatal problems to report on stderr (unknown keys, writability downgrades). */
   warnings: string[];
+}
+
+/** Scalar options where the highest-precedence layer wins wholesale. */
+interface ConfigScalars {
+  searchLimit?: number;
+  searchCutoff?: number;
+  features?: FeatureGroup[];
+  actor?: string;
 }
 
 /** One config file read off disk, with the context needed to resolve it. */
@@ -151,6 +168,7 @@ const KNOWN_KEYS = new Set<keyof OkfConfigFile>([
   "colocatedRemoteRoots",
   "searchLimit",
   "searchCutoff",
+  "features",
   "actor",
 ]);
 
@@ -296,7 +314,7 @@ function applyLayer(
   colocatedRoots: Map<string, ResolvedColocatedRoot>,
   remotes: Map<string, RemoteBundleConfig>,
   colocatedRemoteRoots: Map<string, ColocatedRemoteRootConfig>,
-  scalars: { searchLimit?: number; searchCutoff?: number; actor?: string },
+  scalars: ConfigScalars,
   warnings: string[],
 ): void {
   const { file, dir, config, trusted } = layer;
@@ -437,6 +455,12 @@ function applyLayer(
   if (searchLimit !== undefined) scalars.searchLimit = searchLimit;
   const searchCutoff = optionalNumber(file, "searchCutoff", config.searchCutoff);
   if (searchCutoff !== undefined) scalars.searchCutoff = searchCutoff;
+  if (config.features !== undefined) {
+    scalars.features = parseFeatureList(
+      requireStringArray(file, "features", config.features),
+      `${file}: features`,
+    );
+  }
   if (config.actor !== undefined) {
     scalars.actor = requireString(file, "actor", config.actor);
   }
@@ -456,7 +480,7 @@ export async function loadOkfConfig(
   const colocatedRoots = new Map<string, ResolvedColocatedRoot>();
   const remotes = new Map<string, RemoteBundleConfig>();
   const colocatedRemoteRoots = new Map<string, ColocatedRemoteRootConfig>();
-  const scalars: { searchLimit?: number; searchCutoff?: number; actor?: string } = {};
+  const scalars: ConfigScalars = {};
   const warnings: string[] = [];
   for (const layer of layers) {
     applyLayer(
@@ -476,6 +500,7 @@ export async function loadOkfConfig(
     colocatedRemoteRoots: [...colocatedRemoteRoots.values()],
     ...(scalars.searchLimit !== undefined && { searchLimit: scalars.searchLimit }),
     ...(scalars.searchCutoff !== undefined && { searchCutoff: scalars.searchCutoff }),
+    ...(scalars.features !== undefined && { features: scalars.features }),
     ...(scalars.actor !== undefined && { actor: scalars.actor }),
     sources: layers.map((l) => l.file),
     warnings,

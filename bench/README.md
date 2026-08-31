@@ -13,6 +13,13 @@ also reports the session-fixed costs: server instructions length and the
 summed size of the advertised tool definitions (name, description, and the
 zod-derived JSON schema, as `tools/list` returns them).
 
+A "fixed cost by feature set" section additionally measures the tool-definition
+cost of servers started with the experimental `features` option (feature-group
+toolset gating): all features writable and read-only, `["read"]`, and
+`["read", "graph"]`. Edit `FEATURE_SETS` in `context-bench.ts` to compare other
+sets; the section is additive, so baselines recorded before it exist still diff
+cleanly.
+
 ## Running
 
 ```sh
