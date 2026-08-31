@@ -16,7 +16,7 @@ import type { ServerOptions } from "../src/server.js";
 import { OkfStore } from "../src/store.js";
 import { fakeArchiveServer, makeTarGz } from "./archives.js";
 import { fakeGitHub } from "./fake-github.js";
-import { commitAll, initRepo } from "./helpers.js";
+import { commitAll, git, initRepo } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "acme");
 
@@ -345,7 +345,7 @@ describe("lazy colocated bundles", () => {
     assert.deepEqual(JSON.parse(textContent(swept)), []);
     const note = swept.content[1];
     assert.ok(note?.type === "text");
-    assert.match(note.text, /2 discovered bundle\(s\)/);
+    assert.match(note.text, /2 unloaded bundle\(s\)/);
     assert.match(note.text, /acme, ops/);
 
     // Naming a bundle hydrates it and carries no note.
@@ -358,7 +358,7 @@ describe("lazy colocated bundles", () => {
     assert.equal((JSON.parse(textContent(partial)) as { total: number }).total, 1);
     const partialNote = partial.content[1];
     assert.ok(partialNote?.type === "text");
-    assert.match(partialNote.text, /1 discovered bundle\(s\)[\s\S]*acme/);
+    assert.match(partialNote.text, /1 unloaded bundle\(s\)[\s\S]*acme/);
 
     // Once everything is loaded the note disappears.
     await callTool(client, "list_types", { bundle: "acme" });
@@ -862,39 +862,6 @@ describe("server tools", () => {
     assert.deepEqual([...new Set(result.sources.map((s) => s.cited))], [false]);
   });
 
-  it("get_citations classifies external, concept, and missing targets", async () => {
-    assert.deepEqual(await callJson(client, "get_citations", { id: "tables/orders" }), [
-      {
-        index: 1,
-        text: "BigQuery table schema",
-        target: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=orders",
-        kind: "external",
-      },
-      {
-        index: 2,
-        text: "Customer dimension table",
-        target: "/tables/customers.md",
-        kind: "concept",
-      },
-      {
-        index: 3,
-        text: "Retired ingestion runbook",
-        target: "/playbooks/retired-runbook",
-        kind: "missing",
-      },
-    ]);
-  });
-
-  it("get_citations returns an empty list for a concept without a Citations section", async () => {
-    assert.deepEqual(await callJson(client, "get_citations", { id: "datasets/sales" }), []);
-  });
-
-  it("get_citations rejects an unknown concept", async () => {
-    const result = await callTool(client, "get_citations", { id: "tables/nope" });
-    assert.ok(result.isError);
-    assert.match(textContent(result), /unknown concept/);
-  });
-
   it("validate_bundle reports citation warnings", async () => {
     const [report] = (await callJson(client, "validate_bundle", { bundle: "acme" })) as Array<{
       warnings: Array<{ path?: string; message: string }>;
@@ -955,6 +922,53 @@ describe("server tools", () => {
     await assert.rejects(fs.access(path.join(FIXTURE, "tables", "index.md")));
   });
 
+  it("read_document returns a line slice with the file's total line count", async () => {
+    const whole = textContent(
+      await callTool(client, "read_document", { path: "tables/orders.md" }),
+    );
+    const lines = whole.split("\n");
+    const result = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      startLine: 2,
+      endLine: 3,
+    });
+    assert.ok(!result.isError);
+    assert.equal(textContent(result), lines.slice(1, 3).join("\n"));
+    assert.equal((result as { totalLines?: number }).totalLines, lines.length);
+
+    // Either bound alone works: startLine reads to the end, endLine from line 1.
+    const tail = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      startLine: lines.length,
+    });
+    assert.equal(textContent(tail), lines.at(-1));
+    const head = await callTool(client, "read_document", {
+      path: "tables/orders.md",
+      endLine: 1,
+    });
+    assert.equal(textContent(head), lines[0]);
+  });
+
+  it("list_concepts paginates with limit/offset and reports the true total", async () => {
+    const all = (await callJson(client, "list_concepts", { bundle: "acme" })) as {
+      total: number;
+      hits: Array<{ id: string }>;
+    };
+    assert.ok(all.total >= 3);
+    assert.equal(all.hits.length, all.total);
+
+    const page = (await callJson(client, "list_concepts", {
+      bundle: "acme",
+      limit: 2,
+      offset: 1,
+    })) as { total: number; hits: Array<{ id: string }> };
+    assert.equal(page.total, all.total);
+    assert.deepEqual(
+      page.hits.map((h) => h.id),
+      all.hits.slice(1, 3).map((h) => h.id),
+    );
+  });
+
   it("suggest_concept_path ranks directories by existing type placement", async () => {
     const suggestions = (await callJson(client, "suggest_concept_path", {
       bundle: "acme",
@@ -980,11 +994,219 @@ describe("server tools", () => {
     const result = await callTool(client, "suggest_concept_path", { type: "" });
     assert.ok(result.isError);
   });
+
+  it("search_concepts hits are concise by default; detail full restores scoring fields", async () => {
+    const concise = (await callJson(client, "search_concepts", { query: "orders" })) as {
+      hits: Array<Record<string, unknown>>;
+    };
+    const hit = concise.hits[0]!;
+    assert.equal(hit.id, "tables/orders");
+    assert.equal(typeof hit.title, "string");
+    for (const dropped of ["score", "matchedIn", "status", "trust", "stale"]) {
+      assert.ok(!(dropped in hit), `concise hit should omit ${dropped}`);
+    }
+
+    const full = (await callJson(client, "search_concepts", {
+      query: "orders",
+      detail: "full",
+    })) as { hits: Array<Record<string, unknown>> };
+    const fullHit = full.hits[0]!;
+    assert.equal(typeof fullHit.score, "number");
+    assert.ok(Array.isArray(fullHit.matchedIn));
+    assert.equal(fullHit.status, "stable");
+    assert.equal(fullHit.trust, "unverified");
+  });
+
+  it("get_concept omits the link offset arrays unless detail is full", async () => {
+    const concise = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+    })) as Record<string, unknown>;
+    assert.equal(typeof concise.body, "string");
+    assert.ok(!("links" in concise));
+    assert.ok(!("frontmatterLinks" in concise));
+
+    const full = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      detail: "full",
+    })) as { links: Array<{ target: string }>; frontmatterLinks: unknown[] };
+    assert.ok(full.links.some((l) => l.target === "./customers.md"));
+    assert.ok(Array.isArray(full.frontmatterLinks));
+
+    // Section and outline reads follow the same rule (they never carry `links`).
+    const section = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "Schema",
+    })) as Record<string, unknown>;
+    assert.ok(!("frontmatterLinks" in section));
+    const fullOutline = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      outline: true,
+      detail: "full",
+    })) as Record<string, unknown>;
+    assert.ok("frontmatterLinks" in fullOutline);
+    assert.ok(!("links" in fullOutline));
+  });
+
+  it("get_neighbors returns slim nodes by default; detail full restores metadata", async () => {
+    const concise = (await callJson(client, "get_neighbors", {
+      id: "tables/orders",
+    })) as { nodes: Array<Record<string, unknown>> };
+    assert.ok(concise.nodes.length > 1);
+    for (const node of concise.nodes) {
+      assert.ok(
+        Object.keys(node).every((key) => ["id", "title", "type"].includes(key)),
+        `slim node should carry only id/title/type: ${Object.keys(node).join(", ")}`,
+      );
+    }
+
+    const full = (await callJson(client, "get_neighbors", {
+      id: "tables/orders",
+      detail: "full",
+    })) as { nodes: Array<{ id: string; description?: string; tags?: string[] }> };
+    const orders = full.nodes.find((n) => n.id === "tables/orders");
+    assert.equal(orders?.description, "One row per completed customer order.");
+    assert.deepEqual(orders?.tags, ["sales", "orders"]);
+  });
+
+  it("export_graph defaults to a json summary with counts and hub degrees", async () => {
+    const summary = (await callJson(client, "export_graph", { bundle: "acme" })) as {
+      nodes: number;
+      edges: number;
+      nodesByType: Record<string, number>;
+      edgesByKind: Record<string, number>;
+      hubs: Array<{ id: string; degree: number }>;
+      brokenLinks: number;
+    };
+    assert.equal(summary.nodes, 5);
+    assert.ok(summary.edges >= 1);
+    assert.equal(summary.nodesByType["BigQuery Table"], 2);
+    assert.equal(summary.edgesByKind.link, summary.edges);
+    assert.ok((summary.hubs[0]?.degree ?? 0) >= 1);
+    assert.ok(summary.brokenLinks >= 1);
+  });
+
+  it("export_graph ids returns bare node ids and [from, to] edge pairs", async () => {
+    const ids = (await callJson(client, "export_graph", {
+      bundle: "acme",
+      detail: "ids",
+    })) as { nodes: string[]; edges: string[][]; note?: string };
+    assert.ok(ids.nodes.includes("tables/orders"));
+    assert.ok(ids.nodes.every((n) => typeof n === "string"));
+    assert.ok(
+      ids.edges.some((e) => e[0] === "tables/orders" && e[1] === "tables/customers"),
+    );
+    assert.ok(ids.edges.every((e) => e.length === 2), "in-bundle edges are pairs");
+    assert.equal(ids.note, undefined);
+  });
+
+  it("export_graph full returns complete nodes and edges under the cap", async () => {
+    const full = (await callJson(client, "export_graph", {
+      bundle: "acme",
+      detail: "full",
+    })) as {
+      nodes: Array<{ id: string; title?: string }>;
+      edges: Array<{ from: string; to: string }>;
+      warnings: string[];
+      note?: string;
+    };
+    assert.equal(full.nodes.find((n) => n.id === "tables/orders")?.title, "Orders");
+    assert.ok(full.edges.some((e) => e.from === "tables/orders"));
+    assert.ok(full.warnings.some((w) => /retired-runbook/.test(w)));
+    assert.equal(full.note, undefined);
+  });
+});
+
+describe("detail ladder caps", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    // One hub with 320 spokes linking to it: over the 300-node export cap and
+    // far over the 50-node neighbor cap.
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-caps-test-"));
+    await fs.writeFile(
+      path.join(root, "hub.md"),
+      "---\ntype: Note\ntitle: Hub\n---\n\nCenter.\n",
+    );
+    for (let i = 0; i < 320; i++) {
+      await fs.writeFile(
+        path.join(root, `spoke-${i}.md`),
+        `---\ntype: Note\ntitle: Spoke ${i}\n---\n\nSee [hub](./hub.md).\n`,
+      );
+    }
+    client = await connectClient(new OkfStore([{ id: "big", root }]));
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("get_neighbors caps at 50 nodes, keeps the center, and steers", async () => {
+    const result = (await callJson(client, "get_neighbors", { id: "hub" })) as {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ from: string; to: string }>;
+      note?: string;
+    };
+    assert.equal(result.nodes.length, 50);
+    assert.equal(result.nodes[0]?.id, "hub");
+    assert.match(result.note ?? "", /50 of 321 nodes/);
+    assert.match(result.note ?? "", /depth/);
+    // No edge dangles into the truncated remainder.
+    const kept = new Set(result.nodes.map((n) => n.id));
+    assert.ok(result.edges.every((e) => kept.has(e.from) && kept.has(e.to)));
+  });
+
+  it("export_graph ids and full cap nodes with a truncation note; summary counts everything", async () => {
+    const ids = (await callJson(client, "export_graph", { detail: "ids" })) as {
+      nodes: string[];
+      edges: string[][];
+      nodesTotal: number;
+      edgesTotal: number;
+      note?: string;
+    };
+    assert.equal(ids.nodes.length, 300);
+    assert.equal(ids.nodesTotal, 321);
+    assert.equal(ids.edgesTotal, 320);
+    assert.match(ids.note ?? "", /300 of 321 nodes/);
+    assert.match(ids.note ?? "", /summary/);
+    // A capped export stays a self-contained graph: no edge dangles into
+    // the truncated remainder.
+    const keptIds = new Set(ids.nodes);
+    assert.ok(ids.edges.length > 0);
+    assert.ok(ids.edges.every((e) => keptIds.has(e[0]!) && keptIds.has(e[1]!)));
+    assert.match(ids.note ?? "", new RegExp(`${ids.edges.length} of 320 edges`));
+
+    const full = (await callJson(client, "export_graph", { detail: "full" })) as {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ from: string; to: string }>;
+      note?: string;
+    };
+    assert.equal(full.nodes.length, 300);
+    assert.match(full.note ?? "", /300 of 321 nodes/);
+    const keptFull = new Set(full.nodes.map((n) => n.id));
+    assert.ok(full.edges.length > 0);
+    assert.ok(full.edges.every((e) => keptFull.has(e.from) && keptFull.has(e.to)));
+
+    const summary = (await callJson(client, "export_graph", {})) as {
+      nodes: number;
+      hubs: Array<{ id: string; degree: number }>;
+    };
+    assert.equal(summary.nodes, 321);
+    assert.deepEqual(summary.hubs[0], { id: "hub", degree: 320 });
+  });
+
+  it("export_graph accepts the read tools' \"concise\" as an alias for summary", async () => {
+    const concise = (await callJson(client, "export_graph", {
+      detail: "concise",
+    })) as { nodes: number; hubs: unknown[] };
+    assert.equal(concise.nodes, 321);
+    assert.ok(Array.isArray(concise.hubs));
+  });
 });
 
 describe("git tools", () => {
   let tmp: string;
   let client: Client;
+  let addAlpha: string;
   before(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), "okf-server-git-"));
 
@@ -994,10 +1216,20 @@ describe("git tools", () => {
     await fs.writeFile(alpha, "---\ntype: Note\ntitle: Alpha\n---\n\nFirst draft.\n");
     await initRepo(repoRoot);
     await commitAll(repoRoot, "add alpha");
+    addAlpha = (await git(repoRoot, "rev-parse", "HEAD")).trim();
     await fs.appendFile(alpha, "\nSecond thoughts.\n");
     await commitAll(repoRoot, "update alpha");
     await fs.appendFile(alpha, "\nThird pass.\n");
     await commitAll(repoRoot, "polish alpha");
+
+    // The truncation test gets its own concept so its bulk commit cannot
+    // disturb what the alpha history/diff tests pin.
+    const bulk = path.join(repoRoot, "notes", "bulk.md");
+    await fs.writeFile(bulk, "---\ntype: Note\ntitle: Bulk\n---\n\nSeed.\n");
+    await commitAll(repoRoot, "add bulk");
+    const bulkLines = Array.from({ length: 300 }, (_, i) => `Line ${i}.`).join("\n");
+    await fs.appendFile(bulk, `\n${bulkLines}\n`);
+    await commitAll(repoRoot, "bulk edit");
 
     const plainRoot = path.join(tmp, "plain");
     await fs.mkdir(path.join(plainRoot, "notes"), { recursive: true });
@@ -1066,7 +1298,7 @@ describe("git tools", () => {
     const result = await callTool(client, "concept_diff", {
       bundle: "repo",
       id: "notes/alpha",
-      ref: "HEAD~2",
+      ref: addAlpha,
     });
     assert.ok(!result.isError);
     const diff = textContent(result);
@@ -1078,6 +1310,14 @@ describe("git tools", () => {
     const result = await callTool(client, "concept_diff", { bundle: "plain", id: "notes/beta" });
     assert.ok(!result.isError);
     assert.match(textContent(result), /not a git repository/);
+  });
+
+  it("concept_diff caps the output at 200 lines with a truncation note", async () => {
+    const result = await callTool(client, "concept_diff", { bundle: "repo", id: "notes/bulk" });
+    assert.ok(!result.isError);
+    const lines = textContent(result).split("\n");
+    assert.equal(lines.length, 201);
+    assert.match(lines.at(-1)!, /^\[diff truncated: first 200 of \d+ lines\]$/);
   });
 });
 
@@ -1261,7 +1501,7 @@ describe("authoring tools", () => {
   });
 
   describe("citation hygiene (issue #78)", () => {
-    it("write_concept normalizes ordered-list citations so get_citations sees them", async () => {
+    it("write_concept normalizes ordered-list citations to the [n] form", async () => {
       const client = await connectLocal({ writable: true });
       const write = await callTool(client, "write_concept", {
         path: "notes/sourced.md",
@@ -1270,13 +1510,9 @@ describe("authoring tools", () => {
       });
       assert.notEqual(write.isError, true);
 
-      const citations = (await callJson(client, "get_citations", {
-        id: "notes/sourced",
-      })) as Array<{ index: number; target: string }>;
-      assert.deepEqual(
-        citations.map((c) => ({ index: c.index, target: c.target })),
-        [{ index: 1, target: "https://example.com" }],
-      );
+      const stored = await fs.readFile(path.join(root, "notes/sourced.md"), "utf8");
+      assert.ok(stored.includes("[1] [Example](https://example.com)"));
+      assert.ok(!stored.includes("1. [Example]"));
       const reports = (await callJson(client, "validate_bundle", {})) as Array<{
         warnings: Array<{ message: string }>;
       }>;
@@ -1304,10 +1540,8 @@ describe("authoring tools", () => {
 
       const source = await fs.readFile(path.join(root, "notes/sourced.md"), "utf8");
       assert.equal(source.match(/# Citations/g)?.length, 1);
-      const citations = (await callJson(client, "get_citations", {
-        id: "notes/sourced",
-      })) as Array<{ target: string }>;
-      assert.deepEqual(citations.map((c) => c.target), ["https://example.com"]);
+      assert.ok(source.includes("[1] [Example](https://example.com)"));
+      assert.ok(!source.includes("[9] [Old]"), "the replaced entry must be gone");
     });
   });
 
@@ -1778,10 +2012,8 @@ describe("server instructions", () => {
       "update_concept",
       "append_log_entry",
       "reload_bundles",
-      "next page with `offset`",
-      "`omitted` count",
       // Context-frugality guidance: search first, section reads, one-shot orientation.
-      "search_concepts (text plus type/tag/path/link filters) is the entry",
+      "search_concepts is the entry point",
       "reserve list_concepts",
       "Read sections, not whole documents",
       "`matchedSections`",
@@ -1806,16 +2038,19 @@ describe("server instructions", () => {
       !instructions.includes("prefer the bundle-absolute form"),
       "instructions should not recommend the bundle-absolute link form",
     );
-    // Instructions cost context in every session — keep them short. Raised
-    // from 40 for OKF v0.2 (provenance/trust/lifecycle vocabulary), then to 48
-    // for the context-frugality guidance (search-first entry point, section
-    // reads, once-per-session orientation) — lines that exist to save far more
-    // context than they cost.
-    const lineCount = instructions.split("\n").length;
+    // Instructions cost context in every session — keep them short. With no
+    // bundle guides configured, the whole string is the shared block plus the
+    // writing block; per-call mechanics (paging, `omitted`, limit semantics)
+    // belong in each tool's own schema text, not here, so growth past this
+    // budget means something leaked into the wrong home.
     assert.ok(
-      lineCount <= 48,
-      `instructions should stay under ~48 lines, got ${lineCount}`,
+      instructions.length <= 3600,
+      `shared+writing instructions should stay under 3,600 chars, got ${instructions.length}`,
     );
+    // Paging mechanics live on search_concepts itself; the instructions must
+    // not restate them (definition hygiene, 2.0).
+    assert.ok(!instructions.includes("next page with `offset`"));
+    assert.ok(!instructions.includes("low-relevance matches suppressed"));
     await client.close();
   });
 
@@ -1895,6 +2130,44 @@ describe("server instructions", () => {
     await client.close();
   });
 
+  it("inlines only the first root's guide; extra roots cost one pointer line each", async () => {
+    // Guides are uncapped in aggregate if every root injects its own (each up
+    // to BUNDLE_GUIDE_BUDGET); past the first root, a mounted root may only
+    // add a bounded pointer at get_bundle_guide.
+    const store = () => new OkfStore([{ id: "acme", root: FIXTURE }]);
+    const first = {
+      text: "- acme: warehouse schema tables and their playbooks.\n",
+      source: "/vault/AGENTS.md",
+    };
+    const extras = [
+      { text: "guide two, long enough to notice if inlined.\n".repeat(20), source: "/two/AGENTS.md" },
+      { text: "guide three, long enough to notice if inlined.\n".repeat(20), source: "/three/AGENTS.md" },
+    ];
+    const one = await connectClient(store(), { bundleGuides: [first] });
+    const three = await connectClient(store(), { bundleGuides: [first, ...extras] });
+    const withOne = one.getInstructions() ?? "";
+    const withThree = three.getInstructions() ?? "";
+
+    assert.ok(withThree.includes("- acme: warehouse schema tables"), "first guide is inlined");
+    for (const extra of extras) {
+      assert.ok(
+        !withThree.includes("long enough to notice if inlined"),
+        "extra roots' guide text must not be inlined",
+      );
+      assert.ok(
+        withThree.includes(`Bundle root ${path.dirname(extra.source)} has a guide`),
+        `pointer line should name the root of ${extra.source}`,
+      );
+    }
+    assert.ok(withThree.includes("get_bundle_guide"), "pointer names the tool");
+    assert.ok(
+      withThree.length - withOne.length <= 2 * 120,
+      `each extra root should add at most 120 chars, two added ${withThree.length - withOne.length}`,
+    );
+    await one.close();
+    await three.close();
+  });
+
   it("points at get_bundle_guide for bundle orientation, even without guides", async () => {
     const client = await connectClient(new OkfStore([{ id: "acme", root: FIXTURE }]));
     const instructions = client.getInstructions();
@@ -1961,10 +2234,12 @@ describe("cross-bundle graph tools", () => {
     })) as { nodes: Array<{ id: string }> };
     assert.deepEqual(plain.nodes.map((n) => n.id), ["setup"]);
 
+    // detail: "full" restores the node's bundle/path metadata.
     const cross = (await callJson(client, "get_neighbors", {
       bundle: "proj",
       id: "setup",
       crossBundle: true,
+      detail: "full",
     })) as { nodes: Array<{ id: string; bundle: string }> };
     const naming = cross.nodes.find((n) => n.id === "org:standards/naming");
     assert.equal(naming?.bundle, "org");
@@ -1990,6 +2265,29 @@ describe("cross-bundle graph tools", () => {
     );
     assert.match(dot, /"proj:setup" -> "org:standards\/naming" \[style=dashed\];/);
     assert.match(dot, /"org:standards\/naming" -> "org:standards\/reviews";/);
+  });
+
+  it("export_graph ids keeps the kind on derived cross-bundle edge tuples", async () => {
+    const ids = (await callJson(client, "export_graph", {
+      detail: "ids",
+      crossBundle: true,
+    })) as { edges: string[][] };
+    assert.ok(
+      ids.edges.some(
+        (e) =>
+          e[0] === "proj:setup" &&
+          e[1] === "org:standards/naming" &&
+          e[2] === "cross-bundle",
+      ),
+    );
+    assert.ok(
+      ids.edges.some(
+        (e) =>
+          e[0] === "org:standards/naming" &&
+          e[1] === "org:standards/reviews" &&
+          e.length === 2,
+      ),
+    );
   });
 
   it("load_remote_bundle accepts and list_remote_bundles echoes a canonicalUrl", async () => {
@@ -2054,17 +2352,6 @@ describe("colocated cross-bundle tools", () => {
     for (const summary of summaries) {
       assert.equal(summary.crossBundleEdges, 1, summary.bundle);
     }
-  });
-
-  it("get_citations classifies a resolving ../sibling citation as concept", async () => {
-    const citations = (await callJson(client, "get_citations", {
-      bundle: "ops",
-      id: "runbook",
-    })) as Array<{ index: number; kind: string }>;
-    assert.deepEqual(
-      citations.map((c) => c.kind),
-      ["concept", "missing"],
-    );
   });
 
   it("validate_bundle warns on dangling ../sibling links only", async () => {
@@ -2378,5 +2665,53 @@ describe("get_bundle_guide tool", () => {
     assert.equal(unknown.isError, true);
     assert.match(textContent(unknown), /unknown colocated root: \/nope/);
     assert.match(textContent(unknown), new RegExp(ROOT_URL));
+  });
+});
+
+describe("response caps", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-caps-test-"));
+    // 60 unlinked concepts, each carrying one deterministic frontmatter
+    // warning (`title` should be a string), to overflow both caps.
+    for (let i = 0; i < 60; i++) {
+      await fs.writeFile(
+        path.join(root, `note-${String(i).padStart(2, "0")}.md`),
+        "---\ntype: Note\ntitle: 7\n---\n\nAlone.\n",
+      );
+    }
+    client = await connectClient(new OkfStore([{ id: "caps", root }]));
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("graph_summary caps orphans at 25 and reports the true orphanCount", async () => {
+    const summary = (await callJson(client, "graph_summary", { bundle: "caps" })) as {
+      orphanCount: number;
+      orphans: string[];
+      note?: string;
+    };
+    assert.equal(summary.orphanCount, 60);
+    assert.equal(summary.orphans.length, 25);
+    assert.match(summary.note ?? "", /orphanOnly/);
+  });
+
+  it("validate_bundle caps each problem list at 50 with true totals", async () => {
+    const [report] = (await callJson(client, "validate_bundle", {
+      bundle: "caps",
+    })) as Array<{
+      errors: unknown[];
+      warnings: unknown[];
+      errorsTotal?: number;
+      warningsTotal?: number;
+      note?: string;
+    }>;
+    assert.equal(report!.warnings.length, 50);
+    assert.ok((report!.warningsTotal ?? 0) >= 60);
+    assert.equal(report!.errorsTotal, report!.errors.length);
+    assert.match(report!.note ?? "", /first 50/);
   });
 });

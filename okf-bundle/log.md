@@ -1,5 +1,13 @@
 # Update Log
 
+## 2026-08-31
+* **Verification**: [Search scoring](/architecture/search-scoring.md) still holds after the 2.0 stage-3 definition-hygiene pass (paging/`omitted` facts unchanged, only their instruction-vs-schema home moved).
+* **Update**: [Context-window frugality is server surface](/decisions/context-window-frugality-is-server-surface.md) — 2.0 stage 3: one-home-per-fact instruction de-dup, 3,600-char budget, first-root-only guide inlining.
+* **Update**: [MCP server surface](/architecture/mcp-server.md) — documented the first-root-only guide inlining and the 3,600-char shared+writing instruction budget.
+* **Update**: [MCP server surface](/architecture/mcp-server.md) — get_citations removed (28 tools), instruction composition re-budgeted (2.0 stage 3).
+* **Update**: Verified [MCP server surface](/architecture/mcp-server.md) still holds after the 2.0 Stage 1 response-shaping changes to server.ts.
+* **Update**: Updated [Context-window frugality is server surface](/decisions/context-window-frugality-is-server-surface.md) with the 2.0 Stage 1 response-shaping lever (compact JSON, caps, pagination, terse payload prose).
+
 ## 2026-08-25
 * Record the separate trunks toggle
 * visualize: cross-bundle edges go quiet, gain rim ticks, hover emphasis, and bundle-pair trunks at overview zoom (1.5.0)

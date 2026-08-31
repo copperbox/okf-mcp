@@ -107,6 +107,22 @@ describe("searchConcepts", () => {
     assert.deepEqual(hits.map((h) => h.id), ["notes/no-type"]);
   });
 
+  it("counts frontmatter links as links for orphanOnly, like graph_summary does", () => {
+    const synthetic = makeBundle([
+      {
+        id: "derived",
+        type: "Doc",
+        frontmatter: { sources: [{ resource: "./base.md" }] },
+      },
+      { id: "base", type: "Doc" },
+      { id: "loner", type: "Doc" },
+    ]);
+    // makeBundle skips loadBundle's resolve pass; mark the link resolved as it would.
+    synthetic.concepts.get("derived")!.frontmatterLinks[0]!.resolvedId = "base";
+    const { hits } = searchConcepts([synthetic], { orphanOnly: true });
+    assert.deepEqual(hits.map((h) => h.id), ["loner"]);
+  });
+
   it("derives hit titles from the filename when frontmatter has none", () => {
     const synthetic = makeBundle([{ id: "docs/customer-order-history", type: "Doc" }]);
     const { hits } = searchConcepts([synthetic]);
