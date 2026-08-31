@@ -30,6 +30,8 @@ The server declares MCP server-level instructions — a short primer on OKF conv
 | `concept_diff` | Unified git diff of a concept file against a ref, capped at 200 lines with a truncation note carrying the total; on non-git bundles, returns a `not a git repository` result instead of failing |
 | `validate_bundle` | OKF conformance errors + soft warnings, each list capped at 50 per bundle (`errorsTotal`/`warningsTotal` carry the true counts when capped); warnings with a safe mechanical fix name their [`repair`](cli.md#repair) fixer id |
 
+Experimental: the list-shaped tools `search_concepts`, `list_concepts`, and `get_neighbors` accept `format: "compact"`, which renders one markdown-flavored line per hit/node/edge (grammar documented in `src/render.ts`) instead of repeated-key JSON, typically halving the response size. `format` governs serialization only and composes with `detail`, which governs fields. The default remains `"json"`.
+
 ## Write tools (only with `--writable`)
 
 | Tool | Purpose |

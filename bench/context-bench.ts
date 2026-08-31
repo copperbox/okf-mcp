@@ -71,6 +71,11 @@ const SCENARIOS: Scenario[] = [
         args: { query: "orders sales" },
       },
       {
+        label: "search #1 (orders sales, compact)",
+        tool: "search_concepts",
+        args: { query: "orders sales", format: "compact" },
+      },
+      {
         label: "search #2 (checkout pipeline)",
         tool: "search_concepts",
         args: { query: "checkout pipeline" },
@@ -79,6 +84,11 @@ const SCENARIOS: Scenario[] = [
         label: "search #3 (retry backoff runbook)",
         tool: "search_concepts",
         args: { query: "retry backoff runbook" },
+      },
+      {
+        label: "search #3 (retry backoff runbook, compact)",
+        tool: "search_concepts",
+        args: { query: "retry backoff runbook", format: "compact" },
       },
       {
         label: "get_concept outline",
@@ -101,6 +111,11 @@ const SCENARIOS: Scenario[] = [
         args: { bundle: "synth", id: "services/core-gateway" },
       },
       {
+        label: "get_neighbors (hub, compact)",
+        tool: "get_neighbors",
+        args: { bundle: "synth", id: "services/core-gateway", format: "compact" },
+      },
+      {
         label: "export_graph summary",
         tool: "export_graph",
         args: { bundle: "synth", detail: "summary" },
@@ -115,6 +130,11 @@ const SCENARIOS: Scenario[] = [
         label: "list_concepts page",
         tool: "list_concepts",
         args: { bundle: "synth", limit: 50 },
+      },
+      {
+        label: "list_concepts page (compact)",
+        tool: "list_concepts",
+        args: { bundle: "synth", limit: 50, format: "compact" },
       },
     ],
   },

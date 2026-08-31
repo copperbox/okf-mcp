@@ -36,6 +36,7 @@ import {
   summarizeGraph,
 } from "./graph.js";
 import { deriveTitle, extractSection, splitSections } from "./parser.js";
+import { renderHitList, renderNeighbors } from "./render.js";
 import { promoteConcept } from "./promote.js";
 import {
   conceptSources,
@@ -300,6 +301,20 @@ const bundleParam = z
 const detailParam = (description: string) =>
   z.enum(["concise", "full"]).optional().describe(description);
 
+/**
+ * Experimental response serialization for the list-shaped tools. "json"
+ * (default) keeps structured JSON; "compact" renders one markdown-flavored
+ * line per item (grammar documented in src/render.ts) at a fraction of the
+ * bytes. Composes with `detail`: format governs serialization, detail
+ * governs which fields appear.
+ */
+const formatParam = z
+  .enum(["json", "compact"])
+  .optional()
+  .describe(
+    'experimental: "json" (default) or "compact" line-per-item markdown (smaller); composes with detail — format governs serialization, detail governs fields',
+  );
+
 // Marks an entry-point tool: clients with deferred tool loading keep its
 // schema visible while the rest of the toolset loads on demand.
 const entryPointMeta = { "anthropic/alwaysLoad": true };
@@ -367,8 +382,7 @@ export function createOkfServer(
    * are discovered but not loaded, say so in the result rather than letting
    * the truncated sweep read as complete (issue #64).
    */
-  const sweepJson = (data: unknown, sweep: boolean): CallToolResult => {
-    const result = json(data);
+  const sweepResult = (result: CallToolResult, sweep: boolean): CallToolResult => {
     const excluded = store.discoveredBundles();
     if (!sweep || excluded.length === 0) return result;
     result.content.push({
@@ -379,6 +393,9 @@ export function createOkfServer(
     });
     return result;
   };
+
+  const sweepJson = (data: unknown, sweep: boolean): CallToolResult =>
+    sweepResult(json(data), sweep);
 
   /**
    * Read any bundle document (concept or reserved file) after path
@@ -772,17 +789,21 @@ export function createOkfServer(
           .nonnegative()
           .optional()
           .describe("Skip this many concepts; page until `total` is reached"),
+        format: formatParam,
       },
     },
-    async ({ bundle, pathPrefix, type, limit, offset }) => {
+    async ({ bundle, pathPrefix, type, limit, offset, format }) => {
       const { hits, total } = searchConcepts(await selectBundles(bundle), {
         ...(pathPrefix !== undefined && { pathPrefix }),
         ...(type !== undefined && { types: [type] }),
         limit: limit ?? 50,
         ...(offset !== undefined && { offset }),
       });
-      return sweepJson(
-        { total, hits: hits.map(({ score: _score, ...hit }) => hit) },
+      const shaped = { total, hits: hits.map(({ score: _score, ...hit }) => hit) };
+      return sweepResult(
+        format === "compact"
+          ? markdown(renderHitList(shaped, "concepts"))
+          : json(shaped),
         bundle === undefined,
       );
     },
@@ -983,10 +1004,11 @@ export function createOkfServer(
         detail: detailParam(
           'concise (default) omits score, matchedIn, status, trust, stale per hit; "full" keeps them',
         ),
+        format: formatParam,
       },
       _meta: entryPointMeta,
     },
-    async ({ bundle, detail, ...filters }) => {
+    async ({ bundle, detail, format, ...filters }) => {
       const result = searchConcepts(await selectBundles(bundle), {
         ...filters,
         limit: filters.limit ?? options.searchLimit ?? DEFAULT_SEARCH_LIMIT,
@@ -1008,7 +1030,10 @@ export function createOkfServer(
                 }) => hit,
               ),
             };
-      return sweepJson(shaped, bundle === undefined);
+      return sweepResult(
+        format === "compact" ? markdown(renderHitList(shaped)) : json(shaped),
+        bundle === undefined,
+      );
     },
   );
 
@@ -1120,22 +1145,23 @@ export function createOkfServer(
         detail: detailParam(
           'concise (default): nodes as id + title + type; "full" adds bundle, path, description, tags',
         ),
+        format: formatParam,
       },
     },
-    async ({ bundle, id, direction, depth, crossBundle, detail }) =>
-      json(
-        capNeighbors(
-          crossBundle
-            ? neighborsInGraph(
-                buildMultiGraph(store.bundles()),
-                await qualifyForCrossBundle(bundle, id),
-                direction ?? "both",
-                depth ?? 1,
-              )
-            : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
-          detail ?? "concise",
-        ),
-      ),
+    async ({ bundle, id, direction, depth, crossBundle, detail, format }) => {
+      const capped = capNeighbors(
+        crossBundle
+          ? neighborsInGraph(
+              buildMultiGraph(store.bundles()),
+              await qualifyForCrossBundle(bundle, id),
+              direction ?? "both",
+              depth ?? 1,
+            )
+          : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+        detail ?? "concise",
+      );
+      return format === "compact" ? markdown(renderNeighbors(capped)) : json(capped);
+    },
   );
 
   server.registerTool(
