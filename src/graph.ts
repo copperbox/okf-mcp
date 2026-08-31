@@ -445,6 +445,46 @@ function dedupeEdges(edges: GraphEdge[]): GraphEdge[] {
 
 export type GraphFormat = "json" | "dot" | "mermaid";
 
+/** Hub nodes summarizeGraph reports, highest degree first. */
+const HUB_CAP = 10;
+
+/** Compact shape of a built graph: counts plus its highest-degree hubs. */
+export interface GraphShape {
+  nodes: number;
+  edges: number;
+  nodesByType: Record<string, number>;
+  edgesByKind: Record<string, number>;
+  hubs: Array<{ id: string; degree: number }>;
+  brokenLinks: number;
+}
+
+/**
+ * Summarize an already-built graph without returning it: node/edge counts,
+ * counts by node type and edge kind, and the top HUB_CAP nodes by degree —
+ * the cheap first look before an ids or full export.
+ */
+export function summarizeGraph(graph: ConceptGraph): GraphShape {
+  const degree = new Map<string, number>();
+  for (const edge of graph.edges) {
+    degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+    degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+  }
+  const hubs = [...degree.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, HUB_CAP)
+    .map(([id, count]) => ({ id, degree: count }));
+  const asCounts = (entries: { value: string; count: number }[]) =>
+    Object.fromEntries(entries.map(({ value, count }) => [value, count]));
+  return {
+    nodes: graph.nodes.length,
+    edges: graph.edges.length,
+    nodesByType: asCounts(countValues(graph.nodes.map((n) => n.type))),
+    edgesByKind: asCounts(countValues(graph.edges.map((e) => e.kind ?? "link"))),
+    hubs,
+    brokenLinks: graph.warnings.length,
+  };
+}
+
 export function exportGraph(graph: ConceptGraph, format: GraphFormat): string {
   switch (format) {
     case "json":

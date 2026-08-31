@@ -25,7 +25,7 @@ import {
   resolveOutsideLink,
 } from "./bundle.js";
 import { fileDiff, fileHistory, isGitWorkTree } from "./git.js";
-import type { GraphSummary } from "./graph.js";
+import type { GraphNode, GraphSummary, NeighborsResult } from "./graph.js";
 import {
   buildGraph,
   buildMultiGraph,
@@ -38,6 +38,7 @@ import {
   neighborsInGraph,
   pathInGraph,
   qualifyNodeId,
+  summarizeGraph,
 } from "./graph.js";
 import { deriveTitle, extractCitations, extractSection, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
@@ -252,10 +253,52 @@ function capProblems(report: ValidationReport) {
   };
 }
 
+/** Most nodes get_neighbors returns; a deep expansion around a hub truncates. */
+const NEIGHBOR_NODE_CAP = 50;
+
+/** Most nodes / edges export_graph returns in ids and full JSON modes. */
+const GRAPH_NODE_CAP = 300;
+const GRAPH_EDGE_CAP = 600;
+
+/**
+ * Shape a neighbors result for the wire: cap the node list at
+ * NEIGHBOR_NODE_CAP (dropping edges into the cut, with a one-clause steering
+ * note), and slim each node to id + title + type unless detail is "full".
+ */
+function capNeighbors(result: NeighborsResult, detail: "concise" | "full") {
+  const truncated = result.nodes.length > NEIGHBOR_NODE_CAP;
+  // The center is always nodes[0] (BFS starts there), so it survives the cap.
+  const nodes = truncated ? result.nodes.slice(0, NEIGHBOR_NODE_CAP) : result.nodes;
+  const kept = new Set(nodes.map((n) => n.id));
+  const slim = ({ id, title, type }: GraphNode) => ({
+    id,
+    ...(title !== undefined && { title }),
+    type,
+  });
+  return {
+    center: result.center,
+    depth: result.depth,
+    nodes: detail === "full" ? nodes : nodes.map(slim),
+    edges: truncated
+      ? result.edges.filter((e) => kept.has(e.from) && kept.has(e.to))
+      : result.edges,
+    ...(truncated && {
+      note: `showing ${NEIGHBOR_NODE_CAP} of ${result.nodes.length} nodes; lower depth or narrow direction`,
+    }),
+  };
+}
+
 const bundleParam = z
   .string()
   .optional()
   .describe("Bundle ID; may be omitted when exactly one bundle is configured");
+
+/**
+ * The shared read-verbosity ladder ("detail"): responses are concise by
+ * default and "full" restores every field a leaner default drops.
+ */
+const detailParam = (description: string) =>
+  z.enum(["concise", "full"]).optional().describe(description);
 
 // Marks an entry-point tool: clients with deferred tool loading keep its
 // schema visible while the rest of the toolset loads on demand.
@@ -750,7 +793,7 @@ export function createOkfServer(
     {
       title: "Get concept",
       description:
-        "Read one concept document: frontmatter, markdown body, outgoing links, and its body section headings. Prefer partial reads over the full document: `section` fetches one heading's subtree, `outline: true` fetches the document's shape (section headings with sizes) without the body.",
+        "Read one concept document: frontmatter, markdown body, and its body section headings. Prefer partial reads over the full document: `section` fetches one heading's subtree, `outline: true` fetches the document's shape (section headings with sizes) without the body. Outgoing link arrays (with char offsets) return only with detail: \"full\".",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
@@ -766,16 +809,24 @@ export function createOkfServer(
           .describe(
             "Return the document's shape instead of its body: frontmatter plus each section's heading, level, and content size in characters — cheap section discovery before fetching one with `section`",
           ),
+        detail: detailParam(
+          'concise (default) omits the outgoing-link offset arrays; "full" includes them',
+        ),
       },
       _meta: entryPointMeta,
     },
-    async ({ bundle, id, section, outline }) => {
+    async ({ bundle, id, section, outline, detail }) => {
       const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const split = splitSections(concept.body);
       const sections = split.map((s) => s.heading);
+      const full = detail === "full";
+      // Concise (the default) drops the link arrays with their char offsets;
+      // "full" restores the pre-2.0 shapes (body mode carried both arrays,
+      // outline/section modes carried frontmatterLinks).
+      const { body, links, frontmatterLinks, ...meta } = concept;
+      const rest = full ? { ...meta, frontmatterLinks } : meta;
       if (outline === true && section === undefined) {
-        const { body: _body, links: _links, ...rest } = concept;
         return json({
           ...rest,
           sections: split.map((s) => ({
@@ -785,14 +836,15 @@ export function createOkfServer(
           })),
         });
       }
-      if (section === undefined) return json({ ...concept, sections });
+      if (section === undefined) {
+        return json({ ...rest, ...(full && { links }), body, sections });
+      }
       const match = extractSection(concept.body, section);
       if (!match) {
         throw new Error(
           `no section "${section}" in "${concept.id}" — sections: ${sections.join(", ") || "(none)"}`,
         );
       }
-      const { body: _body, links: _links, ...rest } = concept;
       return json({ ...rest, section: match, sections });
     },
   );
@@ -904,7 +956,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). The query is split into keywords matched independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names where the match lives — \`section\` (and \`matchedSections\` when several matched) feed get_concept's \`section\` argument directly, so read those sections rather than whole documents. Hits are relevance-sorted and paginated: \`total\` counts all matches, so when fewer hits return than \`total\`, page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names where the match lives — \`section\` (and \`matchedSections\` when several matched) feed get_concept's \`section\` argument directly, so read those sections rather than whole documents. Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()
@@ -954,18 +1006,36 @@ export function createOkfServer(
             `Hits per page (default ${options.searchLimit ?? DEFAULT_SEARCH_LIMIT}); page with offset when total exceeds the returned count`,
           ),
         offset: z.number().int().nonnegative().optional(),
+        detail: detailParam(
+          'concise (default) omits score, matchedIn, status, trust, stale per hit; "full" keeps them',
+        ),
       },
       _meta: entryPointMeta,
     },
-    async ({ bundle, ...filters }) =>
-      sweepJson(
-        searchConcepts(await selectBundles(bundle), {
-          ...filters,
-          limit: filters.limit ?? options.searchLimit ?? DEFAULT_SEARCH_LIMIT,
-          cutoffRatio: options.searchCutoff ?? DEFAULT_CUTOFF_RATIO,
-        }),
-        bundle === undefined,
-      ),
+    async ({ bundle, detail, ...filters }) => {
+      const result = searchConcepts(await selectBundles(bundle), {
+        ...filters,
+        limit: filters.limit ?? options.searchLimit ?? DEFAULT_SEARCH_LIMIT,
+        cutoffRatio: options.searchCutoff ?? DEFAULT_CUTOFF_RATIO,
+      });
+      const shaped =
+        detail === "full"
+          ? result
+          : {
+              ...result,
+              hits: result.hits.map(
+                ({
+                  score: _score,
+                  matchedIn: _matchedIn,
+                  status: _status,
+                  trust: _trust,
+                  stale: _stale,
+                  ...hit
+                }) => hit,
+              ),
+            };
+      return sweepJson(shaped, bundle === undefined);
+    },
   );
 
   server.registerTool(
@@ -1066,25 +1136,31 @@ export function createOkfServer(
     {
       title: "Get neighbors",
       description:
-        "Concepts linked to/from a concept, expanded to a bounded depth. With crossBundle, derived edges into other mounted bundles are traversed too and each node carries its bundle ID.",
+        `Concepts linked to/from a concept, expanded to a bounded depth (capped at ${NEIGHBOR_NODE_CAP} nodes; depth 3+ around a hub concept mostly returns truncation — prefer depth 1-2). With crossBundle, derived edges into other mounted bundles are traversed too, with bundle:concept node IDs.`,
       inputSchema: {
         bundle: bundleParam,
         id: z.string(),
         direction: z.enum(["in", "out", "both"]).optional(),
         depth: z.number().int().positive().max(5).optional(),
         crossBundle: crossBundleParam,
+        detail: detailParam(
+          'concise (default): nodes as id + title + type; "full" adds bundle, path, description, tags',
+        ),
       },
     },
-    async ({ bundle, id, direction, depth, crossBundle }) =>
+    async ({ bundle, id, direction, depth, crossBundle, detail }) =>
       json(
-        crossBundle
-          ? neighborsInGraph(
-              buildMultiGraph(store.bundles()),
-              await qualifyForCrossBundle(bundle, id),
-              direction ?? "both",
-              depth ?? 1,
-            )
-          : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+        capNeighbors(
+          crossBundle
+            ? neighborsInGraph(
+                buildMultiGraph(store.bundles()),
+                await qualifyForCrossBundle(bundle, id),
+                direction ?? "both",
+                depth ?? 1,
+              )
+            : getNeighbors(await store.bundle(bundle), id, direction ?? "both", depth ?? 1),
+          detail ?? "concise",
+        ),
       ),
   );
 
@@ -1118,10 +1194,16 @@ export function createOkfServer(
     {
       title: "Export graph",
       description:
-        "Export a bundle's link graph as json, dot, or mermaid. With crossBundle, all mounted bundles export as one graph with bundle:concept node IDs and visually distinct derived edges.",
+        `Export a bundle's link graph — can be large, so json climbs a detail ladder: summary (default: counts + hub nodes), ids (bare node ids, [from, to] edge pairs), full (complete nodes/edges, capped at ${GRAPH_NODE_CAP}/${GRAPH_EDGE_CAP}). dot and mermaid render the whole graph as text, uncapped and potentially large. With crossBundle, all mounted bundles export as one graph with bundle:concept node IDs and visually distinct derived edges.`,
       inputSchema: {
         bundle: bundleParam,
         format: z.enum(["json", "dot", "mermaid"]).optional(),
+        detail: z
+          .enum(["summary", "ids", "full"])
+          .optional()
+          .describe(
+            'json format only — summary (default): counts + hubs; ids: bare ids and [from, to] pairs; full: complete nodes/edges',
+          ),
         includeExternal: z
           .boolean()
           .optional()
@@ -1129,16 +1211,37 @@ export function createOkfServer(
         crossBundle: crossBundleParam,
       },
     },
-    async ({ bundle, format, includeExternal, crossBundle }) => {
+    async ({ bundle, format, detail, includeExternal, crossBundle }) => {
       const options = { includeExternal: includeExternal ?? false };
-      return markdown(
-        exportGraph(
-          crossBundle
-            ? buildMultiGraph(store.bundles(), options)
-            : buildGraph(await store.bundle(bundle), options),
-          format ?? "json",
-        ),
-      );
+      const graph = crossBundle
+        ? buildMultiGraph(store.bundles(), options)
+        : buildGraph(await store.bundle(bundle), options);
+      const chosenFormat = format ?? "json";
+      if (chosenFormat !== "json") return markdown(exportGraph(graph, chosenFormat));
+      const level = detail ?? "summary";
+      if (level === "summary") return json(summarizeGraph(graph));
+      const truncated =
+        graph.nodes.length > GRAPH_NODE_CAP || graph.edges.length > GRAPH_EDGE_CAP;
+      const nodes = graph.nodes.slice(0, GRAPH_NODE_CAP);
+      const edges = graph.edges.slice(0, GRAPH_EDGE_CAP);
+      const note = truncated
+        ? {
+            note:
+              `showing ${nodes.length} of ${graph.nodes.length} nodes and ` +
+              `${edges.length} of ${graph.edges.length} edges; filter (bundle, ` +
+              `includeExternal: false) or use detail: "summary"`,
+          }
+        : {};
+      if (level === "ids") {
+        return json({
+          nodes: nodes.map((n) => n.id),
+          edges: edges.map((e) =>
+            e.kind !== undefined ? [e.from, e.to, e.kind] : [e.from, e.to],
+          ),
+          ...note,
+        });
+      }
+      return json({ nodes, edges, warnings: graph.warnings, ...note });
     },
   );
 

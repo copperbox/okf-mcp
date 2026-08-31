@@ -32,14 +32,16 @@ describe("response byte budgets", () => {
   const budgets: Array<[string, Record<string, unknown>, number]> = [
     ["list_bundles", {}, 256],
     ["list_concepts", {}, 1500],
-    ["search_concepts", { query: "orders" }, 700],
-    ["get_concept", { id: "tables/orders" }, 2400],
-    ["get_concept", { id: "tables/orders", outline: true }, 600],
+    ["search_concepts", { query: "orders" }, 550],
+    ["get_concept", { id: "tables/orders" }, 1300],
+    ["get_concept", { id: "tables/orders", outline: true }, 550],
     ["graph_summary", {}, 350],
     ["list_types", {}, 160],
     ["list_tags", {}, 175],
     ["validate_bundle", {}, 3500],
     ["read_document", { path: "tables/orders.md" }, 1100],
+    ["get_neighbors", { id: "tables/orders" }, 675],
+    ["export_graph", {}, 350],
   ];
 
   for (const [name, args, budget] of budgets) {

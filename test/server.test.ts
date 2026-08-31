@@ -1027,6 +1027,190 @@ describe("server tools", () => {
     const result = await callTool(client, "suggest_concept_path", { type: "" });
     assert.ok(result.isError);
   });
+
+  it("search_concepts hits are concise by default; detail full restores scoring fields", async () => {
+    const concise = (await callJson(client, "search_concepts", { query: "orders" })) as {
+      hits: Array<Record<string, unknown>>;
+    };
+    const hit = concise.hits[0]!;
+    assert.equal(hit.id, "tables/orders");
+    assert.equal(typeof hit.title, "string");
+    for (const dropped of ["score", "matchedIn", "status", "trust", "stale"]) {
+      assert.ok(!(dropped in hit), `concise hit should omit ${dropped}`);
+    }
+
+    const full = (await callJson(client, "search_concepts", {
+      query: "orders",
+      detail: "full",
+    })) as { hits: Array<Record<string, unknown>> };
+    const fullHit = full.hits[0]!;
+    assert.equal(typeof fullHit.score, "number");
+    assert.ok(Array.isArray(fullHit.matchedIn));
+    assert.equal(fullHit.status, "stable");
+    assert.equal(fullHit.trust, "unverified");
+  });
+
+  it("get_concept omits the link offset arrays unless detail is full", async () => {
+    const concise = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+    })) as Record<string, unknown>;
+    assert.equal(typeof concise.body, "string");
+    assert.ok(!("links" in concise));
+    assert.ok(!("frontmatterLinks" in concise));
+
+    const full = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      detail: "full",
+    })) as { links: Array<{ target: string }>; frontmatterLinks: unknown[] };
+    assert.ok(full.links.some((l) => l.target === "./customers.md"));
+    assert.ok(Array.isArray(full.frontmatterLinks));
+
+    // Section and outline reads follow the same rule (they never carry `links`).
+    const section = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "Schema",
+    })) as Record<string, unknown>;
+    assert.ok(!("frontmatterLinks" in section));
+    const fullOutline = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      outline: true,
+      detail: "full",
+    })) as Record<string, unknown>;
+    assert.ok("frontmatterLinks" in fullOutline);
+    assert.ok(!("links" in fullOutline));
+  });
+
+  it("get_neighbors returns slim nodes by default; detail full restores metadata", async () => {
+    const concise = (await callJson(client, "get_neighbors", {
+      id: "tables/orders",
+    })) as { nodes: Array<Record<string, unknown>> };
+    assert.ok(concise.nodes.length > 1);
+    for (const node of concise.nodes) {
+      assert.ok(
+        Object.keys(node).every((key) => ["id", "title", "type"].includes(key)),
+        `slim node should carry only id/title/type: ${Object.keys(node).join(", ")}`,
+      );
+    }
+
+    const full = (await callJson(client, "get_neighbors", {
+      id: "tables/orders",
+      detail: "full",
+    })) as { nodes: Array<{ id: string; description?: string; tags?: string[] }> };
+    const orders = full.nodes.find((n) => n.id === "tables/orders");
+    assert.equal(orders?.description, "One row per completed customer order.");
+    assert.deepEqual(orders?.tags, ["sales", "orders"]);
+  });
+
+  it("export_graph defaults to a json summary with counts and hub degrees", async () => {
+    const summary = (await callJson(client, "export_graph", { bundle: "acme" })) as {
+      nodes: number;
+      edges: number;
+      nodesByType: Record<string, number>;
+      edgesByKind: Record<string, number>;
+      hubs: Array<{ id: string; degree: number }>;
+      brokenLinks: number;
+    };
+    assert.equal(summary.nodes, 5);
+    assert.ok(summary.edges >= 1);
+    assert.equal(summary.nodesByType["BigQuery Table"], 2);
+    assert.equal(summary.edgesByKind.link, summary.edges);
+    assert.ok((summary.hubs[0]?.degree ?? 0) >= 1);
+    assert.ok(summary.brokenLinks >= 1);
+  });
+
+  it("export_graph ids returns bare node ids and [from, to] edge pairs", async () => {
+    const ids = (await callJson(client, "export_graph", {
+      bundle: "acme",
+      detail: "ids",
+    })) as { nodes: string[]; edges: string[][]; note?: string };
+    assert.ok(ids.nodes.includes("tables/orders"));
+    assert.ok(ids.nodes.every((n) => typeof n === "string"));
+    assert.ok(
+      ids.edges.some((e) => e[0] === "tables/orders" && e[1] === "tables/customers"),
+    );
+    assert.ok(ids.edges.every((e) => e.length === 2), "in-bundle edges are pairs");
+    assert.equal(ids.note, undefined);
+  });
+
+  it("export_graph full returns complete nodes and edges under the cap", async () => {
+    const full = (await callJson(client, "export_graph", {
+      bundle: "acme",
+      detail: "full",
+    })) as {
+      nodes: Array<{ id: string; title?: string }>;
+      edges: Array<{ from: string; to: string }>;
+      warnings: string[];
+      note?: string;
+    };
+    assert.equal(full.nodes.find((n) => n.id === "tables/orders")?.title, "Orders");
+    assert.ok(full.edges.some((e) => e.from === "tables/orders"));
+    assert.ok(full.warnings.some((w) => /retired-runbook/.test(w)));
+    assert.equal(full.note, undefined);
+  });
+});
+
+describe("detail ladder caps", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    // One hub with 320 spokes linking to it: over the 300-node export cap and
+    // far over the 50-node neighbor cap.
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-caps-test-"));
+    await fs.writeFile(
+      path.join(root, "hub.md"),
+      "---\ntype: Note\ntitle: Hub\n---\n\nCenter.\n",
+    );
+    for (let i = 0; i < 320; i++) {
+      await fs.writeFile(
+        path.join(root, `spoke-${i}.md`),
+        `---\ntype: Note\ntitle: Spoke ${i}\n---\n\nSee [hub](./hub.md).\n`,
+      );
+    }
+    client = await connectClient(new OkfStore([{ id: "big", root }]));
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("get_neighbors caps at 50 nodes, keeps the center, and steers", async () => {
+    const result = (await callJson(client, "get_neighbors", { id: "hub" })) as {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ from: string; to: string }>;
+      note?: string;
+    };
+    assert.equal(result.nodes.length, 50);
+    assert.equal(result.nodes[0]?.id, "hub");
+    assert.match(result.note ?? "", /50 of 321 nodes/);
+    assert.match(result.note ?? "", /depth/);
+    // No edge dangles into the truncated remainder.
+    const kept = new Set(result.nodes.map((n) => n.id));
+    assert.ok(result.edges.every((e) => kept.has(e.from) && kept.has(e.to)));
+  });
+
+  it("export_graph ids and full cap nodes with a truncation note; summary counts everything", async () => {
+    const ids = (await callJson(client, "export_graph", { detail: "ids" })) as {
+      nodes: string[];
+      note?: string;
+    };
+    assert.equal(ids.nodes.length, 300);
+    assert.match(ids.note ?? "", /300 of 321 nodes/);
+    assert.match(ids.note ?? "", /summary/);
+
+    const full = (await callJson(client, "export_graph", { detail: "full" })) as {
+      nodes: unknown[];
+      note?: string;
+    };
+    assert.equal(full.nodes.length, 300);
+    assert.match(full.note ?? "", /300 of 321 nodes/);
+
+    const summary = (await callJson(client, "export_graph", {})) as {
+      nodes: number;
+      hubs: Array<{ id: string; degree: number }>;
+    };
+    assert.equal(summary.nodes, 321);
+    assert.deepEqual(summary.hubs[0], { id: "hub", degree: 320 });
+  });
 });
 
 describe("git tools", () => {
@@ -2021,10 +2205,12 @@ describe("cross-bundle graph tools", () => {
     })) as { nodes: Array<{ id: string }> };
     assert.deepEqual(plain.nodes.map((n) => n.id), ["setup"]);
 
+    // detail: "full" restores the node's bundle/path metadata.
     const cross = (await callJson(client, "get_neighbors", {
       bundle: "proj",
       id: "setup",
       crossBundle: true,
+      detail: "full",
     })) as { nodes: Array<{ id: string; bundle: string }> };
     const naming = cross.nodes.find((n) => n.id === "org:standards/naming");
     assert.equal(naming?.bundle, "org");
@@ -2050,6 +2236,29 @@ describe("cross-bundle graph tools", () => {
     );
     assert.match(dot, /"proj:setup" -> "org:standards\/naming" \[style=dashed\];/);
     assert.match(dot, /"org:standards\/naming" -> "org:standards\/reviews";/);
+  });
+
+  it("export_graph ids keeps the kind on derived cross-bundle edge tuples", async () => {
+    const ids = (await callJson(client, "export_graph", {
+      detail: "ids",
+      crossBundle: true,
+    })) as { edges: string[][] };
+    assert.ok(
+      ids.edges.some(
+        (e) =>
+          e[0] === "proj:setup" &&
+          e[1] === "org:standards/naming" &&
+          e[2] === "cross-bundle",
+      ),
+    );
+    assert.ok(
+      ids.edges.some(
+        (e) =>
+          e[0] === "org:standards/naming" &&
+          e[1] === "org:standards/reviews" &&
+          e.length === 2,
+      ),
+    );
   });
 
   it("load_remote_bundle accepts and list_remote_bundles echoes a canonicalUrl", async () => {

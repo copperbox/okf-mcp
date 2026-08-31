@@ -7,8 +7,8 @@ description: "How search_concepts scores hits: field weights, two-pass keyword
 tags:
   - search
 generated:
-  by: okf-mcp/1.3.0
-  at: 2026-08-19T21:13:34.547Z
+  by: okf-mcp/1.5.0
+  at: 2026-08-31T02:07:50.000Z
 sources:
   - id: src-search-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/search.ts
@@ -28,4 +28,4 @@ How scoring works:
 - Snippets are whole-line context around the best anchor plus the enclosing `section` heading, truncated without splitting surrogate pairs.
 - **Section-level match map** (1.4.0): a body-matched hit also carries `matchedSections` — headings of every section containing a match, in document order — but only when more than one section matched (otherwise `section` already names it). Like the snippet anchor, the verbatim phrase wins over individual keywords so common words don't flag unrelated sections. Both fields feed `get_concept`'s `section` argument, the context-frugal read path.
 
-Filtering (not scoring) also covers the OKF v0.2 lifecycle and trust families: `status` (an absent one counts as `stable`), `minTrust` over the derived tier, and `stale` against `stale_after`. All three are computed per call from frontmatter rather than indexed — see [provenance reads](provenance-reads.md) — and every hit reports its `status` and `trust`, plus `stale: true` when it applies.
+Filtering (not scoring) also covers the OKF v0.2 lifecycle and trust families: `status` (an absent one counts as `stable`), `minTrust` over the derived tier, and `stale` against `stale_after`. All three are computed per call from frontmatter rather than indexed — see [provenance reads](provenance-reads.md). Since 2.0, the wire hit is concise by default: `score`, `matchedIn`, `status`, `trust`, and `stale` return only with `detail: "full"` (the [frugality decision](../decisions/context-window-frugality-is-server-surface.md)); search.ts itself still computes and returns them all.
