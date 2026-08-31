@@ -1,0 +1,113 @@
+{
+  "version": "2.0.0",
+  "generatedAt": "2026-08-31T02:22:51.300Z",
+  "fixed": {
+    "instructionsBytes": 1803,
+    "instructionsTokens": 450,
+    "toolCount": 20,
+    "toolDefsBytes": 19501,
+    "toolDefsTokens": 4876
+  },
+  "calls": [
+    {
+      "scenario": "orient",
+      "label": "list_bundles",
+      "tool": "list_bundles",
+      "bytes": 383,
+      "tokens": 96,
+      "isError": false
+    },
+    {
+      "scenario": "orient",
+      "label": "graph_summary (all bundles)",
+      "tool": "graph_summary",
+      "bytes": 804,
+      "tokens": 201,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "search #1 (orders sales)",
+      "tool": "search_concepts",
+      "bytes": 862,
+      "tokens": 216,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "search #2 (checkout pipeline)",
+      "tool": "search_concepts",
+      "bytes": 2236,
+      "tokens": 559,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "search #3 (retry backoff runbook)",
+      "tool": "search_concepts",
+      "bytes": 3766,
+      "tokens": 942,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "get_concept outline",
+      "tool": "get_concept",
+      "bytes": 542,
+      "tokens": 136,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "get_concept section",
+      "tool": "get_concept",
+      "bytes": 900,
+      "tokens": 225,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "get_concept full",
+      "tool": "get_concept",
+      "bytes": 1157,
+      "tokens": 290,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "get_neighbors (hub)",
+      "tool": "get_neighbors",
+      "bytes": 7002,
+      "tokens": 1751,
+      "isError": false
+    },
+    {
+      "scenario": "research",
+      "label": "export_graph summary",
+      "tool": "export_graph",
+      "bytes": 621,
+      "tokens": 156,
+      "isError": false
+    },
+    {
+      "scenario": "maintenance",
+      "label": "validate_bundle (all)",
+      "tool": "validate_bundle",
+      "bytes": 3195,
+      "tokens": 799,
+      "isError": false
+    },
+    {
+      "scenario": "maintenance",
+      "label": "list_concepts page",
+      "tool": "list_concepts",
+      "bytes": 12716,
+      "tokens": 3179,
+      "isError": false
+    }
+  ],
+  "callTotalBytes": 34184,
+  "callTotalTokens": 8550,
+  "grandTotalBytes": 55488,
+  "grandTotalTokens": 13876
+}

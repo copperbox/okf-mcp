@@ -29,6 +29,7 @@
     "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
     "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
+    "bench": "tsx bench/context-bench.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
