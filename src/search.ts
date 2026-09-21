@@ -87,16 +87,19 @@ export interface SearchHit {
   /**
    * Headings of the sections the body match maps to, in document order:
    * sections containing the verbatim query phrase when it appears, otherwise
-   * sections containing any matched keyword. Present only when more than one
-   * section matched — otherwise `section` already names the only one. Each
-   * entry (like `section`) can be passed to get_concept's `section` argument
-   * to read just that section.
+   * sections containing any matched keyword. Present when more than one
+   * section matched, or when the one matched section is not what `section`
+   * names (the match anchor sits before the first heading, so `section` is
+   * absent) — otherwise `section` already names the only one. Whenever
+   * `recommendedRead` is `sections`, one of the two is present. The array
+   * can be passed to get_concept's `sections` argument as is.
    */
   matchedSections?: string[];
   /**
-   * How much of the document the body match covers, so a reader can choose
-   * between section reads and one full read. Present when the body matched
-   * and the document has sections.
+   * How much of the document the body match covers, the inputs behind
+   * `recommendedRead`. Present when the body matched and the document has
+   * sections; the server's concise hit drops the four counts and keeps only
+   * the recommendation.
    */
   matchedSectionCount?: number;
   sectionCount?: number;
@@ -451,7 +454,13 @@ export function searchConcepts(
             terms,
             match.matchedTerms,
           );
-          if (sections.headings.length > 1) matchedSections = sections.headings;
+          // One matched section is normally what `section` already names; when
+          // the anchor sits before the first heading `section` is absent, so
+          // list it here or a "sections" recommendation names nothing to read.
+          const listAll =
+            sections.headings.length > 1 ||
+            (sections.headings.length === 1 && section === undefined);
+          if (listAll) matchedSections = sections.headings;
           coverage = sections.coverage;
         }
       }

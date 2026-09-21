@@ -273,6 +273,21 @@ describe("searchConcepts", () => {
     assert.equal("recommendedRead" in frontmatterOnly, false);
   });
 
+  it("lists the one matched section when the anchor sits before the first heading", () => {
+    // `section` comes from the earliest match, here in the preamble, so it is
+    // absent; a "sections" recommendation still has to name something to read.
+    const filler = "Nothing relevant. ".repeat(60);
+    const body = `Intro mentions widgets.\n\n# Alpha\n\nwidgets here.\n\n# Beta\n\n${filler}\n`;
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/preamble", type: "Note", body }])],
+      { query: "widgets" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.section, undefined);
+    assert.equal(hit.recommendedRead, "sections");
+    assert.deepEqual(hit.matchedSections, ["Alpha"]);
+  });
+
   it("omits matchedSections when one section matched — `section` already names it", () => {
     const { hits } = searchConcepts(bundles, { query: "lags more than" });
     assert.equal(hits[0]?.section, "Trigger");

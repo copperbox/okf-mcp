@@ -35,7 +35,7 @@ import {
   pathInGraph,
   qualifyNodeId,
 } from "./graph.js";
-import { deriveTitle, extractSection, sectionSpans, splitSections } from "./parser.js";
+import { deriveTitle, extractSection, extractSections, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
 import {
   conceptSources,
@@ -843,7 +843,7 @@ export function createOkfServer(
           .min(1)
           .optional()
           .describe(
-            'Several body section headings to read in one call, e.g. ["Schema", "Examples"] — pass a search hit\'s `matchedSections` straight in. Returns `sectionContents` in document order; a section nested inside another requested one is returned once, within its parent',
+            'Several body section headings to read in one call, e.g. ["Schema", "Examples"] — pass a search hit\'s `matchedSections` straight in. Returns `sectionContents` in document order; a name shared by several headings returns each of them, and a section nested inside another requested one is returned once, within its parent',
           ),
         outline: z
           .boolean()
@@ -881,31 +881,12 @@ export function createOkfServer(
       if (wanted !== undefined) {
         // `section` alongside `sections` just joins the list.
         const names = section === undefined ? wanted : [section, ...wanted];
-        const spans = sectionSpans(concept.body);
-        const picked = new Set<number>();
-        const missing: string[] = [];
-        for (const name of names) {
-          const lowered = name.trim().toLowerCase();
-          const index = spans.findIndex((s) => s.heading.toLowerCase() === lowered);
-          if (index === -1) missing.push(name);
-          else picked.add(index);
-        }
+        const { sections: sectionContents, missing } = extractSections(concept.body, names);
         if (missing.length > 0) {
           throw new Error(
             `no section ${missing.map((m) => `"${m}"`).join(", ")} in "${concept.id}" — sections: ${sections.join(", ") || "(none)"}`,
           );
         }
-        // A subtree read already carries its nested sections, so a requested
-        // section inside another requested one would only repeat text.
-        const sectionContents = [...picked]
-          .sort((a, b) => a - b)
-          .map((i) => spans[i]!)
-          .filter((s, _i, all) => !all.some((o) => o !== s && o.start <= s.start && s.end <= o.end))
-          .map((s) => ({
-            heading: s.heading,
-            level: s.level,
-            content: concept.body.slice(s.contentStart, s.end).trim(),
-          }));
         return json({ ...rest, sectionContents, sections });
       }
       if (section === undefined) {
@@ -1002,7 +983,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names the matching \`section\` (and \`matchedSections\` when several matched) plus its coverage — matchedSectionCount/sectionCount, matchedCharacters/documentCharacters — and \`recommendedRead\`: "sections" means fetch the matched sections in one get_concept call via \`sections\`; "full" (every section matched, or they hold 70%+ of the document) means fetch the whole concept once. Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer — later pages are strictly less relevant. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names the matching \`section\` (and \`matchedSections\` when several matched, or when the match sits before the first heading) and \`recommendedRead\`: "sections" means fetch the matched sections in one get_concept call via \`sections\`; "full" (every section matched, or they hold 70%+ of the document) means fetch the whole concept once. Hits are concise by default (detail: "full" adds score/matchedIn, status/trust/stale, and the coverage counts behind recommendedRead: matchedSectionCount/sectionCount, matchedCharacters/documentCharacters), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer — later pages are strictly less relevant. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()
@@ -1053,7 +1034,7 @@ export function createOkfServer(
           ),
         offset: z.number().int().nonnegative().optional(),
         detail: detailParam(
-          'concise (default) omits score, matchedIn, status, trust, stale per hit; "full" keeps them',
+          'concise (default) omits score, matchedIn, status, trust, stale and the coverage counts behind recommendedRead per hit; "full" keeps them',
         ),
       },
       _meta: entryPointMeta,
@@ -1076,6 +1057,10 @@ export function createOkfServer(
                   status: _status,
                   trust: _trust,
                   stale: _stale,
+                  matchedSectionCount: _matchedSectionCount,
+                  sectionCount: _sectionCount,
+                  matchedCharacters: _matchedCharacters,
+                  documentCharacters: _documentCharacters,
                   ...hit
                 }) => hit,
               ),
