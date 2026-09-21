@@ -12,6 +12,7 @@ import {
   extractCitations,
   extractLinks,
   extractSection,
+  extractSections,
   normalizeCitationEntries,
   parseConceptDocument,
   sectionAt,
@@ -275,6 +276,47 @@ describe("extractSection", () => {
 
   it("returns undefined for an unknown heading", () => {
     assert.equal(extractSection(body, "Citations"), undefined);
+  });
+});
+
+describe("extractSections", () => {
+  const body =
+    "Intro.\n\n# Schema\n\nColumns.\n\n## Keys\n\nPrimary key.\n\n# Examples\n\nQuery.\n\n# Notes\n\nFirst.\n\n# Notes\n\nSecond.\n";
+
+  it("returns the requested sections in document order, matching case-insensitively", () => {
+    const { sections, missing } = extractSections(body, ["examples", "Schema"]);
+    assert.deepEqual(missing, []);
+    assert.deepEqual(
+      sections.map((s) => [s.heading, s.level, s.content]),
+      [
+        ["Schema", 1, "Columns.\n\n## Keys\n\nPrimary key."],
+        ["Examples", 1, "Query."],
+      ],
+    );
+  });
+
+  it("folds a section nested inside another requested one into its parent", () => {
+    const { sections } = extractSections(body, ["Keys", "Schema"]);
+    assert.deepEqual(sections.map((s) => s.heading), ["Schema"]);
+    assert.match(sections[0]!.content, /## Keys\n\nPrimary key\./);
+  });
+
+  it("returns a nested section on its own when its parent was not requested", () => {
+    const { sections } = extractSections(body, ["Keys"]);
+    assert.deepEqual(sections.map((s) => [s.heading, s.level, s.content]), [["Keys", 2, "Primary key."]]);
+  });
+
+  it("returns every heading that shares a requested name", () => {
+    const { sections } = extractSections(body, ["Notes"]);
+    assert.deepEqual(sections.map((s) => s.content), ["First.", "Second."]);
+    // Repeating a name (as a hit's matchedSections does) adds nothing.
+    assert.equal(extractSections(body, ["Notes", "Notes"]).sections.length, 2);
+  });
+
+  it("reports every unknown name, in request order, without dropping the known ones", () => {
+    const { sections, missing } = extractSections(body, ["Nope", "Examples", "Also nope"]);
+    assert.deepEqual(missing, ["Nope", "Also nope"]);
+    assert.deepEqual(sections.map((s) => s.heading), ["Examples"]);
   });
 });
 

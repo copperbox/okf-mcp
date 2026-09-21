@@ -210,6 +210,84 @@ describe("searchConcepts", () => {
     assert.deepEqual(hits[0]?.matchedSections, ["Alpha", "Gamma"]);
   });
 
+  it("recommends section reads when the matched sections are a small part of the document", () => {
+    const filler = "Nothing relevant. ".repeat(40);
+    const body = `# Alpha\n\nA needle here.\n\n# Beta\n\n${filler}\n\n# Gamma\n\nAnother needle.\n`;
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/multi", type: "Note", body }])],
+      { query: "needle" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.matchedSectionCount, 2);
+    assert.equal(hit.sectionCount, 3);
+    assert.equal(hit.documentCharacters, body.length);
+    assert.ok(hit.matchedCharacters! < body.length * 0.7);
+    assert.equal(hit.recommendedRead, "sections");
+  });
+
+  it("recommends a full read when every section matched", () => {
+    const body = "# Alpha\n\nA needle here.\n\n# Beta\n\nAnother needle.\n";
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/all", type: "Note", body }])],
+      { query: "needle" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.matchedSectionCount, 2);
+    assert.equal(hit.sectionCount, 2);
+    assert.equal(hit.matchedCharacters, body.length);
+    assert.equal(hit.recommendedRead, "full");
+  });
+
+  it("recommends a full read when the matched sections hold most of the document", () => {
+    const body = `# Alpha\n\n${"A needle here. ".repeat(40)}\n\n# Beta\n\nShort.\n`;
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/most", type: "Note", body }])],
+      { query: "needle" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.matchedSectionCount, 1);
+    assert.equal(hit.sectionCount, 2);
+    assert.equal(hit.recommendedRead, "full");
+  });
+
+  it("counts a nested match once — the parent's subtree read already carries it", () => {
+    const filler = "Nothing relevant. ".repeat(60);
+    const body = `# Alpha\n\nA needle here.\n\n## Inner\n\nNested needle.\n\n# Beta\n\n${filler}\n`;
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/nested", type: "Note", body }])],
+      { query: "needle" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.matchedSectionCount, 2);
+    assert.equal(hit.matchedCharacters, body.indexOf("# Beta"));
+    assert.equal(hit.recommendedRead, "sections");
+  });
+
+  it("omits coverage when the document has no sections or the body did not match", () => {
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/flat", type: "Note", body: "Just a needle, no headings.\n" }])],
+      { query: "needle" },
+    );
+    assert.equal("recommendedRead" in hits[0]!, false);
+    const frontmatterOnly = searchConcepts(bundles, { query: "registered" }).hits[0]!;
+    assert.equal("recommendedRead" in frontmatterOnly, false);
+  });
+
+  it("lists the one matched section when the anchor sits before the first heading", () => {
+    // `section` comes from the earliest match, here in the preamble, so it is
+    // absent; a "sections" recommendation still has to name something to read.
+    const filler = "Nothing relevant. ".repeat(60);
+    const body = `Intro mentions widgets.\n\n# Alpha\n\nwidgets here.\n\n# Beta\n\n${filler}\n`;
+    const { hits } = searchConcepts(
+      [makeBundle([{ id: "notes/preamble", type: "Note", body }])],
+      { query: "widgets" },
+    );
+    const hit = hits[0]!;
+    assert.equal(hit.section, undefined);
+    assert.equal(hit.recommendedRead, "sections");
+    assert.deepEqual(hit.matchedSections, ["Alpha"]);
+  });
+
   it("omits matchedSections when one section matched — `section` already names it", () => {
     const { hits } = searchConcepts(bundles, { query: "lags more than" });
     assert.equal(hits[0]?.section, "Trigger");

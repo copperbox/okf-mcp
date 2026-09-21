@@ -711,6 +711,54 @@ describe("remote bundle tools", () => {
   });
 });
 
+describe("get_concept sections over nested and repeated headings", () => {
+  let root: string;
+  let client: Client;
+  before(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "okf-sections-test-"));
+    await fs.writeFile(
+      path.join(root, "nested.md"),
+      "---\ntype: Note\n---\n\n# Parent\n\nParent text.\n\n## Child\n\nChild text.\n\n# Other\n\nOther text.\n",
+    );
+    await fs.writeFile(
+      path.join(root, "repeated.md"),
+      "---\ntype: Note\n---\n\n# Notes\n\nalpha\n\n# Details\n\nnothing\n\n# Notes\n\nalpha again\n",
+    );
+    client = await connectClient(new OkfStore([{ id: "s", root }]));
+  });
+  after(async () => {
+    await client.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("folds a requested section nested inside another requested one into its parent", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "nested",
+      sections: ["Child", "Parent"],
+    })) as { sectionContents: { heading: string; content: string }[] };
+    assert.deepEqual(result.sectionContents.map((s) => s.heading), ["Parent"]);
+    assert.match(result.sectionContents[0]!.content, /## Child\n\nChild text\./);
+  });
+
+  it("returns every section sharing a name a search hit listed", async () => {
+    const search = (await callJson(client, "search_concepts", { query: "alpha" })) as {
+      hits: Array<{ id: string; matchedSections?: string[]; recommendedRead?: string }>;
+    };
+    const hit = search.hits.find((h) => h.id === "repeated")!;
+    assert.deepEqual(hit.matchedSections, ["Notes", "Notes"]);
+    assert.equal(hit.recommendedRead, "sections");
+
+    const result = (await callJson(client, "get_concept", {
+      id: "repeated",
+      sections: hit.matchedSections,
+    })) as { sectionContents: { heading: string; content: string }[] };
+    assert.deepEqual(
+      result.sectionContents.map((s) => s.content),
+      ["alpha", "alpha again"],
+    );
+  });
+});
+
 describe("server tools", () => {
   let client: Client;
   before(async () => {
@@ -840,6 +888,44 @@ describe("server tools", () => {
       section: "Examples",
     });
     assert.ok(result.isError);
+    assert.match(textContent(result), /Schema, Citations/);
+  });
+
+  it("get_concept reads several sections in one call, in document order", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      sections: ["citations", "Schema"],
+    })) as { sectionContents: { heading: string; content: string }[]; sections: string[] };
+    assert.deepEqual(
+      result.sectionContents.map((s) => s.heading),
+      ["Schema", "Citations"],
+    );
+    assert.ok(result.sectionContents.every((s) => s.content.length > 0));
+    assert.deepEqual(result.sections, ["Schema", "Citations"]);
+    assert.equal("body" in result, false);
+    assert.equal("section" in result, false);
+  });
+
+  it("get_concept merges `section` into `sections`, in document order", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      section: "Schema",
+      sections: ["Citations"],
+    })) as { sectionContents: { heading: string }[] };
+    assert.deepEqual(
+      result.sectionContents.map((s) => s.heading),
+      ["Schema", "Citations"],
+    );
+    assert.equal("section" in result, false);
+  });
+
+  it("get_concept sections rejects unknown headings, naming each one", async () => {
+    const result = await callTool(client, "get_concept", {
+      id: "tables/orders",
+      sections: ["Schema", "Examples", "Nope"],
+    });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /"Examples", "Nope"/);
     assert.match(textContent(result), /Schema, Citations/);
   });
 
@@ -1002,9 +1088,21 @@ describe("server tools", () => {
     const hit = concise.hits[0]!;
     assert.equal(hit.id, "tables/orders");
     assert.equal(typeof hit.title, "string");
-    for (const dropped of ["score", "matchedIn", "status", "trust", "stale"]) {
+    for (const dropped of [
+      "score",
+      "matchedIn",
+      "status",
+      "trust",
+      "stale",
+      "matchedSectionCount",
+      "sectionCount",
+      "matchedCharacters",
+      "documentCharacters",
+    ]) {
       assert.ok(!(dropped in hit), `concise hit should omit ${dropped}`);
     }
+    // The recommendation itself is the actionable part and stays.
+    assert.ok(["sections", "full"].includes(hit.recommendedRead as string));
 
     const full = (await callJson(client, "search_concepts", {
       query: "orders",
@@ -1015,6 +1113,10 @@ describe("server tools", () => {
     assert.ok(Array.isArray(fullHit.matchedIn));
     assert.equal(fullHit.status, "stable");
     assert.equal(fullHit.trust, "unverified");
+    assert.equal(typeof fullHit.matchedSectionCount, "number");
+    assert.equal(typeof fullHit.sectionCount, "number");
+    assert.equal(typeof fullHit.matchedCharacters, "number");
+    assert.equal(typeof fullHit.documentCharacters, "number");
   });
 
   it("get_concept omits the link offset arrays unless detail is full", async () => {
@@ -2015,7 +2117,9 @@ describe("server instructions", () => {
       // Context-frugality guidance: search first, section reads, one-shot orientation.
       "search_concepts is the entry point",
       "reserve list_concepts",
-      "Read sections, not whole documents",
+      "Read individual sections when one or a small subset",
+      "`recommendedRead`",
+      "never one call per section",
       "`matchedSections`",
       "`outline: true`",
       "Orient once per session",

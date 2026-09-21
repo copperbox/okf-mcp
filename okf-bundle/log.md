@@ -1,5 +1,10 @@
 # Update Log
 
+## 2026-09-18
+* Replace blanket section-read guidance with the coverage-based rule (2.1.0)
+* Document get_concept multi-section reads (sections array) and the section-vs-full read rule
+* Document 2.1.0 read coverage and recommendedRead on search hits
+
 ## 2026-08-31
 * **Verification**: [Search scoring](/architecture/search-scoring.md) still holds after the 2.0 stage-3 definition-hygiene pass (paging/`omitted` facts unchanged, only their instruction-vs-schema home moved).
 * **Update**: [Context-window frugality is server surface](/decisions/context-window-frugality-is-server-surface.md) — 2.0 stage 3: one-home-per-fact instruction de-dup, 3,600-char budget, first-root-only guide inlining.

@@ -334,6 +334,39 @@ export function extractSection(body: string, name: string): BodySection | undefi
 }
 
 /**
+ * Find several sections by heading name (case-insensitive) in one pass,
+ * returning each one's whole subtree in document order. A name shared by
+ * several headings selects every one of them, so a reader gets all the text
+ * a search hit's `matchedSections` counted. A selected section nested inside
+ * another selected one is dropped: the ancestor's subtree already carries it.
+ * Names matching no heading come back in `missing`, in request order.
+ */
+export function extractSections(
+  body: string,
+  names: string[],
+): { sections: BodySection[]; missing: string[] } {
+  const spans = sectionSpans(body);
+  const picked = new Set<SectionSpan>();
+  const missing: string[] = [];
+  for (const name of names) {
+    const wanted = name.trim().toLowerCase();
+    const found = spans.filter((s) => s.heading.toLowerCase() === wanted);
+    if (found.length === 0) missing.push(name);
+    for (const span of found) picked.add(span);
+  }
+  const contained = (s: SectionSpan): boolean =>
+    spans.some((o) => o !== s && picked.has(o) && o.start <= s.start && s.end <= o.end);
+  const sections = spans
+    .filter((s) => picked.has(s) && !contained(s))
+    .map((s) => ({
+      heading: s.heading,
+      level: s.level,
+      content: body.slice(s.contentStart, s.end).trim(),
+    }));
+  return { sections, missing };
+}
+
+/**
  * Heading of the section enclosing a body offset — the nearest heading at or
  * above the offset — or undefined before the first heading.
  */
