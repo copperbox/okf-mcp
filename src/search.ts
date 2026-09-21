@@ -1,4 +1,4 @@
-import { deriveTitle, sectionAt, splitSections } from "./parser.js";
+import { deriveTitle, sectionAt, sectionSpans, splitSections } from "./parser.js";
 import { conceptStatus, isStale, trustTier } from "./provenance.js";
 import type { ConceptStatus, Concept, LoadedBundle, TrustTier } from "./types.js";
 
@@ -93,6 +93,22 @@ export interface SearchHit {
    * to read just that section.
    */
   matchedSections?: string[];
+  /**
+   * How much of the document the body match covers, so a reader can choose
+   * between section reads and one full read. Present when the body matched
+   * and the document has sections.
+   */
+  matchedSectionCount?: number;
+  sectionCount?: number;
+  /** Characters a read of every matched section's subtree would return. */
+  matchedCharacters?: number;
+  documentCharacters?: number;
+  /**
+   * `full` when every section matched, no section matched (the match sits
+   * before the first heading), or the matched sections hold at least
+   * FULL_READ_THRESHOLD of the document; otherwise `sections`.
+   */
+  recommendedRead?: RecommendedRead;
   /** Lifecycle status, defaulted to `stable` when undeclared (spec §5.4). */
   status: ConceptStatus;
   /** Trust tier derived from `verified` (spec §5.3). */
@@ -100,6 +116,11 @@ export interface SearchHit {
   /** Present and true only when the concept is past its `stale_after` (§5.5). */
   stale?: boolean;
 }
+
+export type RecommendedRead = "full" | "sections";
+
+/** Share of the document's characters at which section reads stop paying off. */
+export const FULL_READ_THRESHOLD = 0.7;
 
 export interface TagHint {
   tag: string;
@@ -249,6 +270,14 @@ function bodyAnchor(
   return best;
 }
 
+interface MatchCoverage {
+  matchedSectionCount: number;
+  sectionCount: number;
+  matchedCharacters: number;
+  documentCharacters: number;
+  recommendedRead: RecommendedRead;
+}
+
 /**
  * The section-level map of a body match, in document order. When the whole
  * query phrase appears verbatim in the body, only sections containing the
@@ -256,7 +285,8 @@ function bodyAnchor(
  * sections); otherwise sections containing any matched keyword count — the
  * same rule bodyAnchor applies. Each heading is a valid get_concept `section`
  * argument, so a reader can fetch just the matching sections instead of the
- * whole document. Takes the pre-lowercased body alongside the original so
+ * whole document, and `coverage` (when the document has sections) says
+ * whether that beats one full read. Takes the pre-lowercased body alongside the original so
  * callers pay for the copy once per hit.
  */
 function sectionsMatching(
@@ -264,16 +294,48 @@ function sectionsMatching(
   bodyLower: string,
   terms: string[],
   matchedTerms: string[],
-): string[] {
+): { headings: string[]; coverage?: MatchCoverage } {
   const phrase = terms.length > 1 ? terms.join(" ") : undefined;
   const needles =
     phrase !== undefined && bodyLower.includes(phrase) ? [phrase] : matchedTerms;
   const headings: string[] = [];
-  for (const section of splitSections(body)) {
+  const matched: number[] = [];
+  const sections = splitSections(body);
+  sections.forEach((section, i) => {
     const text = `${section.heading}\n${section.content}`.toLowerCase();
-    if (needles.some((needle) => text.includes(needle))) headings.push(section.heading);
+    if (needles.some((needle) => text.includes(needle))) {
+      headings.push(section.heading);
+      matched.push(i);
+    }
+  });
+  if (sections.length === 0) return { headings };
+
+  // A section read returns the heading's whole subtree, so nested matches
+  // overlap their ancestors': count each character once. Spans arrive in
+  // document order, so a running end offset is enough to merge them.
+  const spans = sectionSpans(body);
+  let matchedCharacters = 0;
+  let coveredTo = 0;
+  for (const i of matched) {
+    const span = spans[i]!;
+    const start = Math.max(span.start, coveredTo);
+    if (span.end > start) matchedCharacters += span.end - start;
+    coveredTo = Math.max(coveredTo, span.end);
   }
-  return headings;
+  const full =
+    matched.length === 0 ||
+    matched.length === sections.length ||
+    matchedCharacters >= body.length * FULL_READ_THRESHOLD;
+  return {
+    headings,
+    coverage: {
+      matchedSectionCount: matched.length,
+      sectionCount: sections.length,
+      matchedCharacters,
+      documentCharacters: body.length,
+      recommendedRead: full ? "full" : "sections",
+    },
+  };
 }
 
 const TAG_HINT_LIMIT = 10;
@@ -369,6 +431,7 @@ export function searchConcepts(
       let snippet: string | undefined;
       let section: string | undefined;
       let matchedSections: string[] | undefined;
+      let coverage: MatchCoverage | undefined;
       if (terms.length > 0) {
         const match = score(concept, terms, requireAll);
         if (match === undefined) continue;
@@ -388,7 +451,8 @@ export function searchConcepts(
             terms,
             match.matchedTerms,
           );
-          if (sections.length > 1) matchedSections = sections;
+          if (sections.headings.length > 1) matchedSections = sections.headings;
+          coverage = sections.coverage;
         }
       }
       scored.push({
@@ -414,6 +478,7 @@ export function searchConcepts(
           ...(snippet !== undefined && { snippet }),
           ...(section !== undefined && { section }),
           ...(matchedSections !== undefined && { matchedSections }),
+          ...coverage,
         },
       });
     }

@@ -2,13 +2,13 @@
 type: Architecture
 title: Search scoring
 description: "How search_concepts scores hits: field weights, two-pass keyword
-  matching, phrase bonus, the relative relevance cutoff, and section-level match
-  reporting."
+  matching, phrase bonus, the relative relevance cutoff, section-level match
+  reporting, and read coverage."
 tags:
   - search
 generated:
-  by: okf-mcp/1.5.0
-  at: 2026-08-31T02:07:50.000Z
+  by: process:claude-code
+  at: 2026-09-18T22:26:24.394Z
 sources:
   - id: src-search-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/search.ts
@@ -29,6 +29,7 @@ How scoring works:
 - Zero matches produce `tagHints`: existing tags related to the keywords by substring in either direction.
 - Default page size is 10 (`DEFAULT_SEARCH_LIMIT`, tunable via `--search-limit`), with `offset` paging; `total` counts all matches.
 - Snippets are whole-line context around the best anchor plus the enclosing `section` heading, truncated without splitting surrogate pairs.
-- **Section-level match map** (1.4.0): a body-matched hit also carries `matchedSections` — headings of every section containing a match, in document order — but only when more than one section matched (otherwise `section` already names it). Like the snippet anchor, the verbatim phrase wins over individual keywords so common words don't flag unrelated sections. Both fields feed `get_concept`'s `section` argument, the context-frugal read path.
+- **Section-level match map** (1.4.0): a body-matched hit also carries `matchedSections` — headings of every section containing a match, in document order — but only when more than one section matched (otherwise `section` already names it). Like the snippet anchor, the verbatim phrase wins over individual keywords so common words don't flag unrelated sections. Both fields feed `get_concept`'s `sections` / `section` arguments, the context-frugal read path.
+- **Read coverage** (2.1.0): a body-matched hit in a document with sections also carries `matchedSectionCount`, `sectionCount`, `matchedCharacters`, `documentCharacters`, and `recommendedRead`. `matchedCharacters` is what reading every matched section's subtree would return, so a nested match inside a matched parent counts once. `recommendedRead` is `full` when every section matched, when no section matched (the match sits before the first heading), or when the matched sections hold at least 70% of the body (`FULL_READ_THRESHOLD`); otherwise `sections`. The point is to stop agents fetching a whole document one section at a time.
 
 Filtering (not scoring) also covers the OKF v0.2 lifecycle and trust families: `status` (an absent one counts as `stable`), `minTrust` over the derived tier, and `stale` against `stale_after`. All three are computed per call from frontmatter rather than indexed — see [provenance reads](provenance-reads.md). Since 2.0, the wire hit is concise by default: `score`, `matchedIn`, `status`, `trust`, and `stale` return only with `detail: "full"` (the [frugality decision](../decisions/context-window-frugality-is-server-surface.md)); search.ts itself still computes and returns them all.

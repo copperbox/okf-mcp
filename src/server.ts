@@ -35,7 +35,7 @@ import {
   pathInGraph,
   qualifyNodeId,
 } from "./graph.js";
-import { deriveTitle, extractSection, splitSections } from "./parser.js";
+import { deriveTitle, extractSection, sectionSpans, splitSections } from "./parser.js";
 import { promoteConcept } from "./promote.js";
 import {
   conceptSources,
@@ -144,10 +144,15 @@ index.md and log.md are reserved, generated files.
 
 Reading: search_concepts is the entry point (its own description covers the
 filters, paging, and \`omitted\`); reserve list_concepts for when the whole
-catalog is genuinely needed. Read sections, not whole documents: get_concept's
-\`section\` argument returns one heading's subtree, \`outline: true\` lists
-sections without the body, and a search hit's \`section\` / \`matchedSections\`
-feed \`section\` directly. Explore with get_neighbors / find_path.
+catalog is genuinely needed. Read individual sections when one or a small subset
+is matched; read the full concept when every section matched or the selected
+sections contain most of the document. A body-matched search hit applies that
+rule for you: \`recommendedRead\` is "sections" or "full" (from its matched vs
+total section and character counts). For "sections", pass the hit's
+\`matchedSections\` (or its one \`section\`) to get_concept's \`sections\` array in a
+single call — never one call per section; for "full", call get_concept with no
+section argument. \`outline: true\` lists sections without the body. Explore with
+get_neighbors / find_path.
 
 Orient once per session, not once per task: graph_summary, list_types /
 list_tags, list_bundles, and get_bundle_guide (when listed, call it before
@@ -823,7 +828,7 @@ export function createOkfServer(
     {
       title: "Get concept",
       description:
-        "Read one concept document: frontmatter, markdown body, and its body section headings. Prefer partial reads over the full document: `section` fetches one heading's subtree, `outline: true` fetches the document's shape (section headings with sizes) without the body. Outgoing link arrays (with char offsets) return only with detail: \"full\".",
+        "Read one concept document: frontmatter, markdown body, and its body section headings. Read individual sections when one or a small subset is matched. Read the full concept when every section matched or the selected sections contain most of the document (about 70% of its characters) — a search hit's `recommendedRead` already applies this rule. `sections` fetches several headings' subtrees in one call (`section` fetches one) — never call once per section; `outline: true` fetches the document's shape (section headings with sizes) without the body. Outgoing link arrays (with char offsets) return only with detail: \"full\".",
       inputSchema: {
         bundle: bundleParam,
         id: z.string().describe("Concept ID, e.g. tables/orders"),
@@ -833,11 +838,18 @@ export function createOkfServer(
           .describe(
             "Body section heading (case-insensitive), e.g. Schema; returns just that section (including its subsections) instead of the full body",
           ),
+        sections: z
+          .array(z.string())
+          .min(1)
+          .optional()
+          .describe(
+            'Several body section headings to read in one call, e.g. ["Schema", "Examples"] — pass a search hit\'s `matchedSections` straight in. Returns `sectionContents` in document order; a section nested inside another requested one is returned once, within its parent',
+          ),
         outline: z
           .boolean()
           .optional()
           .describe(
-            "Return the document's shape instead of its body: frontmatter plus each section's heading, level, and content size in characters — cheap section discovery before fetching one with `section`",
+            "Return the document's shape instead of its body: frontmatter plus each section's heading, level, and content size in characters — cheap section discovery before fetching some with `section` / `sections`",
           ),
         detail: detailParam(
           'concise (default) omits the outgoing-link offset arrays; "full" includes them',
@@ -845,7 +857,7 @@ export function createOkfServer(
       },
       _meta: entryPointMeta,
     },
-    async ({ bundle, id, section, outline, detail }) => {
+    async ({ bundle, id, section, sections: wanted, outline, detail }) => {
       const concept = await store.getConcept(bundle, id);
       if (!concept) throw new Error(`unknown concept: ${id}`);
       const split = splitSections(concept.body);
@@ -856,7 +868,7 @@ export function createOkfServer(
       // outline/section modes carried frontmatterLinks).
       const { body, links, frontmatterLinks, ...meta } = concept;
       const rest = full ? { ...meta, frontmatterLinks } : meta;
-      if (outline === true && section === undefined) {
+      if (outline === true && section === undefined && wanted === undefined) {
         return json({
           ...rest,
           sections: split.map((s) => ({
@@ -865,6 +877,36 @@ export function createOkfServer(
             chars: s.content.length,
           })),
         });
+      }
+      if (wanted !== undefined) {
+        // `section` alongside `sections` just joins the list.
+        const names = section === undefined ? wanted : [section, ...wanted];
+        const spans = sectionSpans(concept.body);
+        const picked = new Set<number>();
+        const missing: string[] = [];
+        for (const name of names) {
+          const lowered = name.trim().toLowerCase();
+          const index = spans.findIndex((s) => s.heading.toLowerCase() === lowered);
+          if (index === -1) missing.push(name);
+          else picked.add(index);
+        }
+        if (missing.length > 0) {
+          throw new Error(
+            `no section ${missing.map((m) => `"${m}"`).join(", ")} in "${concept.id}" — sections: ${sections.join(", ") || "(none)"}`,
+          );
+        }
+        // A subtree read already carries its nested sections, so a requested
+        // section inside another requested one would only repeat text.
+        const sectionContents = [...picked]
+          .sort((a, b) => a - b)
+          .map((i) => spans[i]!)
+          .filter((s, _i, all) => !all.some((o) => o !== s && o.start <= s.start && s.end <= o.end))
+          .map((s) => ({
+            heading: s.heading,
+            level: s.level,
+            content: concept.body.slice(s.contentStart, s.end).trim(),
+          }));
+        return json({ ...rest, sectionContents, sections });
       }
       if (section === undefined) {
         return json({ ...rest, ...(full && { links }), body, sections });
@@ -960,7 +1002,7 @@ export function createOkfServer(
     {
       title: "Search concepts",
       description:
-        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names the matching \`section\` (and \`matchedSections\` when several matched). Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer — later pages are strictly less relevant. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
+        `The entry point for finding concepts: text query plus type/tag/path/link/resource filters and the v0.2 lifecycle/trust filters (status, minTrust, stale). Query keywords match independently across id, title, description, resource, tags, and body; concepts matching every keyword rank first (termMatching: "any" flags a fallback to partial matches). A body-matched hit names the matching \`section\` (and \`matchedSections\` when several matched) plus its coverage — matchedSectionCount/sectionCount, matchedCharacters/documentCharacters — and \`recommendedRead\`: "sections" means fetch the matched sections in one get_concept call via \`sections\`; "full" (every section matched, or they hold 70%+ of the document) means fetch the whole concept once. Hits are concise by default (detail: "full" adds score/matchedIn and status/trust/stale), relevance-sorted, and paginated: \`total\` counts all matches, so page on with \`offset\` if the first page did not answer — later pages are strictly less relevant. \`omitted\` counts low-relevance matches suppressed by the relevance cutoff — refine the query or filters to reach them. When nothing matches, tagHints lists existing tags related to the keywords — retry with tagsAny.`,
       inputSchema: {
         query: z
           .string()

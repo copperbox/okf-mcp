@@ -843,6 +843,31 @@ describe("server tools", () => {
     assert.match(textContent(result), /Schema, Citations/);
   });
 
+  it("get_concept reads several sections in one call, in document order", async () => {
+    const result = (await callJson(client, "get_concept", {
+      id: "tables/orders",
+      sections: ["citations", "Schema"],
+    })) as { sectionContents: { heading: string; content: string }[]; sections: string[] };
+    assert.deepEqual(
+      result.sectionContents.map((s) => s.heading),
+      ["Schema", "Citations"],
+    );
+    assert.ok(result.sectionContents.every((s) => s.content.length > 0));
+    assert.deepEqual(result.sections, ["Schema", "Citations"]);
+    assert.equal("body" in result, false);
+    assert.equal("section" in result, false);
+  });
+
+  it("get_concept sections rejects unknown headings, naming each one", async () => {
+    const result = await callTool(client, "get_concept", {
+      id: "tables/orders",
+      sections: ["Schema", "Examples", "Nope"],
+    });
+    assert.ok(result.isError);
+    assert.match(textContent(result), /"Examples", "Nope"/);
+    assert.match(textContent(result), /Schema, Citations/);
+  });
+
   it("get_sources falls back to a v0.1 Citations list, marking the origin", async () => {
     const result = (await callJson(client, "get_sources", { id: "tables/orders" })) as {
       origin: string;
@@ -2015,7 +2040,9 @@ describe("server instructions", () => {
       // Context-frugality guidance: search first, section reads, one-shot orientation.
       "search_concepts is the entry point",
       "reserve list_concepts",
-      "Read sections, not whole documents",
+      "Read individual sections when one or a small subset",
+      "`recommendedRead`",
+      "never one call per section",
       "`matchedSections`",
       "`outline: true`",
       "Orient once per session",

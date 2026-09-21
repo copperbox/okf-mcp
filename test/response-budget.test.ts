@@ -32,7 +32,9 @@ describe("response byte budgets", () => {
   const budgets: Array<[string, Record<string, unknown>, number]> = [
     ["list_bundles", {}, 256],
     ["list_concepts", {}, 1500],
-    ["search_concepts", { query: "orders" }, 550],
+    // Re-measured when body-matched hits gained read coverage (matched vs
+    // total sections/characters and `recommendedRead`), ~115 bytes per hit.
+    ["search_concepts", { query: "orders" }, 690],
     ["get_concept", { id: "tables/orders" }, 1300],
     ["get_concept", { id: "tables/orders", outline: true }, 550],
     ["graph_summary", {}, 350],

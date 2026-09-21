@@ -6,8 +6,8 @@ description: How server.ts wires the store, groups its 28 tools, composes
 tags:
   - mcp
 generated:
-  by: okf-mcp/1.5.0
-  at: 2026-08-31T02:16:57.098Z
+  by: process:claude-code
+  at: 2026-09-18T00:00:00Z
 sources:
   - id: src-server-ts
     resource: https://github.com/copperbox/okf-mcp/blob/main/src/server.ts
@@ -29,7 +29,7 @@ sources:
 ## Wiring details worth remembering
 
 - Server **instructions** are composed from a shared OKF primer plus a writing block (only when writable) plus colocated-root `AGENTS.md` bundle guides. Only the *first* root's guide is inlined (budgeted at 4 000 characters — past that the server warns and injects a truncated guide pointing at `get_bundle_guide`); every additional root contributes a single pointer line, so instructions stay bounded regardless of root count (2.0). The primer is context-frugality-first (since 1.4.0): search_concepts is named the entry point (list_concepts reserved for whole-catalog needs), section reads are preferred over whole documents, and orientation tools (graph_summary, list_types/list_tags, list_bundles, get_bundle_guide) are once-per-session — while per-call mechanics (search paging, `omitted`, limit semantics) live in each tool's own schema text, not the instructions. With **no bundles mounted** an extra block is prepended telling the agent that this is configuration, not an empty knowledge base (see [config-file layering](../decisions/config-file-layering.md)); a test caps the shared+writing instruction blocks at 3 600 characters.
-- `get_concept` supports three read granularities: full document, one `section` subtree, and `outline: true` (frontmatter plus each section's heading/level/char count, no body or links) — pick the smallest that answers. search_concepts hits point into them via `section`/`matchedSections`.
+- `get_concept` supports four read granularities: full document, several subtrees in one call via the `sections` array (2.1.0 — returned as `sectionContents` in document order, a section nested inside another requested one folded into its parent, all unknown headings reported in one error), one `section` subtree, and `outline: true` (frontmatter plus each section's heading/level/char count, no body or links). The rule in the tool guidance: read individual sections when one or a small subset matched; read the full concept when every section matched or the selected sections hold most of the document. search_concepts hits point into them via `section`/`matchedSections` and say which to use via [`recommendedRead`](search-scoring.md).
 - `ServerOptions.writable` gates whether the authoring tools are registered at all; whether a *particular* write is allowed is `assertWritableBundle`, reading `LoadedBundle.readOnly`. Remote bundles are always read-only, and a local bundle is too when its config declares [`"writable": false`](../decisions/per-bundle-writability.md) — so the instructions tell agents to check `list_bundles`' `readOnly` before planning a write.
 - `get_bundle_guide` is dynamically enabled: hidden when no colocated root is mounted, `enable()`d (firing `tools/list_changed`) when a runtime mount introduces the first root.
 - `get_concept` and `search_concepts` carry `_meta["anthropic/alwaysLoad"]: true` so deferred-loading clients keep those schemas resident.
