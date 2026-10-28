@@ -43,7 +43,6 @@
     "typescript": "^5.8.0"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true,
-    "github:copperbox/sandcastle-workflow#b087821fe937c052ca2acba26948e3ab0d10e833": true
+    "esbuild@0.28.1": true
   }
 }
